@@ -1,0 +1,6 @@
+dist
+pnpm-lock.yaml
+public/icons.svg
+public/favicon.svg
+.impeccable
+public/*.svg

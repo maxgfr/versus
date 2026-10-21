@@ -1,0 +1,193 @@
+import { Link, newCode } from '../core/net/link.ts'
+import { audio } from '../core/audio.ts'
+import qrcode from 'qrcode-generator'
+import { h, onTap } from './dom.ts'
+import { icon } from './icons.ts'
+import { go } from './router.ts'
+import { ui } from './state.ts'
+import { toast } from './toast.ts'
+
+/** Guests follow the host: when the host starts a round, jump into that game. */
+let pendingSeed: number | undefined
+
+export function takePendingSeed(): number | undefined {
+  const s = pendingSeed
+  pendingSeed = undefined
+  return s
+}
+
+function connect(code: string, role: 'host' | 'guest'): Link {
+  ui.link?.leave()
+  const link = new Link(code, role)
+  ui.link = link
+  ui.mode = 'online'
+  if (role === 'guest') {
+    link.on('round', (d) => {
+      const r = d as { id: string; seed: number }
+      if (location.hash === `#/play/${r.id}`) return
+      pendingSeed = r.seed
+      go(`/play/${r.id}`)
+    })
+  }
+  link.on('quit', () => {
+    if (location.hash.startsWith('#/play/')) {
+      go('/')
+      toast('Your friend left the game.')
+    }
+  })
+  link.watch((c) => {
+    if (c) {
+      audio.play('coin')
+      toast(
+        role === 'host'
+          ? 'Friend connected! Pick a game.'
+          : 'Connected! Your friend picks the game.',
+      )
+      if (location.hash.startsWith('#/online')) go('/')
+    } else {
+      toast('Your friend disconnected.')
+    }
+  })
+  return link
+}
+
+export function leaveRoom(): void {
+  ui.link?.leave()
+  ui.link = null
+  if (ui.mode === 'online') ui.mode = '2p'
+}
+
+function inviteUrl(code: string): string {
+  return `${location.origin}${import.meta.env.BASE_URL}#/online/${code}`
+}
+
+function qrImage(text: string): HTMLImageElement {
+  const q = qrcode(0, 'M')
+  q.addData(text)
+  q.make()
+  return h('img', { src: q.createDataURL(6, 0), alt: 'QR code to join this room' })
+}
+
+export function lobby(root: HTMLElement, code: string): () => void {
+  const page = h('div.screen.page')
+  root.append(page)
+  const back = h('button.icon-btn.tile', { 'aria-label': 'Back' }, icon('back'))
+  onTap(back, () => go('/'))
+  const head = h('header.page-head', back, h('h1', 'Play online'))
+  const body = h('div')
+  page.append(head, body)
+
+  if (code && !(ui.link && ui.link.code === code.toUpperCase())) {
+    connect(code.toUpperCase(), 'guest')
+  }
+
+  const render = () => {
+    const link = ui.link
+    if (!link) {
+      const create = h('button.btn.big.tile.live', { style: { width: '100%' } }, 'Create a room')
+      onTap(create, () => {
+        audio.unlock()
+        connect(newCode(), 'host')
+        render()
+      })
+      const field = h('input.field.code-input', {
+        maxlength: 4,
+        placeholder: 'CODE',
+        autocomplete: 'off',
+        autocapitalize: 'characters',
+        spellcheck: 'false',
+        inputmode: 'text',
+        enterkeyhint: 'go',
+        'aria-label': 'Room code',
+      })
+      const join = h(
+        'button.btn.big.tile.blue',
+        { style: { width: '100%', marginTop: '12px' } },
+        'Join',
+      )
+      const doJoin = () => {
+        const v = field.value.trim().toUpperCase()
+        if (!/^[A-Z]{4}$/.test(v)) {
+          toast('Room codes are 4 letters.')
+          return
+        }
+        audio.unlock()
+        connect(v, 'guest')
+        render()
+      }
+      onTap(join, () => void doJoin())
+      field.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') void doJoin()
+      })
+      body.replaceChildren(
+        h(
+          'section.panel',
+          h('h2', 'Host'),
+          h(
+            'p',
+            'Create a room and send the code to your friend. You play Red and pick the games.',
+          ),
+          create,
+        ),
+        h(
+          'section.panel',
+          h('h2', 'Join'),
+          h('p', 'Got a code from a friend? Type it here. You play Blue.'),
+          field,
+          join,
+        ),
+        h(
+          'p.fine',
+          'The two phones connect directly. A public relay only helps them find each other; no game data or personal data is stored anywhere.',
+        ),
+      )
+      return
+    }
+    const status = link.connected
+      ? h('p.status', icon('check'), 'Connected')
+      : h(
+          'p.status',
+          h('span.spinner'),
+          link.role === 'host' ? 'Waiting for your friend…' : 'Looking for the room…',
+        )
+    const share = h('button.btn.tile.live', icon('share'), 'Send invite')
+    onTap(share, async () => {
+      const url = inviteUrl(link.code)
+      try {
+        if (navigator.share)
+          await navigator.share({
+            title: 'Play versus with me',
+            text: `Join my versus room: ${link.code}`,
+            url,
+          })
+        else {
+          await navigator.clipboard.writeText(url)
+          toast('Invite link copied.')
+        }
+      } catch {
+        // Share sheet dismissed.
+      }
+    })
+    const leave = h('button.btn.tile.ghost', icon('close'), 'Leave room')
+    onTap(leave, () => {
+      leaveRoom()
+      render()
+    })
+    const games = h('button.btn.tile.blue', 'Go to games')
+    onTap(games, () => go('/'))
+    body.replaceChildren(
+      h(
+        'section.panel',
+        { style: { textAlign: 'center' } },
+        h('h2', link.role === 'host' ? 'Your room' : 'Joining room'),
+        h('div.code', ...[...link.code].map((ch) => h('span', ch))),
+        link.role === 'host' && !link.connected ? h('div.qr', qrImage(inviteUrl(link.code))) : null,
+        status,
+      ),
+      h('div.actions', link.role === 'host' && !link.connected ? share : games, leave),
+    )
+  }
+  render()
+  const unwatch = ui.link?.watch(() => render())
+  return () => unwatch?.()
+}
