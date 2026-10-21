@@ -33,10 +33,15 @@ const flat = (over: Partial<Hole> = {}): Hole => ({
 })
 
 /** Play one full game with the computer on both sides; returns the state and the step count. */
-function game(seed: number, a: Difficulty, b: Difficulty): { s: State; steps: number } {
+function game(
+  seed: number,
+  a: Difficulty,
+  b: Difficulty,
+  holes = HOLES,
+): { s: State; steps: number } {
   const rng = new Rng(seed)
   const wind = () => (rng.chance(0.2) ? 0 : rng.range(-110, 110))
-  const s = newState(rng, rng.chance(0.5) ? 0 : 1, wind())
+  const s = newState(rng, rng.chance(0.5) ? 0 : 1, wind(), holes)
   let steps = 0
   while (!done(s) && steps < 60 * 60 * 20) {
     if (s.phase === 'aim') {
@@ -177,6 +182,13 @@ describe('golf game', () => {
     expect(r.s.card.length).toBe(HOLES)
     expect(r.steps).toBeLessThan(60 * 60 * 20)
     expect(['0', '1', 'draw']).toContain(String(result(r.s)))
+  })
+
+  it('the match length sets how many holes are played', () => {
+    const r = game(12, 'normal', 'normal', 1)
+    expect(r.s.holes.length).toBe(1)
+    expect(done(r.s)).toBe(true)
+    expect(r.s.card.length).toBe(1)
   })
 
   it('a hard computer takes no more strokes than an easy one over several courses', () => {

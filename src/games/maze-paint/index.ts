@@ -1,8 +1,10 @@
-import type { Side } from '../../core/game.ts'
+import { type MatchSpec, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { Rng } from '../../core/rng.ts'
-import { newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
+import { MID } from '../../core/stage.ts'
+import { fmtTime, newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
 import { toLocal } from '../../engines/runner/frame.ts'
 import { PACE, Pilot } from './bot.ts'
 import {
@@ -22,10 +24,16 @@ import {
   LEVEL_SIZES,
   type Level,
   roll,
+  roundSeed,
   startPaint,
   stuck,
 } from './rules.ts'
 
+/** A match is first to N round wins; each round is a whole run through the levels. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** Seconds between a round's win and the next maze: the ending plays, then the banner. */
+const ROUND_GAP = 2.2
 /** Seconds added when a player restarts a level. */
 const RESTART_COST = 5
 /** Shortest swipe, in panel-local units. */
@@ -64,6 +72,18 @@ interface Panel {
 
 export interface State extends RaceBase {
   panels: [Panel, Panel]
+  /** Round wins per side: first to `target` (a single race in solo). */
+  wins: [number, number]
+  /** 0-based round: its levels come from `roundSeed`. */
+  round: number
+  /** Game time the round started. The clocks count from here. */
+  roundAt: number
+  /** Game time the round was won (its ending plays), or -1. */
+  endAt: number
+  /** Game time the next round starts after a round win, or -1. */
+  nextAt: number
+  /** Who took the last round, for the banner. */
+  roundWinner: Side | null
 }
 
 function fresh(level: Level, lv: number, t: number): Panel {
@@ -116,6 +136,8 @@ class MazePaint extends PuzzleRace<State> {
   protected recordId = 'maze-paint'
   // Derived from the seed on both phones: never sent over the wire.
   private levels: Level[] = []
+  /** The round whose levels `levels` holds. */
+  private loaded = -1
   private pilots: [Pilot | null, Pilot | null] = [null, null]
   /** Swipe anchors per pointer id, in panel-local units (host only: it is input, not state). */
   private anchors: [Map<number, Anchor>, Map<number, Anchor>] = [new Map(), new Map()]
@@ -123,10 +145,97 @@ class MazePaint extends PuzzleRace<State> {
   private splashed: [number, number] = [0, 0]
 
   protected setup(): State {
-    const rng = new Rng(this.ctx.seed)
-    this.levels = LEVEL_SIZES.map((n) => generateLevel(rng, n))
+    this.load(0)
     const first = this.levels[0] as Level
-    return { race: newRace(), panels: [fresh(first, 0, 0), fresh(first, 0, 0)] }
+    return {
+      race: newRace(),
+      panels: [fresh(first, 0, 0), fresh(first, 0, 0)],
+      wins: [0, 0],
+      round: 0,
+      roundAt: 0,
+      endAt: -1,
+      nextAt: -1,
+      roundWinner: null,
+    }
+  }
+
+  /** Round wins to take the match. Solo is a single time trial. */
+  private get target(): number {
+    return this.solo ? 1 : this.ctx.target || match.default
+  }
+
+  /** The levels of a round, carved from its seed: both phones get the same ones. */
+  private load(round: number): void {
+    const rng = new Rng(roundSeed(this.ctx.seed, round))
+    this.levels = LEVEL_SIZES.map((n) => generateLevel(rng, n))
+    this.loaded = round
+  }
+
+  /** A guest restoring a later round carves that round's levels, as the host did. */
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    if (this.loaded !== this.s.round) this.load(this.s.round)
+  }
+
+  /** Clocks count from the round's start and stop when the round is won. */
+  override elapsed(side: Side): number {
+    const r = this.s.race[side]
+    const end = r.done ?? (this.s.nextAt >= 0 ? this.s.endAt : this.time)
+    return end - this.s.roundAt + r.penalty
+  }
+
+  protected override step(dt: number): void {
+    if (this.s.nextAt >= 0 && this.time >= this.s.nextAt) this.nextRound()
+    super.step(dt)
+  }
+
+  protected override complete(side: Side): void {
+    if (this.over || this.s.nextAt >= 0) return
+    this.s.endAt = this.time
+    this.s.wins[side]++
+    if (this.solo) super.complete(side)
+    else if (this.s.wins[side] < this.target) this.roundWon(side)
+    else this.matchWon(side)
+  }
+
+  /** A round is won: the ending plays and the banner shows, then the next maze. */
+  private roundWon(side: Side): void {
+    const r = this.s.race[side]
+    r.done = this.time
+    r.progress = 1
+    this.s.roundWinner = side
+    this.s.nextAt = this.time + ROUND_GAP
+    this.ctx.audio.play('score')
+  }
+
+  /** The last round is won: the match ends, with the round score on the result screen. */
+  private matchWon(side: Side): void {
+    const r = this.s.race[side]
+    r.done = this.time
+    r.progress = 1
+    this.ctx.audio.play('coin')
+    this.finish(side, {
+      note: `Solved in ${fmtTime(this.elapsed(side))}`,
+      ...(this.target > 1 ? { score: this.s.wins } : {}),
+      delay: 1.2,
+    })
+  }
+
+  private nextRound(): void {
+    const s = this.s
+    s.round++
+    s.roundAt = this.time
+    s.nextAt = -1
+    s.endAt = -1
+    s.roundWinner = null
+    s.race = newRace()
+    this.load(s.round)
+    const first = this.levels[0] as Level
+    s.panels = [fresh(first, 0, this.time), fresh(first, 0, this.time)]
+    this.pilots = [null, null]
+    this.splashed = [0, 0]
+    this.anchors = [new Map(), new Map()]
+    this.ctx.audio.play('count')
   }
 
   protected progressOf(side: Side): number {
@@ -170,6 +279,8 @@ class MazePaint extends PuzzleRace<State> {
   }
 
   protected stepSide(side: Side, dt: number, taps: { x: number; y: number }[]): void {
+    // The round is won: both boards freeze until the next maze.
+    if (this.s.nextAt >= 0) return
     const p = this.s.panels[side]
     this.splash(side)
     if (p.stopAt >= 0 && this.time >= p.stopAt) this.settle(side)
@@ -421,6 +532,18 @@ class MazePaint extends PuzzleRace<State> {
       restartCost: RESTART_COST,
     }
     drawPanel(g, w, h, view)
+  }
+
+  /** Round wins as pips under each player's edge; the round's banner in the middle. */
+  override render(g: Draw): void {
+    super.render(g)
+    if (this.target <= 1) return
+    for (const side of [0, 1] as Side[]) pips(g, side, this.s.wins[side], this.target)
+    const w = this.s.roundWinner
+    if (this.s.nextAt >= 0 && w !== null) {
+      const a = Math.min(1, (this.time - this.s.endAt) * 4)
+      banner(g, undefined, `${this.ctx.names[w]} takes the round`, MID, { size: 58, alpha: a })
+    }
   }
 }
 

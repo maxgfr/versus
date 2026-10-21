@@ -1,7 +1,9 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
+import { MID } from '../../core/stage.ts'
 import { fmtTime, newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
 import { PACE, pickTile } from './bot.ts'
 import { celebrate, panelCard } from './ending.ts'
@@ -71,20 +73,53 @@ export interface State extends RaceBase {
   boards: [Board, Board]
   /** When the race was decided (for the cards), or -1. */
   endAt: number
+  /** Races won per side. The match is first to the target. */
+  wins: [number, number]
+  /** Race index, from 0. Each race is a fresh layout, derived from the seed on both phones. */
+  round: number
+  /** Game time this race was dealt: its clock runs from here. */
+  roundAt: number
+  /** Game time this race was decided (a short break follows), or -1 while it runs. */
+  roundEnd: number
+  /** Banner for the decided race. */
+  roundText: string
 }
+
+/** Seconds between two races, so the one just decided can be read. */
+const BREAK = 2
+/** Race wins to take the match: one race is one round. Solo keeps a single time trial. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 class TapMatch extends PuzzleRace<State> {
   protected recordId = 'tap-match'
   // Derived from the seed on both phones: never sent over the wire.
   private lay!: Layout
   private emoji: string[] = []
+  /** The race whose layout `lay` and `emoji` hold. */
+  private laid = -1
   /** Cosmetic effects timed to land with an animation (host side; the guest gets them replayed). */
   private later: { at: number; fn: () => void }[] = []
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
+    return this.dealRace(0, 0)
+  }
+
+  /** The layout and kinds of race `round`, from the seed. */
+  private derive(round: number): void {
     const level = LEVELS[this.ctx.difficulty]
-    this.lay = buildLayout(this.ctx.seed, level)
-    this.emoji = new Rng(this.ctx.seed ^ 0x51ed).shuffle(EMOJI.slice()).slice(0, level.kinds)
+    const seed = this.ctx.seed + round
+    this.lay = buildLayout(seed, level)
+    this.emoji = new Rng(seed ^ 0x51ed).shuffle(EMOJI.slice()).slice(0, level.kinds)
+    this.laid = round
+  }
+
+  /** Race `round`, dealt at game time `at`. */
+  private dealRace(round: number, at: number): State {
+    this.derive(round)
     const n = this.lay.tiles.length
     const board = (): Board => ({
       taken: Array.from({ length: n }, () => false),
@@ -96,7 +131,28 @@ class TapMatch extends PuzzleRace<State> {
       lostAt: -1,
       solvedAt: -1,
     })
-    return { race: newRace(), boards: [board(), board()], endAt: -1 }
+    return {
+      race: newRace(),
+      boards: [board(), board()],
+      endAt: -1,
+      wins: [0, 0],
+      round,
+      roundAt: at,
+      roundEnd: -1,
+      roundText: '',
+    }
+  }
+
+  private nextRace(): void {
+    this.later = []
+    const wins = this.s.wins
+    this.s = { ...this.dealRace(this.s.round + 1, this.time), wins }
+  }
+
+  /** A guest takes the race from the host's state, so it also takes that race's layout. */
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    if (this.laid !== this.s.round) this.derive(this.s.round)
   }
 
   protected progressOf(side: Side): number {
@@ -104,8 +160,19 @@ class TapMatch extends PuzzleRace<State> {
     return (n - this.s.boards[side].left) / n
   }
 
+  /** Seconds on this race's clock for a side, penalties included. Frozen once the race is decided. */
+  override elapsed(side: Side): number {
+    const r = this.s.race[side]
+    const end = this.s.roundEnd >= 0 ? this.s.roundEnd : this.time
+    return (r.done ?? end) - this.s.roundAt + r.penalty
+  }
+
   protected override step(dt: number): void {
     this.flush()
+    if (this.s.roundEnd >= 0) {
+      if (this.time - this.s.roundEnd >= BREAK) this.nextRace()
+      return
+    }
     super.step(dt)
   }
 
@@ -121,10 +188,47 @@ class TapMatch extends PuzzleRace<State> {
   }
 
   protected override complete(side: Side): void {
-    if (this.over) return
+    if (this.over || this.s.roundEnd >= 0) return
     this.s.endAt = this.time
     celebrate(this.ctx.fx, this.frames[side], side)
     super.complete(side)
+  }
+
+  /**
+   * The engine ends a race through `finish` (cleared, or a tray filled up). In a
+   * longer match that is a round: its winner takes it, the match ends at the
+   * target, and a draw takes nobody's round. Solo and first-to-one end as before.
+   */
+  protected override finish(
+    winner: Side | 'draw',
+    o: { score?: [number, number]; note?: string; delay?: number } = {},
+  ): void {
+    if (this.solo || this.target <= 1) {
+      super.finish(winner, o)
+      return
+    }
+    const s = this.s
+    if (this.over || s.roundEnd >= 0) return
+    if (winner !== 'draw') s.wins[winner]++
+    if (winner !== 'draw' && s.wins[winner] >= this.target) {
+      super.finish(winner, { ...o, score: [s.wins[0], s.wins[1]] })
+      return
+    }
+    s.roundEnd = this.time
+    s.roundText = winner === 'draw' ? 'Draw round' : `${this.ctx.names[winner]} takes the round`
+    this.ctx.audio.play(winner === 'draw' ? 'draw' : 'score')
+  }
+
+  override render(g: Draw): void {
+    super.render(g)
+    if (this.solo || this.target <= 1) return
+    // Above the tray, which fills the bottom of each half.
+    pips(g, 0, this.s.wins[0], this.target, { inset: 170 })
+    pips(g, 1, this.s.wins[1], this.target, { inset: 170 })
+    if (this.s.roundEnd >= 0 && !this.over) {
+      const a = Math.min(1, (this.time - this.s.roundEnd) * 4)
+      banner(g, undefined, this.s.roundText, MID, { size: 58, alpha: a })
+    }
   }
 
   protected stepSide(side: Side, dt: number, taps: { x: number; y: number }[]): void {
@@ -152,6 +256,7 @@ class TapMatch extends PuzzleRace<State> {
 
   /** Move a free tile into the side's tray. */
   private take(side: Side, i: number): void {
+    if (this.over || this.s.roundEnd >= 0) return
     const b = this.s.boards[side]
     const tile = this.lay.tiles[i]
     if (!tile || b.taken[i] || !isFree(this.lay, b.taken, i)) return
@@ -248,7 +353,12 @@ class TapMatch extends PuzzleRace<State> {
     backdrop(g, side, geo)
     drawStack(g, this.lay, b.taken, b.takenAt, geo, this.emoji, this.time)
     drawTray(g, geo, side, b.tray, b.clear, this.emoji, this.time, b.lostAt)
-    if (b.tray.length === 0 && this.time < 7 && !this.isBot(side) && this.s.endAt < 0) {
+    if (
+      b.tray.length === 0 &&
+      this.time - this.s.roundAt < 7 &&
+      !this.isBot(side) &&
+      this.s.endAt < 0
+    ) {
       g.text('Tap a bright tile · three alike vanish', w / 2, geo.trayY - 36, {
         size: 34,
         weight: 600,

@@ -5,8 +5,9 @@ import type { Rng } from '../../core/rng.ts'
  * Pure knife throwing: each player has a spinning log in their half and throws
  * knives from their edge into its near rim. A knife sticks at the log's angle
  * at the moment it arrives, then turns with the log. Hitting a stuck knife costs
- * a life. Stick enough knives to clear a stage; three stages win, or the rival
- * runs out of lives. Both players play at once. No DOM.
+ * a life. Stick enough knives to clear a stage: the first to clear the match's
+ * stages (three by default, chosen before the game) wins, or the rival runs out
+ * of lives. Both players play at once. No DOM.
  */
 
 /** Knife flight time from the edge to the rim (s). */
@@ -18,6 +19,7 @@ export const ORIGIN = { x: 500, y: 1610 }
 export const KNIFE_W = 0.1
 export const COOLDOWN = 0.28
 export const LIVES = 2
+/** Default match length in stages. The chosen length is kept in `State.target`. */
 export const STAGES = 3
 /** Knives to stick per stage. */
 export const KNIVES = [6, 8, 10]
@@ -30,6 +32,9 @@ export const PATTERNS: readonly { kind: Pattern; w: number; period: number; amp:
   { kind: 'flip', w: 2.8, period: 2, amp: 0 },
   { kind: 'wave', w: 2.6, period: 0, amp: 1.5 },
 ]
+
+/** The pattern for a 1-based stage. Stages past the last one repeat the cycle. */
+export const patternOf = (stage: number) => PATTERNS[(stage - 1) % PATTERNS.length]
 
 export interface Log {
   /** Current rotation of the log (rad). */
@@ -73,6 +78,8 @@ export interface State {
   flying: Flying[]
   /** Stages cleared per side. */
   cleared: [number, number]
+  /** Stages to clear to win (the match length chosen before the game). */
+  target: number
   ended: boolean
   winner: Side | 'draw' | null
 }
@@ -112,22 +119,22 @@ function newLog(rng: Rng): Log {
   }
 }
 
-export function newState(rng: Rng): State {
+export function newState(rng: Rng, target = STAGES): State {
   const logs: [Log, Log] = [newLog(rng), newLog(rng)]
   for (const l of logs) setPattern(l)
-  return { now: 0, logs, flying: [], cleared: [0, 0], ended: false, winner: null }
+  return { now: 0, logs, flying: [], cleared: [0, 0], target, ended: false, winner: null }
 }
 
 /** The rotation for the log's current stage. */
 function setPattern(l: Log): void {
-  const p = PATTERNS[l.stage - 1] ?? PATTERNS[0]
+  const p = patternOf(l.stage)
   l.w = p ? p.w * l.sign : 0
   l.flipT = 0
 }
 
 /** The spin speed the pattern asks for right now. */
 export function spinAt(l: Log): number {
-  const p = PATTERNS[l.stage - 1] ?? PATTERNS[0]
+  const p = patternOf(l.stage)
   if (!p) return 0
   if (p.kind === 'wave') return p.w * l.sign + p.amp * Math.sin(l.t * 1.3)
   return l.w
@@ -160,7 +167,7 @@ export function advance(s: State, dt: number, rng: Rng): Event[] {
     const l = s.logs[side]
     l.t += dt
     l.cool = Math.max(0, l.cool - dt)
-    const p = PATTERNS[l.stage - 1]
+    const p = patternOf(l.stage)
     if (p?.kind === 'flip') {
       l.flipT += dt
       if (l.flipT >= p.period) {
@@ -209,7 +216,7 @@ function land(s: State, side: Side, ev: Event[]): void {
     l.clearAt = s.now
     l.burst = [...l.stuck]
     ev.push({ kind: 'cleared', side, stage: l.stage })
-    if (l.stage >= STAGES) {
+    if (l.stage >= s.target) {
       s.ended = true
       s.winner = side
       ev.push({ kind: 'win', side })

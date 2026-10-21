@@ -211,6 +211,13 @@ describe('flappy jump judging', () => {
     expect(judge(alive(800), alive(800), ROUND_T)).toBe('draw')
     expect(judge(alive(800), alive(900), ROUND_T - 1)).toBeNull()
   })
+
+  it('a match of the chosen length is decided when that time is up', () => {
+    expect(judge(alive(800), alive(900), 30, 30)).toBe(1)
+    expect(judge(alive(900), alive(800), 90, 90)).toBe(0)
+    expect(judge(alive(800), alive(900), 29, 30)).toBeNull()
+    expect(judge(alive(800), alive(900), ROUND_T - 1)).toBeNull()
+  })
 })
 
 /** One match between two bots. Returns the winner and the number of steps it took. */

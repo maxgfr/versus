@@ -16,7 +16,6 @@ import {
   SECTOR,
   type State,
   THROW_BALLISTICS,
-  THROWS,
   WIND,
 } from './rules.ts'
 
@@ -428,9 +427,9 @@ export function render(g: Draw, s: State, now: number, human: [boolean, boolean]
     const intro = s.t - s.turnAt < 1.4
     const label =
       intro || !human[side]
-        ? n === THROWS
+        ? n === s.throws
           ? 'Last throw!'
-          : `Throw ${n} of ${THROWS}`
+          : `Throw ${n} of ${s.throws}`
         : 'Hold to spin, let go on the yellow'
     banner(g, side, label, y, {
       size: 40,
@@ -482,19 +481,22 @@ export function drawHud(g: Draw, s: State, side: Side, now: number): void {
     )
   })
   // One pip per throw: filled for a valid throw, a cross for a foul, hollow to come.
+  // Long matches shrink the pips so the row stays on the screen.
   const marks = s.marks.filter((m) => m.side === side)
+  const gap = Math.min(50, 240 / Math.max(1, s.throws - 1))
+  const k = gap / 50
   g.forSide(side, side === 0 ? W - 150 : 150, y, () => {
-    for (let i = 0; i < THROWS; i++) {
-      const x = (i - 1) * 50
+    for (let i = 0; i < s.throws; i++) {
+      const x = (i - (s.throws - 1) / 2) * gap
       const m = marks[i]
-      g.circle(x, 0, 18, alpha(C.white, 0.14))
+      g.circle(x, 0, 18 * k, alpha(C.white, 0.14))
       if (!m) continue
       if (m.foul) {
-        g.line(x - 9, -9, x + 9, 9, SIDE[0].light, 6)
-        g.line(x - 9, 9, x + 9, -9, SIDE[0].light, 6)
+        g.line(x - 9 * k, -9 * k, x + 9 * k, 9 * k, SIDE[0].light, 6 * k)
+        g.line(x - 9 * k, 9 * k, x + 9 * k, -9 * k, SIDE[0].light, 6 * k)
       } else {
-        g.circle(x, 0, 16, col.main)
-        g.circle(x - 5, -5, 5, alpha('#ffffff', 0.6))
+        g.circle(x, 0, 16 * k, col.main)
+        g.circle(x - 5 * k, -5 * k, 5 * k, alpha('#ffffff', 0.6))
       }
     }
   })

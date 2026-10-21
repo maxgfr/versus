@@ -1,5 +1,5 @@
 import { DragAim } from '../../core/controls.ts'
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import { bigScore } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
@@ -15,6 +15,7 @@ import {
   newState,
   type State,
   THROW,
+  TO_WIN,
   TOSS,
   toss,
   winner,
@@ -22,7 +23,14 @@ import {
 
 const EVERYWHERE = { x: -600, y: -600, w: 2200, h: 3000 }
 
+/** Match length: points to win, chosen on the ready screen. */
+export const match: MatchSpec = { unit: 'points', default: TO_WIN, min: 3, max: 21 }
+
 class Cornhole extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   private aims: [DragAim, DragAim] = [
     new DragAim(0, EVERYWHERE, 300),
     new DragAim(1, EVERYWHERE, 300),
@@ -33,7 +41,7 @@ class Cornhole extends TurnGame<State> {
   protected setup(): State {
     // In local 2P the player whose turn it is may pull anywhere on the table.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(this.ctx.rng.chance(0.5) ? 0 : 1)
+    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.target)
   }
 
   protected override busy(): boolean {

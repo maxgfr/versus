@@ -25,7 +25,7 @@ export interface LaneView {
   rival: Truck
   seed: number
   time: number
-  phase: 'ready' | 'run'
+  phase: 'ready' | 'run' | 'end'
   since: number
   name: string
   bot: boolean
@@ -39,6 +39,15 @@ export interface LaneView {
   fallAt: number
   winner: Side | 'draw' | null
   endAt: number
+  /** The race in play, from 1. */
+  round: number
+  /** Races won, this side and the rival. */
+  wins: number
+  rivalWins: number
+  /** Race wins that take the match. */
+  target: number
+  /** The match is decided: this race is its last. */
+  matchOver: boolean
 }
 
 /** Wall width: its near face is where the bumper hits. */
@@ -525,10 +534,24 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   hud(g, side, o, obs)
 }
 
+/** Race wins as pips at the top left, filled for each race won. */
+function racePips(g: Draw, side: Side, wins: number, target: number): void {
+  for (let i = 0; i < target; i++) {
+    const x = 60 + i * 46
+    const y = 74
+    const on = i < wins
+    g.circle(x, y + 4, 18, alpha('#000000', 0.3))
+    g.circle(x, y, 18, on ? SIDE[side].main : alpha(C.ink, 0.7))
+    if (on) g.circle(x - 5, y - 5, 5, alpha(C.white, 0.6))
+    else g.ring(x, y, 19, alpha(C.white, 0.4), 4)
+  }
+}
+
 function hud(g: Draw, side: Side, o: LaneView, obs: ReturnType<typeof visible>): void {
   const t = o.truck
   const left = metres(FINISH - Math.min(FINISH, t.x))
   scorePill(g, side, String(left), 'm to go', LANE_W / 2, 74)
+  if (o.target > 1) racePips(g, side, o.wins, o.target)
   progress(g, side, t, o.rival)
   const next = obs.find((p) => p.i === t.k)
   const ahead = next ? next.x - t.x : Infinity
@@ -536,11 +559,12 @@ function hud(g: Draw, side: Side, o: LaneView, obs: ReturnType<typeof visible>):
   boostMeter(g, side, t, o.time, wallNear)
 
   if (o.phase === 'ready') {
+    const later = o.round > 1
     card(
       g,
       side,
-      o.bot ? 'Ready…' : 'Tap to jump',
-      o.bot ? o.name : 'Hold to boost through walls',
+      later ? `Round ${o.round}` : o.bot ? 'Ready…' : 'Tap to jump',
+      later ? `${o.wins} – ${o.rivalWins}` : o.bot ? o.name : 'Hold to boost through walls',
       CARD_Y,
       o.since,
       { x: CARD_X },
@@ -555,22 +579,29 @@ function hud(g: Draw, side: Side, o: LaneView, obs: ReturnType<typeof visible>):
       o.winner === 'draw'
         ? 'Photo finish!'
         : won
-          ? o.bot
-            ? 'Computer wins!'
-            : 'You win!'
-          : 'Beaten!'
+          ? !o.matchOver
+            ? 'Round won!'
+            : o.bot
+              ? 'Computer wins!'
+              : 'You win!'
+          : o.matchOver
+            ? 'Beaten!'
+            : 'Round lost'
+    const score = `${o.wins} – ${o.rivalWins}`
     const sub =
       o.winner === 'draw'
-        ? 'Dead level'
-        : won
-          ? `${(o.finishT >= 0 ? o.finishT : 0).toFixed(1)} s to the flag`
-          : `${gap} m short`
+        ? 'Race again'
+        : !o.matchOver
+          ? score
+          : won
+            ? `${(o.finishT >= 0 ? o.finishT : 0).toFixed(1)} s to the flag`
+            : `${gap} m short`
     card(g, side, title, sub, CARD_Y, tEnd - (won ? 0 : 0.2), {
       x: CARD_X,
       color: won ? C.yellow : C.white,
       accent: won ? C.yellow : SIDE[side].main,
     })
-    if (won) g.emoji('🏆', CARD_X, CARD_Y - 170, 96 * outBack(prog(tEnd, 0.3, 0.7)))
+    if (won && o.matchOver) g.emoji('🏆', CARD_X, CARD_Y - 170, 96 * outBack(prog(tEnd, 0.3, 0.7)))
     return
   }
   if (t.state === 'bump') {

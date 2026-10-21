@@ -361,23 +361,26 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 
 /** HUD: points big at the edge; each kick as a pip (filled = good, crossed = missed). */
 export function hud(g: Draw, s: State): void {
+  // A longer match shrinks the row so it still fits the edge (full size up to KICKS).
+  const n = s.regular
+  const k = Math.min(1, KICKS / n)
   for (const side of [0, 1] as const) {
     bigScore(g, side, s.points[side], { x: 130, size: 64 })
     const log = s.log[side]
-    const shown = log.length > KICKS ? log.slice(log.length - KICKS) : log
+    const shown = log.length > n ? log.slice(log.length - n) : log
     const y = hudY(g, side)
     g.forSide(side, W - 160, y, () => {
-      for (let i = 0; i < KICKS; i++) {
-        const x = (i - (KICKS - 1) / 2) * 42
+      for (let i = 0; i < n; i++) {
+        const x = (i - (n - 1) / 2) * 42 * k
         const r = shown[i]
-        if (r === undefined) g.circle(x, 0, 14, alpha(C.white, 0.14))
+        if (r === undefined) g.circle(x, 0, 14 * k, alpha(C.white, 0.14))
         else if (r) {
-          g.circle(x, 0, 15, SIDE[side].main)
-          g.circle(x - 4, -4, 5, alpha(C.white, 0.6))
+          g.circle(x, 0, 15 * k, SIDE[side].main)
+          g.circle(x - 4 * k, -4 * k, 5 * k, alpha(C.white, 0.6))
         } else {
-          g.circle(x, 0, 14, alpha(C.ink, 0.8))
-          g.line(x - 7, -7, x + 7, 7, alpha(C.white, 0.6), 4)
-          g.line(x - 7, 7, x + 7, -7, alpha(C.white, 0.6), 4)
+          g.circle(x, 0, 14 * k, alpha(C.ink, 0.8))
+          g.line(x - 7 * k, -7 * k, x + 7 * k, 7 * k, alpha(C.white, 0.6), 4 * k)
+          g.line(x - 7 * k, 7 * k, x + 7 * k, -7 * k, alpha(C.white, 0.6), 4 * k)
         }
       }
     })

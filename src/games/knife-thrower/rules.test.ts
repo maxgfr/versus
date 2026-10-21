@@ -17,6 +17,7 @@ import {
   type Log,
   newState,
   PATTERNS,
+  patternOf,
   spinAt,
   STAGES,
   type State,
@@ -180,6 +181,27 @@ describe('knife thrower: stages', () => {
     const s = newState(new Rng(9))
     s.logs[0].pause = CLEAR_PAUSE
     expect(throwKnife(s, 0)).toBe(false)
+  })
+
+  it('stages past the last one repeat the pattern cycle', () => {
+    expect(patternOf(1)).toBe(PATTERNS[0])
+    expect(patternOf(STAGES + 1)).toBe(PATTERNS[0])
+    expect(patternOf(STAGES + 2)).toBe(PATTERNS[1])
+  })
+
+  it('a chosen match length replaces the default: a one-stage match ends at its first clear', () => {
+    const rng = new Rng(11)
+    const s = newState(rng, 1)
+    expect(s.target).toBe(1)
+    const l = s.logs[0]
+    const need = KNIVES[0] ?? 5
+    l.stuck = Array.from({ length: need - 1 }, (_, i) => i * KNIFE_W * 2.2)
+    // Wait for the open side to come round, then throw the last one.
+    for (let i = 0; i < 600 && blocked(l, arrivalPhi(l, FLY), 0.15); i++) run(s, rng, STEP)
+    throwAndLand(s, 0, rng)
+    expect(s.ended).toBe(true)
+    expect(s.winner).toBe(0)
+    expect(newState(rng).target).toBe(STAGES)
   })
 
   it('the last stage cleared wins the match', () => {

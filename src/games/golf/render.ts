@@ -12,7 +12,6 @@ import {
   FAIRWAY_R,
   GREEN_R,
   type Hole,
-  HOLES,
   holeOf,
   holesWon,
   type Pt,
@@ -337,7 +336,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
   windSock(g, s.wind, WIND_MAX, sp.x, sp.y)
 
   const holeAge = now - s.holeAt
-  if (holeAge < 2.4 && s.hole < HOLES && s.endAt < 0) {
+  if (holeAge < 2.4 && s.hole < s.holes.length && s.endAt < 0) {
     const k = outBack(clamp01(holeAge / 0.35))
     g.alpha(Math.min(1, (2.4 - holeAge) * 2.5), () =>
       g.at(
@@ -346,7 +345,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
         0,
         () => {
           g.ctx.translate(-W / 2, -MID)
-          banner(g, undefined, `Hole ${s.hole + 1} of ${HOLES} · Par ${h.par}`, MID, {
+          banner(g, undefined, `Hole ${s.hole + 1} of ${s.holes.length} · Par ${h.par}`, MID, {
             size: 46,
             gap: 120,
           })
@@ -394,12 +393,12 @@ function sockSpot(h: Hole): Pt {
   return spots.find(free) ?? { x: right, y: MID }
 }
 
-const doneAt = (s: State): boolean => s.endAt >= 0 || s.hole >= HOLES
+const doneAt = (s: State): boolean => s.endAt >= 0 || s.hole >= s.holes.length
 
 /** HUD: strokes big at the edge, holes won as pips. */
 export function hud(g: Draw, s: State): void {
   for (const side of [0, 1] as const) {
     bigScore(g, side, s.strokes[side], { x: 130, size: 64 })
-    pips(g, side, holesWon(s, side), HOLES, { x: W - 150 })
+    pips(g, side, holesWon(s, side), s.holes.length, { x: W - 150 })
   }
 }

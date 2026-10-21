@@ -28,9 +28,15 @@ const at = (r: number, deg: number): Pt => ({
 })
 
 /** Play a whole match with the computer on both sides; returns the state and the steps taken. */
-function match(seed: number, a: Difficulty, b: Difficulty): { s: State; steps: number } {
+function match(
+  seed: number,
+  a: Difficulty,
+  b: Difficulty,
+  total = ROUNDS,
+  first?: Side,
+): { s: State; steps: number } {
   const rng = new Rng(seed)
-  const s = newState(rng.chance(0.5) ? 0 : 1)
+  const s = newState(first ?? (rng.chance(0.5) ? 0 : 1), total)
   let steps = 0
   while (!done(s) && steps < 60 * 60 * 10) {
     if (s.phase === 'aim') {
@@ -150,6 +156,14 @@ describe('darts turns', () => {
     expect(done(r.s)).toBe(true)
     expect(r.s.darts.length).toBe(ROUNDS * 2 * DARTS_PER_TURN)
     expect(r.steps).toBeLessThan(60 * 60 * 10)
+  })
+
+  it('the match length sets how many rounds are thrown', () => {
+    // Red opens, so each side throws exactly two turns.
+    const r = match(13, 'normal', 'normal', 2, 0)
+    expect(r.s.total).toBe(2)
+    expect(done(r.s)).toBe(true)
+    expect(r.s.darts.length).toBe(2 * 2 * DARTS_PER_TURN)
   })
 
   it('a hard computer out-scores an easy one most of the time', () => {

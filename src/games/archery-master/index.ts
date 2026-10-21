@@ -1,6 +1,6 @@
 import { DragAim } from '../../core/controls.ts'
 import { clamp, outCubic } from '../../core/fx/ease.ts'
-import { type Side } from '../../core/game.ts'
+import { type MatchSpec, type Side } from '../../core/game.ts'
 import { banner, hudY } from '../../core/hud.ts'
 import type { Draw, Mood } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
@@ -22,12 +22,20 @@ import {
   newState,
   rollWind,
   type State,
+  TO_WIN,
   winner,
 } from './rules.ts'
 
 const EVERYWHERE = { x: -600, y: -600, w: 2200, h: 3000 }
 
+/** Match length: apples to win, chosen on the ready screen. */
+export const match: MatchSpec = { unit: 'points', default: TO_WIN, min: 3, max: 11 }
+
 class ArcheryMaster extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   private aims: [DragAim, DragAim] = [
     new DragAim(0, EVERYWHERE, 300),
     new DragAim(1, EVERYWHERE, 300),
@@ -39,7 +47,7 @@ class ArcheryMaster extends TurnGame<State> {
     // In local 2P the archer on turn may pull anywhere on the table.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
     const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
-    return newState(starter, rollWind(this.ctx.rng))
+    return newState(starter, rollWind(this.ctx.rng), this.target)
   }
 
   protected override busy(): boolean {

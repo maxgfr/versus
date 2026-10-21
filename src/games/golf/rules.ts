@@ -11,9 +11,9 @@ import {
 } from '../../engines/aim/index.ts'
 
 /**
- * Pure golf: three procedural holes, each player plays their own ball (the one
- * farthest from the cup plays next, as on a real course), lobs with
- * pseudo-height, rolls with surface friction. No DOM.
+ * Pure golf: a course of procedural holes (three by default), each player plays
+ * their own ball (the one farthest from the cup plays next, as on a real
+ * course), lobs with pseudo-height, rolls with surface friction. No DOM.
  */
 
 export const HOLES = 3
@@ -164,9 +164,10 @@ export function makeHole(rng: Rng, index: number, starter: Side): Hole {
   return { par: len > 900 ? 4 : 3, starter, tee, bend, cup, bunkers, ponds }
 }
 
-export function newState(rng: Rng, first: Side, wind: number): State {
+/** `count` holes make the course (the match length); each hole's starter alternates. */
+export function newState(rng: Rng, first: Side, wind: number, count = HOLES): State {
   const holes: Hole[] = []
-  for (let i = 0; i < HOLES; i++) holes.push(makeHole(rng, i, i % 2 === 0 ? first : other(first)))
+  for (let i = 0; i < count; i++) holes.push(makeHole(rng, i, i % 2 === 0 ? first : other(first)))
   const tee = (holes[0] as Hole).tee
   return {
     holes,
@@ -389,7 +390,7 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
   return ev
 }
 
-export const done = (s: State): boolean => s.hole >= HOLES
+export const done = (s: State): boolean => s.hole >= s.holes.length
 
 /** The hole being played (the last one once the round is over, so the final frames still draw). */
 export const holeOf = (s: State): Hole => s.holes[Math.min(s.hole, s.holes.length - 1)] as Hole

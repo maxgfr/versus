@@ -1,7 +1,9 @@
-import type { Side } from '../../core/game.ts'
+import type { MatchSpec, Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { store } from '../../core/store.ts'
+import { MID } from '../../core/stage.ts'
 import { fmtTime, newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
 import { chooseAction, PACE } from './bot.ts'
 import {
@@ -56,10 +58,25 @@ export interface Board extends Deal {
 
 export interface State extends RaceBase {
   boards: [Board, Board]
+  /** Races won per side. The match is first to the target. */
+  wins: [number, number]
+  /** Race index, from 0. Each race is a fresh deal, derived from the seed on both phones. */
+  round: number
+  /** Game time this race was dealt: its clock runs from here. */
+  roundAt: number
+  /** Game time this race was decided (a short break follows), or -1 while it runs. */
+  roundEnd: number
+  /** Banner for the decided race. */
+  roundText: string
 }
 
-/** Four minutes: then the most cards home wins. */
+/** Four minutes a race: then the most cards home wins it. */
 const CAP = 240
+/** Seconds between two races, so the one just decided can be read. */
+const BREAK = 2
+/** Race wins to take the match: one race is one round. Solo keeps a single time trial. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
 const CARDS = 52
 /** Seconds between cards sent home by the automatic finish. */
 const AUTO = 0.12
@@ -98,10 +115,18 @@ function homeCandidate(d: Deal): Src | null {
 
 class Solitaire extends PuzzleRace<State> {
   protected recordId = 'solitaire'
-  protected override cap = CAP
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
-    const d = deal(this.ctx.seed)
+    return this.dealRace(0, 0)
+  }
+
+  /** Race `round`, dealt at game time `at`: the same deal on both phones. */
+  private dealRace(round: number, at: number): State {
+    const d = deal(this.ctx.seed + round)
     const board = (): Board => ({
       ...cloneDeal(d),
       botT: 0,
@@ -115,11 +140,68 @@ class Solitaire extends PuzzleRace<State> {
       taps: 0,
       autoT: 0,
     })
-    return { race: newRace(), boards: [board(), board()] }
+    this.cap = at + CAP
+    return {
+      race: newRace(),
+      boards: [board(), board()],
+      wins: [0, 0],
+      round,
+      roundAt: at,
+      roundEnd: -1,
+      roundText: '',
+    }
+  }
+
+  private nextRace(): void {
+    const wins = this.s.wins
+    this.s = { ...this.dealRace(this.s.round + 1, this.time), wins }
   }
 
   protected progressOf(side: Side): number {
     return home(this.s.boards[side]) / CARDS
+  }
+
+  /** Seconds on this race's clock for a side, penalties included. Frozen once the race is decided. */
+  override elapsed(side: Side): number {
+    const r = this.s.race[side]
+    const end = this.s.roundEnd >= 0 ? this.s.roundEnd : this.time
+    return (r.done ?? end) - this.s.roundAt + r.penalty
+  }
+
+  /**
+   * The engine ends a race through `finish` (every card home, or the clock ran
+   * out). In a longer match that is a round: its winner takes it, the match ends
+   * at the target, and a draw takes nobody's round. Solo and first-to-one end as before.
+   */
+  protected override finish(
+    winner: Side | 'draw',
+    o: { score?: [number, number]; note?: string; delay?: number } = {},
+  ): void {
+    if (this.solo || this.target <= 1) {
+      super.finish(winner, o)
+      return
+    }
+    const s = this.s
+    if (this.over || s.roundEnd >= 0) return
+    if (winner !== 'draw') s.wins[winner]++
+    if (winner !== 'draw' && s.wins[winner] >= this.target) {
+      super.finish(winner, { ...o, score: [s.wins[0], s.wins[1]] })
+      return
+    }
+    s.roundEnd = this.time
+    s.roundText = winner === 'draw' ? 'Draw round' : `${this.ctx.names[winner]} takes the round`
+    this.ctx.audio.play(winner === 'draw' ? 'draw' : 'score')
+  }
+
+  override render(g: Draw): void {
+    super.render(g)
+    if (this.solo || this.target <= 1) return
+    pips(g, 0, this.s.wins[0], this.target)
+    pips(g, 1, this.s.wins[1], this.target)
+    if (this.s.roundEnd >= 0 && !this.over) {
+      const a = Math.min(1, (this.time - this.s.roundEnd) * 4)
+      banner(g, undefined, this.s.roundText, MID, { size: 58, alpha: a })
+    }
   }
 
   protected stepSide(side: Side, dt: number, taps: { x: number; y: number }[]): void {
@@ -166,7 +248,7 @@ class Solitaire extends PuzzleRace<State> {
 
   /** Tap on the stock: turn over the next card, or recycle the waste. */
   private turn(side: Side): void {
-    if (this.over) return
+    if (this.over || this.s.roundEnd >= 0) return
     const b = this.s.boards[side]
     const n = draw(b)
     if (!n) {
@@ -191,7 +273,7 @@ class Solitaire extends PuzzleRace<State> {
 
   /** Tap on a card: move it (and the cards on it) to the best legal place. */
   private play(side: Side, src: Src): void {
-    if (this.over) return
+    if (this.over || this.s.roundEnd >= 0) return
     const b = this.s.boards[side]
     const f = this.frames[side]
     const tv = tableView(f.w, f.h)
@@ -262,6 +344,10 @@ class Solitaire extends PuzzleRace<State> {
   }
 
   protected override step(dt: number): void {
+    if (this.s.roundEnd >= 0) {
+      if (this.time - this.s.roundEnd >= BREAK) this.nextRace()
+      return
+    }
     const wasOver = this.over
     super.step(dt)
     // Time up: the engine picks the winner; give it a send-off.
@@ -291,7 +377,7 @@ class Solitaire extends PuzzleRace<State> {
           flipAt: b.flipAt,
           nopeKey: b.nopeKey,
           nopeAt: b.nopeAt,
-          hint: !this.isBot(side) && b.taps === 0 && this.time < 12,
+          hint: !this.isBot(side) && b.taps === 0 && this.time - this.s.roundAt < 12,
           now: this.time,
         }),
       tv.k,

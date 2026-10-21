@@ -125,6 +125,15 @@ describe('archery: turns, lives and points', () => {
     expect(winner(s)).toBe(0)
   })
 
+  it('a chosen match length replaces the default: first to 3 apples', () => {
+    const s = newState(0, 0, 3)
+    s.apples = [2, 2]
+    expect(winner(s)).toBeNull()
+    s.apples[0] = 3
+    expect(winner(s)).toBe(0)
+    expect(winner(newState(0, 0))).toBeNull()
+  })
+
   it('out of lives loses to the archer who still has some', () => {
     const s = newState(0, 0)
     s.lives = [0, 2]

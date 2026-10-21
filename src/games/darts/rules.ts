@@ -2,10 +2,10 @@ import { other, type Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 
 /**
- * Pure darts: a board in the middle, three darts a turn, five rounds. A flick
- * sets where the dart lands: the flick vector, measured against the ideal flick
- * that would hit the centre from the thrower's edge, moves the landing point.
- * Faster flicks wobble more. No DOM.
+ * Pure darts: a board in the middle, three darts a turn, a set number of rounds
+ * (five by default). A flick sets where the dart lands: the flick vector,
+ * measured against the ideal flick that would hit the centre from the thrower's
+ * edge, moves the landing point. Faster flicks wobble more. No DOM.
  */
 
 export const ROUNDS = 5
@@ -75,6 +75,8 @@ export interface State {
   throws: number
   /** Completed rounds (a red turn and a blue turn each). */
   rounds: number
+  /** Rounds in this match (the match length). */
+  total: number
   totals: [number, number]
   darts: Dart[]
   flight: Flight | null
@@ -149,11 +151,12 @@ export function scoreAt(p: Pt): Score {
   return { pts: n, label: `${n}`, ring: 'single' }
 }
 
-export function newState(first: Side): State {
+export function newState(first: Side, total = ROUNDS): State {
   return {
     turn: first,
     throws: 0,
     rounds: 0,
+    total,
     totals: [0, 0],
     darts: [],
     flight: null,
@@ -236,7 +239,7 @@ export function advance(s: State, dt: number): Event[] {
   return ev
 }
 
-export const done = (s: State): boolean => s.rounds >= ROUNDS
+export const done = (s: State): boolean => s.rounds >= s.total
 
 /** Highest total wins; equal totals are a draw. */
 export function result(s: State): Side | 'draw' {

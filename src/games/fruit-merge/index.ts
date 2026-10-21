@@ -1,4 +1,4 @@
-import { BaseGame, type GameContext, type Side } from '../../core/game.ts'
+import { BaseGame, type GameContext, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, shade } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
@@ -54,6 +54,15 @@ export interface State {
   winner: Side | 'draw' | null
 }
 
+/** A timed match: the players choose its length (the clock runs for it). */
+export const match: MatchSpec = {
+  unit: 'seconds',
+  default: TIME_LIMIT,
+  min: 30,
+  max: 300,
+  step: 30,
+}
+
 const RECORD = 'fruit-merge'
 const DROP_COOL = 0.22
 
@@ -67,6 +76,11 @@ class FruitMerge extends BaseGame<State> {
   /** Cosmetic trackers for sounds (host only). */
   private lastSec = -1
   private warnStep: [number, number] = [0, 0]
+
+  /** Match length in seconds, as chosen before the game. */
+  private get limit(): number {
+    return this.ctx.target || match.default
+  }
 
   override init(ctx: GameContext): void {
     this.solo = ctx.mode === '1p' && !ctx.bots[1]
@@ -113,7 +127,7 @@ class FruitMerge extends BaseGame<State> {
       this.advance(side, dt)
     }
     // The last ten seconds tick down out loud.
-    const left = Math.ceil(TIME_LIMIT - this.time)
+    const left = Math.ceil(this.limit - this.time)
     if (left !== this.lastSec) {
       this.lastSec = left
       if (left <= 10 && left > 0)
@@ -246,7 +260,7 @@ class FruitMerge extends BaseGame<State> {
     if (this.over) return
     const [a, b] = this.s.wells
     const allOut = this.solo ? a.overAt >= 0 : a.overAt >= 0 && b.overAt >= 0
-    if (allOut || this.time >= TIME_LIMIT) this.end()
+    if (allOut || this.time >= this.limit) this.end()
   }
 
   private end(): void {
@@ -292,7 +306,7 @@ class FruitMerge extends BaseGame<State> {
       name: this.ctx.names[side],
       score: well.jar.score,
       scoreAt: well.scoreAt,
-      remaining: TIME_LIMIT - this.time,
+      remaining: this.limit - this.time,
       now: this.time,
     })
     drawJar(

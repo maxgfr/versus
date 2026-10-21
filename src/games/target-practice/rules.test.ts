@@ -170,6 +170,17 @@ describe('target practice: the clock and the table', () => {
     expect(leader(s)).toBe(1)
   })
 
+  it('a chosen match length replaces the default: 15 s, not 45', () => {
+    const s = newState(15)
+    expect(s.left).toBe(15)
+    run(s, new Rng(10), 10)
+    expect(s.ended).toBe(false)
+    expect(s.left).toBeGreaterThan(4)
+    const ev = run(s, new Rng(10), 6)
+    expect(ev.has('end')).toBe(true)
+    expect(s.left).toBe(0)
+  })
+
   it('nothing can be fired after time is up', () => {
     const s = newState()
     run(s, new Rng(9), TIME + 1)

@@ -71,6 +71,8 @@ export interface Mark {
 
 export interface State {
   turn: Side
+  /** Throws each side makes in this match. */
+  throws: number
   /** Throws each side has made. */
   thrown: [number, number]
   /** Longest valid throw each side has made (world units). */
@@ -95,9 +97,10 @@ export type Event =
   | { kind: 'turn'; side: Side }
   | { kind: 'whirl'; side: Side }
 
-export function newState(starter: Side): State {
+export function newState(starter: Side, throws = THROWS): State {
   return {
     turn: starter,
+    throws,
     thrown: [0, 0],
     best: [0, 0],
     spin: null,
@@ -192,7 +195,7 @@ export function predict(
 }
 
 export function canSpin(s: State, side: Side): boolean {
-  return s.phase === 'aim' && s.turn === side && s.spin === null && s.thrown[side] < THROWS
+  return s.phase === 'aim' && s.turn === side && s.spin === null && s.thrown[side] < s.throws
 }
 
 /** Begin winding a spin for `side`. */
@@ -277,7 +280,7 @@ function land(s: State, f: Flight): Event {
 
 /** Every throw has been made and the last one has landed. */
 export function over(s: State): boolean {
-  return s.thrown[0] >= THROWS && s.thrown[1] >= THROWS && s.phase !== 'fly'
+  return s.thrown[0] >= s.throws && s.thrown[1] >= s.throws && s.phase !== 'fly'
 }
 
 /** The side with the longest valid throw, or null when level. */

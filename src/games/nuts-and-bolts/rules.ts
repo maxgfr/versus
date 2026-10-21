@@ -188,6 +188,19 @@ export interface Puzzle {
 }
 
 /**
+ * Seed of round `round` (0-based) of a match. Round 0 is the match seed itself,
+ * so a one-round match is the puzzle it always was; later rounds mix the round
+ * in, and both phones derive the same puzzle from it.
+ */
+export function roundSeed(seed: number, round: number): number {
+  if (round === 0) return seed >>> 0
+  let h = (seed ^ Math.imul(round, 0x9e3779b1)) >>> 0
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  return (h ^ (h >>> 16)) >>> 0
+}
+
+/**
  * Scramble the solved state by swapping nuts between the full bolts: the two
  * empty bolts stay empty and every bolt keeps its four nuts, as at the start of
  * a game. The search then has to confirm the scramble before it is kept, so

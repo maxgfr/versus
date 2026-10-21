@@ -9,9 +9,22 @@ import {
   type Level,
   neighbour,
   roll,
+  roundSeed,
   startPaint,
   stuck,
 } from './rules.ts'
+
+describe('match rounds', () => {
+  it('round 0 keeps the match seed; later rounds carve their own levels, repeatably', () => {
+    expect(roundSeed(4242, 0)).toBe(4242)
+    const seeds = [0, 1, 2, 3].map((r) => roundSeed(4242, r))
+    expect(new Set(seeds).size).toBe(4)
+    expect(roundSeed(4242, 2)).toBe(seeds[2])
+    const a = generateLevel(new Rng(roundSeed(4242, 1)), 5)
+    const b = generateLevel(new Rng(roundSeed(4242, 1)), 5)
+    expect(a.walls).toEqual(b.walls)
+  })
+})
 
 /** A hand-made 4 × 4 level: `#` wall, `.` floor, `S` start. */
 function grid(rows: string[]): Level {

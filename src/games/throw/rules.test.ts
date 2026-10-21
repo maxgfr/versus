@@ -219,6 +219,20 @@ describe('hammer throw match', () => {
     expect(canSpin(s, 1)).toBe(false)
   })
 
+  it('a match of another length gives each athlete that many throws', () => {
+    const s = newState(0, 5)
+    for (let round = 0; round < 5; round++) {
+      for (const side of [0, 1] as Side[]) {
+        expect(s.turn).toBe(side)
+        throwAt(s, side, WIND)
+        settle(s)
+      }
+      expect(over(s)).toBe(round === 4)
+    }
+    expect(s.thrown).toEqual([5, 5])
+    expect(canSpin(s, 0)).toBe(false)
+  })
+
   it('the longest valid throw wins; equal bests are level', () => {
     const s = newState(0)
     s.best = [30 * METRE, 20 * METRE]

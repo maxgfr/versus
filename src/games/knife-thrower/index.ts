@@ -1,6 +1,6 @@
 import { floatFor } from '../../core/fx/fx.ts'
 import { frame, inFrame } from '../../core/frame.ts'
-import { BaseGame, type Difficulty, other, type Side } from '../../core/game.ts'
+import { BaseGame, type Difficulty, type MatchSpec, other, type Side } from '../../core/game.ts'
 import { banner, hudY, namePill, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -28,6 +28,9 @@ import {
   throwKnife,
 } from './rules.ts'
 
+/** Match length: stages to clear, chosen on the ready screen. */
+export const match: MatchSpec = { unit: 'rounds', default: STAGES, min: 1, max: 6 }
+
 /** What each stage's spin is called on its title card. */
 const STAGE_NAME: Record<string, string> = {
   steady: 'Steady spin',
@@ -38,13 +41,17 @@ const STAGE_NAME: Record<string, string> = {
 class KnifeThrower extends BaseGame<State> {
   private bots: [KnifeBot | null, KnifeBot | null] = [null, null]
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     const d: Difficulty = this.ctx.difficulty
     this.bots = [
       this.isBot(0) ? new KnifeBot(0, d) : null,
       this.isBot(1) ? new KnifeBot(1, d) : null,
     ]
-    return newState(this.ctx.rng)
+    return newState(this.ctx.rng, this.target)
   }
 
   protected step(dt: number): void {
@@ -211,9 +218,9 @@ class KnifeThrower extends BaseGame<State> {
       const l = s.logs[side]
       namePill(g, side, this.ctx.names[side], {
         active: s.ended && s.winner === side,
-        text: `${this.ctx.names[side]} · stage ${Math.min(l.stage, STAGES)}`,
+        text: `${this.ctx.names[side]} · stage ${Math.min(l.stage, s.target)}`,
       })
-      pips(g, side, s.cleared[side], STAGES)
+      pips(g, side, s.cleared[side], s.target)
       // Lives as hearts, left of the pill; the one just lost cracks.
       const y = hudY(g, side)
       g.forSide(side, side === 0 ? 130 : W - 130, y, () => {

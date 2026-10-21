@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
 import { RunnerGame, toWorld } from '../../engines/runner/index.ts'
@@ -36,7 +36,14 @@ const END = 1.9
 /** The match's last moment lingers a little longer before the result screen. */
 const FINAL = 2.4
 
+/** First to N round wins: the players pick N before the match. */
+export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 5 }
+
 class ChickenJump extends RunnerGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     return {
       chickens: [newChicken(), newChicken()],
@@ -147,7 +154,7 @@ class ChickenJump extends RunnerGame<State> {
     const at = toWorld(this.frames[w], RUN_X, GROUND - c.h - 60)
     this.ctx.fx.ring(at.x, at.y, C.yellow, 200)
     this.ctx.fx.sparks(at.x, at.y, C.yellow, 16)
-    if (s.wins[w] >= TARGET) {
+    if (s.wins[w] >= this.target) {
       this.ctx.fx.confetti(w)
       this.ctx.fx.flash(SIDE[w].light, 0.3)
       this.finish(w, { score: s.wins, delay: FINAL })
@@ -192,6 +199,7 @@ class ChickenJump extends RunnerGame<State> {
       name: this.ctx.names[side],
       bot: this.isBot(side),
       matchOver: this.over,
+      target: this.target,
     }
     drawLane(g, side, view, o)
   }

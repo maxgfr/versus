@@ -17,7 +17,6 @@ import {
   runnerAngle,
   SPIKE_H,
   SPIKE_W,
-  TARGET,
 } from './rules.ts'
 
 export interface LaneView {
@@ -29,6 +28,8 @@ export interface LaneView {
   wins: number
   rivalWins: number
   round: number
+  /** Round wins to take the match. */
+  target: number
   roundWinner: Side | 'draw' | null
   name: string
   bot: boolean
@@ -363,7 +364,7 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   if (won) crown(g, r, o.since)
 
   counterPill(g, side, r.seen, o.bot ? 'Computer' : o.name, LANE_W / 2 - 60, 70, o.time - r.scoreAt)
-  winPips(g, side, o.wins, TARGET, LANE_W - 200, 66, won ? o.since : 9)
+  winPips(g, side, o.wins, o.target, LANE_W - 200, 66, won ? o.since : 9)
 
   const cx = LANE_W / 2 + 90
   const cy = LANE_H * 0.5

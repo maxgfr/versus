@@ -1,5 +1,5 @@
 import { floatFor } from '../../core/fx/fx.ts'
-import type { Side } from '../../core/game.ts'
+import type { MatchSpec, Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, shade } from '../../core/render/palette.ts'
 import { TurnGame } from '../../engines/board/index.ts'
@@ -19,7 +19,11 @@ import {
   starterOf,
   stepSpin,
   type State,
+  THROWS,
 } from './rules.ts'
+
+/** Throws each athlete makes; the players pick it on the ready screen. */
+export const match: MatchSpec = { unit: 'rounds', default: THROWS, min: 1, max: 10 }
 
 class HammerThrow extends TurnGame<State> {
   /** The computer's plan for its throw, made when it starts winding. */
@@ -27,10 +31,14 @@ class HammerThrow extends TurnGame<State> {
   /** The pointer that is holding the spin (human turns). */
   private ptr = -1
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     // In local 2P the player whose turn it is may spin from anywhere.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(starterOf(this.ctx.rng))
+    return newState(starterOf(this.ctx.rng), this.target)
   }
 
   protected override busy(): boolean {

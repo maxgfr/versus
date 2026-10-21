@@ -4,7 +4,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { LANE_W, repeatX } from '../../engines/runner/index.ts'
 import { counterPill, laneCard, winPips } from './hud.ts'
-import { type Chicken, eggsIn, GROUND, obstaclesIn, type Obstacle, RUN_X, TARGET } from './rules.ts'
+import { type Chicken, eggsIn, GROUND, obstaclesIn, type Obstacle, RUN_X } from './rules.ts'
 
 export interface LaneView {
   chicken: Chicken
@@ -19,6 +19,8 @@ export interface LaneView {
   name: string
   bot: boolean
   matchOver: boolean
+  /** Round wins that take the match. */
+  target: number
 }
 
 type View = { x0: number; y0: number; x1: number; y1: number }
@@ -31,6 +33,11 @@ const SKY: [readonly [string, string, string], readonly [string, string, string]
   ['#ffc59a', '#ffb08e', '#ff8f86'],
   ['#a8dcff', '#8cc6ff', '#5b9dff'],
 ]
+
+/** Round pips start at the lane's right; a longer row starts further left so it stays on the lane. */
+function pipsX(target: number): number {
+  return Math.min(LANE_W - 200, LANE_W - 62 - (target - 1) * 58)
+}
 
 function backdrop(g: Draw, side: Side, v: View, dist: number, time: number): void {
   const [top, mid, bottom] = SKY[side]
@@ -366,7 +373,7 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   if (won) crown(g, c, o.since)
 
   counterPill(g, side, c.eggs, o.bot ? 'Computer' : o.name, LANE_W / 2 - 60, 70, o.time - c.scoreAt)
-  winPips(g, side, o.wins, TARGET, LANE_W - 200, 66, won ? o.since : 9)
+  winPips(g, side, o.wins, o.target, pipsX(o.target), 66, won ? o.since : 9)
 
   const cx = LANE_W / 2 + 90
   if (o.phase === 'wait') {

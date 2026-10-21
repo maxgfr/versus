@@ -180,7 +180,7 @@ describe('crash it boost and flag', () => {
 })
 
 describe('crash it game', () => {
-  function run(seed: number, d: Difficulty) {
+  function run(seed: number, d: Difficulty, target?: number) {
     const stage = {} as Stage
     const ctx: GameContext = {
       stage,
@@ -195,11 +195,12 @@ describe('crash it game', () => {
       names: ['Red', 'Blue'],
       local: 0,
       seed,
+      target,
     }
     const game = makeGame()
     game.init(ctx)
     let steps = 0
-    while (!game.result && steps < 60 * 300) {
+    while (!game.result && steps < 60 * 900) {
       game.update(1 / 60)
       steps++
     }
@@ -212,6 +213,17 @@ describe('crash it game', () => {
       expect(game.result).not.toBeNull()
       expect(steps).toBeLessThan(60 * 200)
     }
+  })
+
+  it('a match of the chosen length ends once one side has that many race wins', () => {
+    const { game, steps } = run(5, 'hard', 3)
+    expect(game.result).not.toBeNull()
+    expect(steps).toBeLessThan(60 * 900)
+    expect(game.result?.winner).not.toBe('draw')
+    expect(game.result?.score).toHaveLength(2)
+    const [a, b] = game.result?.score ?? [0, 0]
+    expect(Math.max(a, b)).toBe(3)
+    expect(Math.min(a, b)).toBeLessThan(3)
   })
 
   it('the hard bot reliably finishes', () => {

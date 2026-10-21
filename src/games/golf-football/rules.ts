@@ -53,6 +53,8 @@ export interface State {
   turn: Side
   /** Each side's spots, in kick order (regular kicks, then sudden death). */
   spots: [Spot[], Spot[]]
+  /** Regular kicks each before sudden death (the match length). */
+  regular: number
   kicks: [number, number]
   points: [number, number]
   sudden: boolean
@@ -82,9 +84,16 @@ export const goalY = (side: Side): number => (side === 0 ? GOAL_TOP : GOAL_BOT)
 /** Forward for a side's kick, in world y: red kicks up the pitch, blue down. */
 export const forwardY = (side: Side): number => (side === 0 ? -1 : 1)
 
-function spotsFor(rng: Rng, side: Side): Spot[] {
+/** Distances of `n` regular spots: evenly spread from the nearest default spot to the farthest. */
+function regularDists(n: number): number[] {
+  const near = SPOT_DIST[0] ?? 320
+  const far = SPOT_DIST[SPOT_DIST.length - 1] ?? 880
+  return Array.from({ length: n }, (_, i) => (n === 1 ? near : near + ((far - near) * i) / (n - 1)))
+}
+
+function spotsFor(rng: Rng, side: Side, regular: number): Spot[] {
   const out: Spot[] = []
-  const ds = [...SPOT_DIST]
+  const ds = regularDists(regular)
   for (let i = 0; i < SUDDEN_KICKS; i++)
     ds.push(SUDDEN_DIST[Math.min(i, SUDDEN_DIST.length - 1)] ?? 1150)
   for (const d of ds) {
@@ -95,10 +104,11 @@ function spotsFor(rng: Rng, side: Side): Spot[] {
   return out
 }
 
-export function newState(rng: Rng, first: Side, wind: number): State {
+export function newState(rng: Rng, first: Side, wind: number, regular = KICKS): State {
   return {
     turn: first,
-    spots: [spotsFor(rng, 0), spotsFor(rng, 1)],
+    spots: [spotsFor(rng, 0, regular), spotsFor(rng, 1, regular)],
+    regular,
     kicks: [0, 0],
     points: [0, 0],
     sudden: false,
@@ -212,7 +222,7 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
     }
     s.beat -= dt
     if (s.beat > 0) return ev
-    const level = s.kicks[0] === s.kicks[1] && s.kicks[0] >= KICKS
+    const level = s.kicks[0] === s.kicks[1] && s.kicks[0] >= s.regular
     if (level && s.points[0] !== s.points[1]) return ev
     if (level && !s.sudden) {
       s.sudden = true
@@ -227,9 +237,9 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
   return ev
 }
 
-/** Over when both sides have kicked the same number of times (five each, then sudden death) and the points differ. Points tied after a round means sudden death. */
+/** Over when both sides have kicked the same number of times (the match length each, then sudden death) and the points differ. Points tied after a round means sudden death. */
 export function result(s: State): Side | null {
-  if (s.kicks[0] !== s.kicks[1] || s.kicks[0] < KICKS) return null
+  if (s.kicks[0] !== s.kicks[1] || s.kicks[0] < s.regular) return null
   if (s.points[0] === s.points[1]) return null
   return s.points[0] > s.points[1] ? 0 : 1
 }

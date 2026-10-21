@@ -195,6 +195,16 @@ describe('cup pong rules', () => {
     expect(standing(s, 1)).toBe(0)
   })
 
+  it('a match to fewer cups ends once that many rival cups are sunk', () => {
+    const s = newState(0, 2)
+    const rival = s.cups.filter((c) => c.side === 1)
+    for (const c of rival.slice(0, 1)) c.alive = false
+    expect(standingWinner(s)).toBeNull()
+    for (const c of rival.slice(1, 2)) c.alive = false
+    expect(standingWinner(s)).toBe(0)
+    expect(standingWinner(newState(0))).toBeNull()
+  })
+
   it('a missed shot passes the turn to the rival', () => {
     const s = newState(0)
     fire(s, 0, { dx: 0, dy: -1, power: 0.3 })

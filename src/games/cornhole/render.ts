@@ -5,17 +5,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { H, W } from '../../core/stage.ts'
 import { drawTrajectory } from '../../engines/aim/index.ts'
-import {
-  BAG_R,
-  BAGS_EACH,
-  BOARD,
-  type Bag,
-  bagPoints,
-  HOLE,
-  type State,
-  THROW,
-  TO_WIN,
-} from './rules.ts'
+import { BAG_R, BAGS_EACH, BOARD, type Bag, bagPoints, HOLE, type State, THROW } from './rules.ts'
 
 const PLANK = '#d9a066'
 const LAWN = '#1f5a3a'
@@ -349,7 +339,7 @@ export function render(g: Draw, s: State, look: Look, t: number): void {
         color: gain === 0 ? C.white : SIDE[gain > 0 ? 0 : 1].light,
       })
   } else if (sinceRound < 1.5) {
-    halfBanner(g, look.readers, s.round === 1 ? `First to ${TO_WIN}` : `Round ${s.round}`, {
+    halfBanner(g, look.readers, s.round === 1 ? `First to ${s.target}` : `Round ${s.round}`, {
       size: 56,
       alpha: Math.min(1, (1.5 - sinceRound) * 3),
     })

@@ -188,6 +188,18 @@ describe('wheelie game', () => {
     expect(game.result?.score).toEqual([best(0), best(1)])
   })
 
+  it('a match of the chosen length banks that many runs each', () => {
+    const game = makeGame()
+    game.init({ ...ctxFor(9, '2p', [true, true], 'hard'), target: 3 })
+    let steps = 0
+    while (!game.result && steps < 60 * 600) {
+      game.update(1 / 60)
+      steps++
+    }
+    expect(game.result).not.toBeNull()
+    for (const side of [0, 1] as Side[]) expect(game.s.runs[side]).toHaveLength(3)
+  })
+
   it('a human who never touches the screen can only lose on time', () => {
     const game = makeGame()
     game.init(ctxFor(12, '1p', [false, false]))

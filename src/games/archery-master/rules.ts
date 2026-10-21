@@ -13,8 +13,8 @@ import { MID, W } from '../../core/stage.ts'
  * Pure archery: William Tell with a straw dummy in the middle of the table and
  * an apple on its head. Each archer shoots once a turn, both shoot once a round,
  * and after each round the shooting lines back off so the dummy is farther away.
- * An apple is a point; the dummy is a lost life. First to five apples, or the
- * last archer with lives. No DOM.
+ * An apple is a point; the dummy is a lost life. First to the chosen apple
+ * count (five by default), or the last archer with lives. No DOM.
  */
 
 export const ARROW: Ballistics = { g: 1000, vmax: 1300, elev: 0.9, z0: 60 }
@@ -25,6 +25,7 @@ export const APPLE = { z: 262, r: 30 }
 /** A near miss still counts within this many units of the apple. */
 export const PAD = 12
 export const LIVES = 3
+/** Default match length: apples to win. The chosen target is kept in `State.target`. */
 export const TO_WIN = 5
 export const GAP0 = 500
 export const GAP_STEP = 50
@@ -60,6 +61,8 @@ export interface State {
   gap: number
   wind: number
   apples: [number, number]
+  /** Apples that win the match (the match length chosen before the game). */
+  target: number
   lives: [number, number]
   /** Arrows that stuck in the dummy this round (for drawing). */
   stuck: { side: Side; x: number; z: number }[]
@@ -88,7 +91,7 @@ export type Event =
 /** Where the shooting line of `side` sits (world y). */
 export const lineY = (side: Side, gap: number): number => (side === 0 ? MID + gap : MID - gap)
 
-export function newState(starter: Side, wind: number): State {
+export function newState(starter: Side, wind: number, target = TO_WIN): State {
   return {
     turn: starter,
     starter,
@@ -96,6 +99,7 @@ export function newState(starter: Side, wind: number): State {
     gap: GAP0,
     wind,
     apples: [0, 0],
+    target,
     lives: [LIVES, LIVES],
     stuck: [],
     phase: 'aim',
@@ -238,8 +242,8 @@ export const rollWind = (rng: Rng): number => (rng.chance(0.2) ? 0 : rng.range(-
 
 /** The match winner, or null while it is still open. */
 export function winner(s: State): Side | null {
-  if (s.apples[0] >= TO_WIN) return 0
-  if (s.apples[1] >= TO_WIN) return 1
+  if (s.apples[0] >= s.target) return 0
+  if (s.apples[1] >= s.target) return 1
   if (s.lives[0] <= 0 && s.lives[1] > 0) return 1
   if (s.lives[1] <= 0 && s.lives[0] > 0) return 0
   return null

@@ -20,10 +20,15 @@ import {
 } from './rules.ts'
 
 /** Play a whole match with the computer on both sides; returns the state and the steps taken. */
-function match(seed: number, a: Difficulty, b: Difficulty): { s: State; steps: number } {
+function match(
+  seed: number,
+  a: Difficulty,
+  b: Difficulty,
+  arrows = ARROWS,
+): { s: State; steps: number } {
   const rng = new Rng(seed)
   const wind = () => rng.range(-WIND_MAX, WIND_MAX)
-  const s = newState(rng.chance(0.5) ? 0 : 1, wind())
+  const s = newState(rng.chance(0.5) ? 0 : 1, wind(), arrows)
   let t = 0
   let steps = 0
   while (!done(s) && steps < 60 * 60 * 5) {
@@ -124,6 +129,13 @@ describe('archery game', () => {
     expect(done(r.s)).toBe(true)
     expect(r.s.stuck.length).toBe(ARROWS * 2)
     expect(r.steps).toBeLessThan(60 * 60 * 5)
+  })
+
+  it('the match length sets the arrows each', () => {
+    const r = match(14, 'normal', 'normal', 2)
+    expect(r.s.arrows).toBe(2)
+    expect(done(r.s)).toBe(true)
+    expect(r.s.stuck.length).toBe(4)
   })
 
   it('a hard computer out-scores an easy one most of the time', () => {

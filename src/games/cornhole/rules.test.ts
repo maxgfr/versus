@@ -180,6 +180,21 @@ describe('cornhole: scoring', () => {
     expect(winner(newState(0))).toBeNull()
     expect(TO_WIN).toBe(11)
   })
+
+  it('a chosen match length replaces the default: first to 3 ends at 3, not 11', () => {
+    const s = newState(0, 3)
+    s.bags = [bag(0, 'hole')]
+    s.tosses = [BAGS_EACH, BAGS_EACH]
+    s.phase = 'fly'
+    advance(s, STEP)
+    expect(s.score[0]).toBe(3)
+    advance(s, SCORE_PAUSE)
+    expect(s.phase).toBe('over')
+    expect(winner(s)).toBe(0)
+    expect(winner(newState(0, 3))).toBeNull()
+    s.score = [2, 1]
+    expect(winner(s)).toBeNull()
+  })
 })
 
 describe('cornhole: sliding', () => {

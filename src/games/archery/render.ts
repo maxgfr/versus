@@ -4,7 +4,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, mix, shade, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import { floodlit, tally, windSock } from './look.ts'
-import { ARROWS, type Arrow, BOW, type Pt, result, TARGET, type State, WIND_MAX } from './rules.ts'
+import { type Arrow, BOW, type Pt, result, TARGET, type State, WIND_MAX } from './rules.ts'
 
 export interface Look {
   /** The draw on the side to move: its pull (0..1), the aim angle, and where the arrow would land. */
@@ -293,6 +293,6 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 export function hud(g: Draw, s: State): void {
   for (const side of [0, 1] as const) {
     bigScore(g, side, s.totals[side], { x: 130, size: 64 })
-    pips(g, side, ARROWS - s.shot[side], ARROWS, { x: W - 150 })
+    pips(g, side, s.arrows - s.shot[side], s.arrows, { x: W - 150 })
   }
 }

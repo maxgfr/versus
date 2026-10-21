@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
 import { clock } from '../../core/hud.ts'
@@ -38,7 +38,14 @@ const STEER_SPAN = 200
 const MILESTONE = 100
 const FINAL = 2.4
 
+/** A timed match: the players pick its length in seconds. */
+export const match: MatchSpec = { unit: 'seconds', default: ROUND_T, min: 15, max: 180, step: 15 }
+
 class FlappyJump extends RunnerGame<State> {
+  private get limit(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     return {
       climbers: [newClimber(), newClimber()],
@@ -62,9 +69,9 @@ class FlappyJump extends RunnerGame<State> {
       return false
     }
     // The last five seconds tick.
-    const before = Math.ceil(ROUND_T - s.flyT)
+    const before = Math.ceil(this.limit - s.flyT)
     s.flyT += dt
-    const after = Math.ceil(ROUND_T - s.flyT)
+    const after = Math.ceil(this.limit - s.flyT)
     if (after !== before && after <= 5 && after > 0) this.ctx.audio.play('tick', 1.4)
     return true
   }
@@ -154,7 +161,7 @@ class FlappyJump extends RunnerGame<State> {
 
   private judgeMatch(): void {
     const s = this.s
-    const w = judge(s.climbers[0], s.climbers[1], s.flyT)
+    const w = judge(s.climbers[0], s.climbers[1], s.flyT, this.limit)
     if (w === null || this.over) return
     s.phase = 'end'
     s.phaseAt = this.time
@@ -198,7 +205,7 @@ class FlappyJump extends RunnerGame<State> {
   protected override renderOver(g: Draw): void {
     const s = this.s
     if (s.phase !== 'fly') return
-    clock(g, ROUND_T - s.flyT, MID, ROUND_T - s.flyT <= 10)
+    clock(g, this.limit - s.flyT, MID, this.limit - s.flyT <= 10)
   }
 }
 

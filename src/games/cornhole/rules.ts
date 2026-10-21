@@ -6,7 +6,8 @@ import { type Ballistics, launch, type ShotParams, stepShell } from '../../engin
  * its centre. Players alternate tossing four bags each per round. A bag lands
  * where its arc ends, slides on its own momentum, and then either drops into
  * the hole (3), stops on the board (1), or goes over the edge / lands on the
- * table (0). Points cancel within a round; first to 11 wins. No DOM.
+ * table (0). Points cancel within a round; first to the match target wins
+ * (11 points by default, chosen before the game). No DOM.
  */
 
 /** The bag's arc. Full power lands about 1300 units out. */
@@ -28,6 +29,7 @@ export const CAPTURE = 170
 /** Below this speed a sliding bag stops. */
 export const STOP = 6
 export const BAGS_EACH = 4
+/** Default match length: points to win. The chosen target is kept in `State.target`. */
 export const TO_WIN = 11
 export const SCORE_PAUSE = 2.2
 
@@ -54,6 +56,8 @@ export interface State {
   round: number
   /** Match totals, red first. */
   score: [number, number]
+  /** Points that win the match (the match length chosen before the game). */
+  target: number
   /** Bags thrown this round, in order. */
   bags: Bag[]
   tosses: [number, number]
@@ -82,12 +86,13 @@ export type Event =
   | { kind: 'scored'; pts: [number, number]; gain: Side | null; amount: number }
   | { kind: 'round'; round: number }
 
-export function newState(starter: Side): State {
+export function newState(starter: Side, target = TO_WIN): State {
   return {
     turn: starter,
     starter,
     round: 1,
     score: [0, 0],
+    target,
     bags: [],
     tosses: [0, 0],
     phase: 'aim',
@@ -136,10 +141,10 @@ export function toss(s: State, shot: ShotParams): boolean {
   return true
 }
 
-/** The winner once someone has reached `TO_WIN`, else null. */
+/** The winner once someone has reached the match target, else null. */
 export function winner(s: State): Side | null {
-  if (s.score[0] >= TO_WIN && s.score[0] >= s.score[1]) return 0
-  if (s.score[1] >= TO_WIN) return 1
+  if (s.score[0] >= s.target && s.score[0] >= s.score[1]) return 0
+  if (s.score[1] >= s.target) return 1
   return null
 }
 

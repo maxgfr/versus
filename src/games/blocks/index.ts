@@ -1,5 +1,5 @@
 import { banner, clock } from '../../core/hud.ts'
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { inOutCubic, lerp, outCubic, prog } from '../../core/fx/ease.ts'
 import { C, SIDE, shade } from '../../core/render/palette.ts'
@@ -65,14 +65,21 @@ export interface State {
   sec: number
 }
 
-/** The match: 90 seconds, or until everyone is out of moves. */
+/** The match: 90 seconds by default, or until everyone is out of moves. */
 const LIMIT = 90
+
+/** Match length in seconds, chosen before the game. The clock and the whistle follow it. */
+export const match: MatchSpec = { unit: 'seconds', default: LIMIT, min: 15, max: 180, step: 15 }
 
 class Blocks extends BaseGame<State> {
   // Derived from the seed on both phones: never sent over the wire.
   private seq: number[] = []
   private frames!: [Frame, Frame]
   private solo = false
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   override init(ctx: Parameters<BaseGame<State>['init']>[0]): void {
     this.solo = ctx.mode === '1p' && !ctx.bots[1]
@@ -100,7 +107,7 @@ class Blocks extends BaseGame<State> {
       aim: null,
       botT: 0,
     })
-    return { boards: [board(), board()], sec: LIMIT }
+    return { boards: [board(), board()], sec: this.target }
   }
 
   sides(): Side[] {
@@ -108,7 +115,7 @@ class Blocks extends BaseGame<State> {
   }
 
   private left(): number {
-    return Math.max(0, LIMIT - this.time)
+    return Math.max(0, this.target - this.time)
   }
 
   protected step(dt: number): void {
@@ -123,7 +130,7 @@ class Blocks extends BaseGame<State> {
       else this.humanTurn(side)
       if (this.over) return
     }
-    if (this.time >= LIMIT) this.end(true)
+    if (this.time >= this.target) this.end(true)
     else if (this.sides().every((s) => this.s.boards[s].dead)) this.end(false)
   }
 
@@ -309,7 +316,9 @@ class Blocks extends BaseGame<State> {
     if (this.solo) {
       const score = a.score
       const prev = store.records.blocks
-      const best = submitRecord('blocks', score, false)
+      // The record compares scores of the default length only: a longer clock scores more.
+      const standard = this.target === match.default
+      const best = standard && submitRecord('blocks', score, false)
       this.finish(0, {
         score: [score, 0],
         note: best ? `New record: ${score}` : `Score ${score} · best ${prev ?? score}`,
@@ -366,8 +375,8 @@ class Blocks extends BaseGame<State> {
       clock(g, this.left(), MID)
     }
     // Final whistle: "Time!" over each board.
-    if (this.time >= LIMIT) {
-      const k = prog(this.time - LIMIT, 0, 0.2)
+    if (this.time >= this.target) {
+      const k = prog(this.time - this.target, 0, 0.2)
       for (const side of this.sides()) {
         const f = this.frames[side]
         const l = layout(f.w, f.h)

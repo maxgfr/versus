@@ -12,7 +12,6 @@ import {
   frontClearance,
   heightAt,
   metres,
-  RUNS,
   slopeAt,
   type Terrain,
   WHEEL_R,
@@ -42,6 +41,8 @@ export interface LaneView {
   winner: Side | 'draw' | null
   /** Best of both runs, each side ([this side, rival]). */
   best: readonly [number, number]
+  /** Runs each side plays in the match. */
+  runs: number
 }
 
 const L = WHEELBASE
@@ -391,10 +392,14 @@ function gauge(g: Draw, side: Side, w: number, live: boolean, time: number): voi
   }
 }
 
-/** Run pips: filled once a run is banked, ringed in yellow for the run in play. */
-function runPips(g: Draw, side: Side, run: number, done: number): void {
-  for (let i = 0; i < RUNS; i++) {
-    const x = 185 + i * 54
+/**
+ * Run pips: filled once a run is banked, ringed in yellow for the run in play.
+ * A longer row starts further left, so it stays clear of the metres pill.
+ */
+function runPips(g: Draw, side: Side, run: number, done: number, runs: number): void {
+  const x0 = Math.min(185, 330 - (runs - 1) * 54)
+  for (let i = 0; i < runs; i++) {
+    const x = x0 + i * 54
     const y = 74
     const on = i < done
     g.circle(x, y + 4, 20, alpha('#000000', 0.3))
@@ -414,7 +419,7 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   // HUD row: runs, this run's metres, the rival's live metres.
   const m = metres(b.wheelie)
   const pop = b.wheelie > 900 ? 1 - prog((b.wheelie % 1000) / Math.max(1, b.v), 0, 0.25) : 0
-  runPips(g, side, o.run, o.history.length)
+  runPips(g, side, o.run, o.history.length, o.runs)
   scorePill(g, side, String(m), 'm', 500, 74, b.end ? 0 : Math.max(0, pop))
   const rs = (1 - side) as Side
   g.at(800, 74, 0, () => {
@@ -441,7 +446,15 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
         },
       )
     } else
-      countdown(g, side, o.readyLeft, o.readyT, `Run ${o.run + 1} of ${RUNS}`, CARD_Y - 30, CARD_X)
+      countdown(
+        g,
+        side,
+        o.readyLeft,
+        o.readyT,
+        `Run ${o.run + 1} of ${o.runs}`,
+        CARD_Y - 30,
+        CARD_X,
+      )
   } else if (o.phase === 'run') {
     if (b.end) {
       const since = o.time - b.endT
@@ -458,7 +471,7 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   } else if (o.phase === 'over') {
     const last = o.history[o.history.length - 1] ?? 0
     const best = Math.max(...o.history)
-    const sub = o.history.length > 1 ? `Best ${best} m` : `Run ${o.run + 1} of ${RUNS}`
+    const sub = o.history.length > 1 ? `Best ${best} m` : `Run ${o.run + 1} of ${o.runs}`
     card(g, side, `${last} m`, sub, CARD_Y, o.since, {
       x: CARD_X,
       color: last === best ? C.yellow : C.white,

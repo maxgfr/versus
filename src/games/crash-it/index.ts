@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -18,9 +18,12 @@ import {
 
 type Pair = [number, number]
 
-export interface State {
+/** One race: a course and two trucks running it. */
+interface Race {
+  /** The course of this race: both lanes run the same walls. */
+  seed: number
   lanes: [Truck, Truck]
-  phase: 'ready' | 'run'
+  phase: 'ready' | 'run' | 'end'
   phaseAt: number
   /** Game time each truck crossed the flag, or -1. */
   finishT: Pair
@@ -31,15 +34,44 @@ export interface State {
   bumpAt: Pair
   landAt: Pair
   fallAt: Pair
+  /** Who won this race, or 'draw'. */
   winner: Side | 'draw' | null
   endAt: number
 }
 
+export interface State extends Race {
+  /** Races won so far, per side. */
+  wins: [number, number]
+  /** The race in play, from 1. */
+  round: number
+}
+
 /** A beat after the shell's 3-2-1 to read the rules. */
 const READY_T = 1.4
+/** How long a race's ending plays before the match result or the next race. */
 const END_T = 2.2
 /** The pause button sits at the left edge near the midline: presses there are not boost. */
 const inPauseZone = (p: Ptr): boolean => p.x < 120 && p.y > 700 && p.y < 1100
+
+/** First to N race wins: the players pick N before the match. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+function newRace(seed: number): Race {
+  return {
+    seed,
+    lanes: [newTruck(), newTruck()],
+    phase: 'ready',
+    phaseAt: 0,
+    finishT: [-1, -1],
+    smashAt: [-9, -9],
+    smashX: [0, 0],
+    bumpAt: [-9, -9],
+    landAt: [-9, -9],
+    fallAt: [-9, -9],
+    winner: null,
+    endAt: -1,
+  }
+}
 
 class CrashIt extends RunnerGame<State> {
   private brains: [Brain, Brain] = [newBrain(), newBrain()]
@@ -47,20 +79,12 @@ class CrashIt extends RunnerGame<State> {
   /** Sides whose truck crossed the flag during the current step. */
   private crossed: Side[] = []
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
-    return {
-      lanes: [newTruck(), newTruck()],
-      phase: 'ready',
-      phaseAt: 0,
-      finishT: [-1, -1],
-      smashAt: [-9, -9],
-      smashX: [0, 0],
-      bumpAt: [-9, -9],
-      landAt: [-9, -9],
-      fallAt: [-9, -9],
-      winner: null,
-      endAt: -1,
-    }
+    return { ...newRace(this.ctx.seed), wins: [0, 0], round: 1 }
   }
 
   private pressing(side: Side): boolean {
@@ -73,7 +97,7 @@ class CrashIt extends RunnerGame<State> {
     return this.rng
   }
 
-  protected override stepWorld(_dt: number): boolean {
+  protected override stepWorld(dt: number): boolean {
     const s = this.s
     if (s.phase === 'ready') {
       if (this.time - s.phaseAt >= READY_T) {
@@ -81,6 +105,12 @@ class CrashIt extends RunnerGame<State> {
         s.phaseAt = this.time
         this.ctx.audio.play('roll', 0.8)
       }
+      return false
+    }
+    if (s.phase === 'end') {
+      // The race is decided: its winner rolls on while the next one waits.
+      this.rollWinner(dt)
+      if (this.time - s.endAt >= END_T) this.nextRace()
       return false
     }
     return true
@@ -92,36 +122,23 @@ class CrashIt extends RunnerGame<State> {
     const [a, b] = this.crossed
     this.crossed = []
     if (this.over) return
-    const s = this.s
-    const finisher = (side: Side) => {
-      const fx = this.ctx.fx
-      fx.confetti(side)
-      fx.flash(SIDE[side].light, 0.3)
-      const at = this.at(side, TRUCK_X + TRUCK_HALF, ROAD_Y - 160)
-      fx.ring(at.x, at.y, C.yellow, 320)
-      fx.sparks(at.x, at.y, C.yellow, 20)
-      return s.finishT[side] - s.phaseAt
-    }
-    s.endAt = this.time
     if (a !== undefined && b !== undefined) {
       // Both crossed on the same step: whoever carried more speed past the flag wins.
-      const x0 = s.lanes[0].x
-      const x1 = s.lanes[1].x
+      const x0 = this.s.lanes[0].x
+      const x1 = this.s.lanes[1].x
       const winner = x0 === x1 ? 'draw' : x0 > x1 ? 0 : 1
-      if (winner !== 'draw') finisher(winner)
-      s.winner = winner
-      this.finish(winner, { note: 'Same step at the flag', delay: END_T })
+      if (winner !== 'draw') this.celebrate(winner)
+      this.endRace(winner, 'Same step at the flag')
       return
     }
     if (a !== undefined) {
-      const t = finisher(a)
-      s.winner = a
-      this.finish(a, { note: `${t.toFixed(1)} s to the flag`, delay: END_T })
+      const t = this.celebrate(a)
+      this.endRace(a, `${t.toFixed(1)} s to the flag`)
     }
   }
 
-  /** While the result waits: the winner rolls on past the flag and brakes. */
-  protected override afterEnd(dt: number): void {
+  /** The race's winner rolls on past the flag and brakes while its ending plays. */
+  private rollWinner(dt: number): void {
     const s = this.s
     if (s.winner === null || s.winner === 'draw') return
     const t = s.lanes[s.winner]
@@ -130,12 +147,60 @@ class CrashIt extends RunnerGame<State> {
     t.boosting = false
   }
 
+  protected override afterEnd(dt: number): void {
+    this.rollWinner(dt)
+  }
+
+  /** Confetti and light at the flag for a race's winner. Returns the race time. */
+  private celebrate(side: Side): number {
+    const fx = this.ctx.fx
+    fx.confetti(side)
+    fx.flash(SIDE[side].light, 0.3)
+    const at = this.at(side, TRUCK_X + TRUCK_HALF, ROAD_Y - 160)
+    fx.ring(at.x, at.y, C.yellow, 320)
+    fx.sparks(at.x, at.y, C.yellow, 20)
+    return this.s.finishT[side] - this.s.phaseAt
+  }
+
+  /** A race is decided: the match ends once a side has the target, otherwise the next race follows. */
+  private endRace(winner: Side | 'draw', note: string): void {
+    const s = this.s
+    s.phase = 'end'
+    s.endAt = this.time
+    s.winner = winner
+    // A dead heat counts for nobody: the race is run again.
+    if (winner === 'draw') {
+      this.ctx.audio.play('draw')
+      return
+    }
+    s.wins[winner]++
+    if (s.wins[winner] >= this.target) {
+      const score: [number, number] | undefined =
+        this.target > 1 ? [s.wins[0], s.wins[1]] : undefined
+      this.finish(winner, { score, note, delay: END_T })
+      return
+    }
+    this.ctx.audio.play('score')
+  }
+
+  /** The next race of the match: fresh trucks on a course of its own. */
+  private nextRace(): void {
+    if (this.over) return
+    const s = this.s
+    Object.assign(s, newRace(this.ctx.rng.int(1, 0x7ffffff0)), {
+      phaseAt: this.time,
+      round: s.round + 1,
+    })
+    this.brains = [newBrain(), newBrain()]
+    this.ctx.audio.play('count')
+  }
+
   protected stepRunner(side: Side, dt: number): void {
     const s = this.s
     if (s.phase !== 'run') return
     const t = s.lanes[side]
     if (t.finished) return
-    const seed = this.ctx.seed
+    const seed = s.seed
     let press = this.taps(side) > 0
     let hold = this.pressing(side)
     if (this.isBot(side)) {
@@ -237,7 +302,7 @@ class CrashIt extends RunnerGame<State> {
     drawLane(g, side, view, {
       truck: s.lanes[side],
       rival: s.lanes[other(side)],
-      seed: this.ctx.seed,
+      seed: s.seed,
       time: this.time,
       phase: s.phase,
       since: this.time - s.phaseAt,
@@ -251,6 +316,11 @@ class CrashIt extends RunnerGame<State> {
       fallAt: s.fallAt[side],
       winner: s.winner,
       endAt: s.endAt,
+      round: s.round,
+      wins: s.wins[side],
+      rivalWins: s.wins[other(side)],
+      target: this.target,
+      matchOver: this.over,
     })
   }
 }

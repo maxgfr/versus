@@ -10,12 +10,22 @@ import {
   isSolved,
   move,
   moves,
+  roundSeed,
   SWAPS,
   solvedBolts,
   solve,
   topRun,
   type Bolts,
 } from './rules.ts'
+
+describe('match rounds', () => {
+  it('round 0 keeps the match seed; later rounds get their own, repeatably', () => {
+    expect(roundSeed(4242, 0)).toBe(4242)
+    const seeds = [0, 1, 2, 3].map((r) => roundSeed(4242, r))
+    expect(new Set(seeds).size).toBe(4)
+    expect(roundSeed(4242, 2)).toBe(seeds[2])
+  })
+})
 
 /** Replay a plan from a start state; true when every step is legal and the end is solved. */
 function replay(start: Bolts, plan: [number, number][]): boolean {

@@ -198,8 +198,9 @@ export function drawTray(g: Draw, s: State, side: Side, sunk: number, now: numbe
   const col = SIDE[side]
   g.forSide(side, x, y, () => {
     g.rrect(-150, -32, 300, 64, 32, alpha(C.ink, 0.7))
-    for (let i = 0; i < 6; i++) {
-      const bx = -110 + i * 44
+    const n = s.goal
+    for (let i = 0; i < n; i++) {
+      const bx = (i - (n - 1) / 2) * 44
       if (i < sunk) {
         const fresh = s.t - (lastSunk(s, side, i) ?? -9)
         const pop = fresh >= 0 && fresh < 0.35 ? 1 + (1 - fresh / 0.35) * 0.6 : 1
@@ -209,7 +210,7 @@ export function drawTray(g: Draw, s: State, side: Side, sunk: number, now: numbe
         g.circle(bx, 0, 14, alpha('#ffffff', 0.1))
       }
     }
-    if (sunk >= 5 && sunk < 6) {
+    if (sunk >= n - 1 && sunk < n) {
       g.alpha(0.5 + 0.5 * Math.sin(now * 8), () =>
         g.rrect(-150, -32, 300, 64, 32, undefined, C.yellow, 5),
       )

@@ -1,5 +1,5 @@
 import { floatFor } from '../../core/fx/fx.ts'
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { clock, namePill } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -12,6 +12,7 @@ import {
   advance,
   type Event,
   leader,
+  MATCH,
   newState,
   type Preview,
   type State,
@@ -20,17 +21,24 @@ import {
 /** Swipes shorter than this are taps, not throws. */
 const MIN_SWIPE = 40
 
+/** Seconds the match lasts; the players pick it on the ready screen. */
+export const match: MatchSpec = { unit: 'seconds', default: MATCH, min: 15, max: 180, step: 15 }
+
 type Game = State & { endAt: number }
 
 class ShurikenBamboo extends BaseGame<Game> {
   private bots: [Bot | null, Bot | null] = [null, null]
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): Game {
     const rng = this.ctx.rng
     this.bots = [0, 1].map((side) =>
       this.isBot(side as Side) ? new Bot(this.ctx.difficulty, rng.fork()) : null,
     ) as [Bot | null, Bot | null]
-    return { ...newState(rng), endAt: -1 }
+    return { ...newState(rng, this.target), endAt: -1 }
   }
 
   protected step(dt: number): void {

@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -39,10 +39,19 @@ const FIRST_READY = 1.3
 const COUNT_READY = 2.4
 const OVER_T = 2.6
 const DONE_T = 2.4
+/** Run counts from one to five, spelled out in the result note. */
+const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five']
 /** The pause button sits at the left edge near the midline: presses there are not throttle. */
 const inPauseZone = (p: Ptr): boolean => p.x < 120 && p.y > 700 && p.y < 1100
 
+/** A match is a fixed number of runs each: the players pick it before the game. */
+export const match: MatchSpec = { unit: 'rounds', default: RUNS, min: 1, max: 5 }
+
 class Wheelie extends RunnerGame<State> {
+  private get runs(): number {
+    return this.ctx.target || match.default
+  }
+
   private brains: [Brain, Brain] = [newBrain(), newBrain()]
   private rng: Rng | null = null
 
@@ -91,7 +100,7 @@ class Wheelie extends RunnerGame<State> {
       return true
     }
     if (since >= OVER_T) {
-      if (s.run + 1 < RUNS) this.nextRun()
+      if (s.run + 1 < this.runs) this.nextRun()
       else this.conclude()
     }
     return false
@@ -139,7 +148,7 @@ class Wheelie extends RunnerGame<State> {
     }
     this.finish(winner, {
       score: [best0, best1],
-      note: 'Best of two runs',
+      note: this.runs === 1 ? 'Single run' : `Best of ${WORDS[this.runs] ?? this.runs} runs`,
       delay: DONE_T,
     })
   }
@@ -261,6 +270,7 @@ class Wheelie extends RunnerGame<State> {
       bot: this.isBot(side),
       winner: s.winner,
       best: [best(side), best(other(side))],
+      runs: this.runs,
     })
   }
 }

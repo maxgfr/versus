@@ -217,15 +217,16 @@ export function metres(c: Climber): number {
 /**
  * Decide the match once something is settled: a climber out (the other one
  * wins), or the time is up (highest wins). Null while both still climb.
+ * `limit` is the match length in seconds (the chosen one, else `ROUND_T`).
  */
-export function judge(a: Climber, b: Climber, t: number): Side | 'draw' | null {
+export function judge(a: Climber, b: Climber, t: number, limit = ROUND_T): Side | 'draw' | null {
   if (!a.alive && !b.alive) {
     if (a.top === b.top) return 'draw'
     return a.top > b.top ? 0 : 1
   }
   if (!a.alive) return 1
   if (!b.alive) return 0
-  if (t >= ROUND_T) {
+  if (t >= limit) {
     if (a.top === b.top) return 'draw'
     return a.top > b.top ? 0 : 1
   }

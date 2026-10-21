@@ -10,10 +10,13 @@ import {
 
 /**
  * Pure cup pong. Players take turns flicking one ball across the table at the
- * rival's six cups. The ball may touch the table once: it can bounce once and
- * still drop in. A ball in a cup takes the cup. First to clear the rival's six wins.
+ * rival's cups. The ball may touch the table once: it can bounce once and
+ * still drop in. A ball in a cup takes the cup. First to sink the rival's
+ * goal (all six cups by default) wins.
  */
 
+/** Cups on each side: the most a match can need. */
+export const CUPS = 6
 /** Flight of the ball: gravity on height, launch speed, elevation and launch height. */
 export const BALL: Ballistics = { g: 1400, vmax: 1400, elev: 1, z0: 50 }
 /**
@@ -53,6 +56,8 @@ export interface Ball {
 
 export interface State {
   turn: Side
+  /** Cups each side must sink to win this match. */
+  goal: number
   cups: Cup[]
   ball: Ball | null
   /** aim: the turn's player may flick. fly: a ball is in the air. beat: a short pause after a shot. */
@@ -88,9 +93,10 @@ export function cupsOf(side: Side): Cup[] {
   })
 }
 
-export function newState(starter: Side): State {
+export function newState(starter: Side, goal = CUPS): State {
   return {
     turn: starter,
+    goal,
     cups: [...cupsOf(0), ...cupsOf(1)],
     ball: null,
     phase: 'aim',
@@ -201,7 +207,7 @@ export function advance(s: State, dt: number): { events: Event[]; winner: Side |
           cup: i,
           x: cup.x,
           y: cup.y,
-          left: standing(s, other(ball.side)),
+          left: s.goal - sunkBy(s, ball.side),
         })
       }
       return end(s, events)
@@ -227,10 +233,10 @@ function end(s: State, events: Event[]): { events: Event[]; winner: Side | null 
   return { events, winner: null }
 }
 
-/** The side that has cleared the other's cups, if any. */
+/** The side that has sunk the goal's number of the other's cups, if any. */
 export function standingWinner(s: State): Side | null {
-  if (standing(s, 0) === 0) return 1
-  if (standing(s, 1) === 0) return 0
+  if (sunkBy(s, 1) >= s.goal) return 1
+  if (sunkBy(s, 0) >= s.goal) return 0
   return null
 }
 

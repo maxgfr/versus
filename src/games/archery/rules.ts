@@ -2,9 +2,10 @@ import { other, type Side } from '../../core/game.ts'
 import type { ShotParams } from '../../engines/aim/index.ts'
 
 /**
- * Pure archery: one target in the middle, five arrows each, alternating. An
- * arrow flies straight from the bow along the aim, the aim swaying a little,
- * and wind drifts it sideways. Its range comes from the draw. Rings 10 to 1. No DOM.
+ * Pure archery: one target in the middle, a set number of arrows each (five by
+ * default), alternating. An arrow flies straight from the bow along the aim, the
+ * aim swaying a little, and wind drifts it sideways. Its range comes from the
+ * draw. Rings 10 to 1. No DOM.
  */
 
 export const ARROWS = 5
@@ -51,6 +52,8 @@ export interface State {
   turn: Side
   /** Arrows shot by each side. */
   shot: [number, number]
+  /** Arrows each in this match (the match length). */
+  arrows: number
   totals: [number, number]
   stuck: Arrow[]
   flight: Flight | null
@@ -90,10 +93,11 @@ export function scoreAt(p: Pt): { score: number; label: string } {
   return { score: ring, label }
 }
 
-export function newState(first: Side, wind: number): State {
+export function newState(first: Side, wind: number, arrows = ARROWS): State {
   return {
     turn: first,
     shot: [0, 0],
+    arrows,
     totals: [0, 0],
     stuck: [],
     flight: null,
@@ -147,7 +151,7 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
 }
 
 /** Over once every arrow has landed (not merely been loosed), so the last one still counts. */
-export const done = (s: State): boolean => s.stuck.length >= 2 * ARROWS
+export const done = (s: State): boolean => s.stuck.length >= 2 * s.arrows
 
 /** Highest total wins; equal totals draw. */
 export function result(s: State): Side | 'draw' {

@@ -1,4 +1,4 @@
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { banner, bigScore, hudY, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, shade, SIDE } from '../../core/render/palette.ts'
@@ -9,14 +9,25 @@ import { advance, BOW, type Event, fire, leader, newState, type State, TIME } fr
 
 const BALLOONS = [C.pink, C.cyan, C.purple, C.orange, C.green]
 
+/** Match length: seconds on the clock, chosen on the ready screen. */
+export const match: MatchSpec = { unit: 'seconds', default: TIME, min: 15, max: 180, step: 15 }
+
+/** m:ss for the clock, so a 3-minute match reads 3:00. */
+const clockText = (sec: number): string =>
+  `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+
 class TargetPractice extends BaseGame<State> {
   /** Seconds until each computer player notices a target and taps it. */
   private botWait: [number, number] = [0, 0]
-  private lastTick = TIME + 1
+  private lastTick = -1
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     this.botWait = [this.reactionFor(0), this.reactionFor(1)]
-    return newState()
+    return newState(this.target)
   }
 
   private reactionFor(side: Side): number {
@@ -179,7 +190,7 @@ class TargetPractice extends BaseGame<State> {
           0,
           () => {
             g.rrect(-92, -38, 184, 76, 26, urgent ? alpha(C.yellow, 0.95) : alpha(C.ink, 0.75))
-            g.text(`0:${String(sec).padStart(2, '0')}`, 0, 3, {
+            g.text(clockText(sec), 0, 3, {
               size: 46,
               weight: 700,
               color: urgent ? C.ink : C.white,

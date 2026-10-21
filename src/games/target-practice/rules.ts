@@ -6,10 +6,12 @@ import { H, W } from '../../core/stage.ts'
  * Pure target practice: targets pop up across the whole table for a moment.
  * Each player's crossbow sits at their edge; a tap on a target loads a bolt
  * that flies to that point in BOLT_TIME seconds. The first bolt to arrive
- * while the target is still there scores; the rest arrive too late. 45 s,
- * most points wins. No DOM.
+ * while the target is still there scores; the rest arrive too late. The
+ * match lasts the length chosen before the game (45 s by default); most
+ * points wins. No DOM.
  */
 
+/** Default match length (s). The chosen length is kept in `State.length`. */
 export const TIME = 45
 export const BOLT_TIME = 0.25
 export const RELOAD = 0.45
@@ -84,7 +86,10 @@ export const MARK_TIME = 0.9
 export interface State {
   /** Elapsed time (s). */
   now: number
+  /** Seconds left in the match. */
   left: number
+  /** The match length chosen before the game (s). */
+  length: number
   targets: Target[]
   bolts: Bolt[]
   reload: [number, number]
@@ -109,10 +114,11 @@ export type Event =
   | { kind: 'late'; side: Side; x: number; y: number }
   | { kind: 'end' }
 
-export function newState(): State {
+export function newState(length = TIME): State {
   return {
     now: 0,
-    left: TIME,
+    left: length,
+    length,
     targets: [],
     bolts: [],
     reload: [0, 0],
@@ -129,8 +135,8 @@ export function newState(): State {
 }
 
 /** The spawn interval shortens over the round, so the last seconds are busier. */
-export function spawnGap(elapsed: number, rng: Rng): number {
-  const k = Math.min(1, Math.max(0, elapsed / TIME))
+export function spawnGap(elapsed: number, length: number, rng: Rng): number {
+  const k = Math.min(1, Math.max(0, elapsed / length))
   return (0.56 - 0.24 * k) * rng.range(0.8, 1.2)
 }
 
@@ -240,7 +246,7 @@ export function advance(s: State, dt: number, rng: Rng): Event[] {
   if (s.nextSpawn <= 0 && s.targets.length < MAX_ALIVE && s.left > 0) {
     const t = spawn(s, rng)
     if (t) ev.push({ kind: 'spawn', target: t })
-    s.nextSpawn = spawnGap(s.now, rng)
+    s.nextSpawn = spawnGap(s.now, s.length, rng)
   }
 
   if (s.left <= 0 && s.bolts.length === 0) {

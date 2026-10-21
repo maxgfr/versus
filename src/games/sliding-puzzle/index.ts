@@ -1,10 +1,12 @@
-import type { Side } from '../../core/game.ts'
+import type { MatchSpec, Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
 import { fmtTime, newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
 import { botTap, PACE } from './bot.ts'
 import { store } from '../../core/store.ts'
+import { MID } from '../../core/stage.ts'
 import { cellAt, cellCentre, chip, drawBoard, layout, tileColor } from './render.ts'
 import { CELLS, distance, isSolved, progress, scramble, SIZE, slide, solvePlan } from './rules.ts'
 
@@ -29,10 +31,27 @@ export interface Board {
 
 export interface State extends RaceBase {
   boards: [Board, Board]
+  /** Tile distance of this race's scramble: progress is measured against it. */
+  start: number
+  /** Races won per side. The match is first to the target. */
+  wins: [number, number]
+  /** Race index, from 0. Each race is a fresh puzzle, derived from the seed on both phones. */
+  round: number
+  /** Game time this race was dealt: its clock runs from here. */
+  roundAt: number
+  /** Game time this race was decided (a short break follows), or -1 while it runs. */
+  roundEnd: number
+  /** Banner for the decided race. */
+  roundText: string
 }
 
-/** Five minutes: then the most progress wins. */
+/** Five minutes a race: then the most progress wins it. */
 const CAP = 300
+/** Seconds between two races, so the one just decided can be read. */
+const BREAK = 2
+
+/** Race wins to take the match: one race is one round. Solo keeps a single time trial. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 /** The rows and columns of the board, as cell lists. */
 const LINES: number[][] = [
@@ -46,13 +65,18 @@ const lineDone = (tiles: readonly number[], line: readonly number[]): boolean =>
 
 class SlidingPuzzle extends PuzzleRace<State> {
   protected recordId = 'sliding-puzzle'
-  protected override cap = CAP
-  /** Tile distance of the shared scramble: progress is measured against it. */
-  private start = 1
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
-    const sc = scramble(new Rng(this.ctx.seed))
-    this.start = Math.max(1, distance(sc.tiles))
+    return this.deal(0, 0)
+  }
+
+  /** Race `round`, dealt at game time `at`: a fresh scramble, the same on both phones. */
+  private deal(round: number, at: number): State {
+    const sc = scramble(new Rng(this.ctx.seed + round))
     const plan = solvePlan(sc.path)
     const board = (): Board => ({
       tiles: sc.tiles.slice(),
@@ -67,11 +91,77 @@ class SlidingPuzzle extends PuzzleRace<State> {
       plan: plan.slice(),
       botT: 0,
     })
-    return { race: newRace(), boards: [board(), board()] }
+    this.cap = at + CAP
+    return {
+      race: newRace(),
+      boards: [board(), board()],
+      start: Math.max(1, distance(sc.tiles)),
+      wins: [0, 0],
+      round,
+      roundAt: at,
+      roundEnd: -1,
+      roundText: '',
+    }
+  }
+
+  private nextRace(): void {
+    const wins = this.s.wins
+    this.s = { ...this.deal(this.s.round + 1, this.time), wins }
   }
 
   protected progressOf(side: Side): number {
-    return progress(this.s.boards[side].tiles, this.start)
+    return progress(this.s.boards[side].tiles, this.s.start)
+  }
+
+  /** Seconds on this race's clock for a side, penalties included. Frozen once the race is decided. */
+  override elapsed(side: Side): number {
+    const r = this.s.race[side]
+    const end = this.s.roundEnd >= 0 ? this.s.roundEnd : this.time
+    return (r.done ?? end) - this.s.roundAt + r.penalty
+  }
+
+  protected override step(dt: number): void {
+    if (this.s.roundEnd >= 0) {
+      if (this.time - this.s.roundEnd >= BREAK) this.nextRace()
+      return
+    }
+    super.step(dt)
+  }
+
+  /**
+   * The engine ends a race through `finish` (solved, or the clock ran out). In a
+   * longer match that is a round: its winner takes it, the match ends at the
+   * target, and a draw takes nobody's round. Solo and first-to-one end as before.
+   */
+  protected override finish(
+    winner: Side | 'draw',
+    o: { score?: [number, number]; note?: string; delay?: number } = {},
+  ): void {
+    if (this.solo || this.target <= 1) {
+      super.finish(winner, o)
+      return
+    }
+    const s = this.s
+    if (this.over || s.roundEnd >= 0) return
+    if (winner !== 'draw') s.wins[winner]++
+    if (winner !== 'draw' && s.wins[winner] >= this.target) {
+      super.finish(winner, { ...o, score: [s.wins[0], s.wins[1]] })
+      return
+    }
+    s.roundEnd = this.time
+    s.roundText = winner === 'draw' ? 'Draw round' : `${this.ctx.names[winner]} takes the round`
+    this.ctx.audio.play(winner === 'draw' ? 'draw' : 'score')
+  }
+
+  override render(g: Draw): void {
+    super.render(g)
+    if (this.solo || this.target <= 1) return
+    pips(g, 0, this.s.wins[0], this.target)
+    pips(g, 1, this.s.wins[1], this.target)
+    if (this.s.roundEnd >= 0 && !this.over) {
+      const a = Math.min(1, (this.time - this.s.roundEnd) * 4)
+      banner(g, undefined, this.s.roundText, MID, { size: 58, alpha: a })
+    }
   }
 
   protected stepSide(side: Side, dt: number, taps: { x: number; y: number }[]): void {
@@ -96,7 +186,7 @@ class SlidingPuzzle extends PuzzleRace<State> {
 
   /** Slide the tiles for a tap on `cell`, with the sound and sparks for any tile that lands home. */
   private move(side: Side, cell: number): void {
-    if (this.over) return
+    if (this.over || this.s.roundEnd >= 0) return
     const b = this.s.boards[side]
     const r = slide(b.tiles, cell)
     if (!r) {
@@ -199,7 +289,7 @@ class SlidingPuzzle extends PuzzleRace<State> {
     const size = (l.c + l.gap) * SIZE - l.gap
     const bottom = l.y0 + size + 28
     const y = h > 1000 ? bottom + 80 : (bottom + h) / 2
-    if (b.moves === 0 && this.time < 10 && human) {
+    if (b.moves === 0 && this.time - this.s.roundAt < 10 && human) {
       g.text('Tap a tile next to the gap', w / 2, y, {
         size: 36,
         weight: 600,

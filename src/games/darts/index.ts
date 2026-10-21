@@ -1,4 +1,5 @@
 import { floatFor } from '../../core/fx/fx.ts'
+import type { MatchSpec } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { TurnGame } from '../../engines/board/index.ts'
@@ -21,13 +22,20 @@ import {
   wobble,
 } from './rules.ts'
 
+/** Rounds of three darts each: the match length. */
+export const match: MatchSpec = { unit: 'rounds', default: ROUNDS, min: 1, max: 10 }
+
 class Darts extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   private flicks: [Flick, Flick] = [new Flick(0), new Flick(1)]
 
   protected setup(): State {
     // The player whose turn it is may flick from anywhere.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(this.ctx.rng.chance(0.5) ? 0 : 1)
+    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.target)
   }
 
   protected override busy(): boolean {
@@ -41,7 +49,7 @@ class Darts extends TurnGame<State> {
       this.s.endAt = this.time
       this.finish(r, {
         score: [this.s.totals[0], this.s.totals[1]],
-        note: `Highest total after ${ROUNDS} rounds`,
+        note: `Highest total after ${this.target} rounds`,
         delay: 2.6,
       })
       this.ctx.fx.confetti(r === 'draw' ? undefined : r)

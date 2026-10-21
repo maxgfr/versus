@@ -2,6 +2,7 @@ import type { Side } from '../../core/game.ts'
 import { outBack, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
+import { LANE_W } from '../../engines/runner/index.ts'
 
 /**
  * Lane HUD pieces, drawn in lane-local coordinates (the frame turns them to
@@ -76,8 +77,11 @@ export function winPips(
   since = 9,
 ): void {
   const col = SIDE[side]
+  // Sockets keep their spacing up to a handful; a longer match packs them, and the row stays on the lane.
+  const gap = Math.min(58, 290 / Math.max(1, target - 1))
+  const x0 = Math.min(x, LANE_W - 60 - (target - 1) * gap)
   for (let i = 0; i < target; i++) {
-    const px = x + i * 58
+    const px = x0 + i * gap
     g.sideMark(side, px, y + 4, 22, alpha('#000000', 0.25))
     g.sideMark(side, px, y, 22, alpha(C.ink, 0.45))
     if (i >= wins) {

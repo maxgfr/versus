@@ -82,6 +82,8 @@ export interface Sword {
 export interface State {
   /** Seconds left in the match. */
   left: number
+  /** Length of the match in seconds: the fuse and the spin are measured against it. */
+  total: number
   /** Seconds since the start. */
   t: number
   /** shields[k] belongs to side k; the rival throws at it. */
@@ -105,7 +107,7 @@ export type Event =
   | { kind: 'miss'; side: Side; x: number; y: number }
   | { kind: 'tick'; left: number }
 
-export function newState(rng: Rng): State {
+export function newState(rng: Rng, seconds = MATCH): State {
   const shield = (k: Side): Shield => ({
     x: W / 2,
     y: SHIELD_Y[k] ?? 0,
@@ -118,7 +120,8 @@ export function newState(rng: Rng): State {
     clearT: -9,
   })
   return {
-    left: MATCH,
+    left: seconds,
+    total: seconds,
     t: 0,
     shields: [shield(0), shield(1)],
     swords: [],
@@ -229,7 +232,7 @@ export function advance(s: State, dt: number, want: readonly [boolean, boolean])
   }
   for (const sh of s.shields) {
     // Spins faster as the match goes on.
-    sh.rot += sh.dir * (1.2 + 0.9 * (s.t / MATCH)) * dt
+    sh.rot += sh.dir * (1.2 + 0.9 * (s.t / s.total)) * dt
     sh.ph += WANDER_RATE * dt
     sh.x = W / 2 + WANDER * Math.sin(sh.ph)
   }

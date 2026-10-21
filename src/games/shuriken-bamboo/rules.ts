@@ -125,9 +125,9 @@ export type Event =
   | { kind: 'miss'; side: Side; x: number; y: number }
   | { kind: 'tick'; left: number }
 
-export function newState(rng: Rng): State {
+export function newState(rng: Rng, seconds = MATCH): State {
   return {
-    left: MATCH,
+    left: seconds,
     t: 0,
     // Start mid-growth, so the band is never empty at the first swipe.
     stalks: SLOTS.map((p) => ({

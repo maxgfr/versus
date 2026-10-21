@@ -1,5 +1,5 @@
 import { floatFor } from '../../core/fx/fx.ts'
-import type { Side } from '../../core/game.ts'
+import type { MatchSpec, Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import type { ShotParams } from '../../engines/aim/index.ts'
@@ -14,6 +14,7 @@ import {
   forwardY,
   goalY,
   GOAL_X,
+  KICKS,
   newState,
   type Outcome,
   previewOf,
@@ -23,6 +24,9 @@ import {
   WIND_MAX,
 } from './rules.ts'
 import { Swipe } from './swipe.ts'
+
+/** Kicks each before sudden death: the match length. */
+export const match: MatchSpec = { unit: 'rounds', default: KICKS, min: 1, max: 10 }
 
 const LABEL: Record<Outcome, string> = {
   good: "It's good!",
@@ -35,6 +39,10 @@ const LABEL: Record<Outcome, string> = {
 }
 
 class GolfFootball extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   private swipes: [Swipe, Swipe] = [new Swipe(0), new Swipe(1)]
   /** The computer plans its kick when its turn starts, then swings toward it while "thinking". */
   private botShot: ShotParams | null = null
@@ -42,7 +50,7 @@ class GolfFootball extends TurnGame<State> {
   protected setup(): State {
     // The player whose turn it is may swipe anywhere on the pitch.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(this.ctx.rng, this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind())
+    return newState(this.ctx.rng, this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind(), this.target)
   }
 
   private rollWind(): number {
@@ -61,7 +69,9 @@ class GolfFootball extends TurnGame<State> {
       this.s.endAt = this.time
       this.finish(winner, {
         score: [this.s.points[0], this.s.points[1]],
-        note: this.s.sudden ? 'Sudden death decided it' : 'Most points after five kicks each',
+        note: this.s.sudden
+          ? 'Sudden death decided it'
+          : `Most points after ${this.target} ${this.target === 1 ? 'kick' : 'kicks'} each`,
         delay: 2.8,
       })
       this.ctx.fx.confetti(winner)

@@ -176,7 +176,7 @@ describe('ball run bot', () => {
 })
 
 describe('ball run game', () => {
-  function bots(seed: number, difficulty: Difficulty) {
+  function bots(seed: number, difficulty: Difficulty, target?: number) {
     const stage = {} as Stage
     const ctx: GameContext = {
       stage,
@@ -191,6 +191,7 @@ describe('ball run game', () => {
       names: ['Red', 'Blue'],
       local: 0,
       seed,
+      target,
     }
     const game = makeGame()
     game.init(ctx)
@@ -208,6 +209,13 @@ describe('ball run game', () => {
       expect(game.result).not.toBeNull()
       expect(steps).toBeLessThan(60 * 120)
     }
+  })
+
+  it('a match of the chosen length is over once that time is up', () => {
+    // 15 s of rolling after the 1.3 s ready beat and the 2 s ending: well short of the 90 s default.
+    const { game, steps } = bots(4, 'hard', 15)
+    expect(game.result).not.toBeNull()
+    expect(steps).toBeLessThan(60 * 25)
   })
 
   it('the last ball rolling wins, and a timeout goes to the furthest ball', () => {

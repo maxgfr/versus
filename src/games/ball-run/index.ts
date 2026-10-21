@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -29,7 +29,15 @@ const END_T = 2
 /** The pause button sits at the left edge near the midline: presses there are not steering. */
 const inPauseZone = (p: Ptr): boolean => p.x < 120 && p.y > 700 && p.y < 1100
 
+/** A timed match, decided by distance when the time is up: the players pick the length in seconds. */
+export const match: MatchSpec = { unit: 'seconds', default: TIME_CAP, min: 15, max: 180, step: 15 }
+
 class BallRun extends RunnerGame<State> {
+  /** Match length in seconds. */
+  private get limit(): number {
+    return this.ctx.target || match.default
+  }
+
   private brains: [Brain, Brain] = [newBrain(), newBrain()]
   private rng: Rng | null = null
   /** Sides whose ball dropped out during the current step. */
@@ -87,7 +95,8 @@ class BallRun extends RunnerGame<State> {
       }
       return
     }
-    if (s.phase === 'run' && s.balls[0].age >= TIME_CAP) this.decideByDistance('Time is up', 'time')
+    if (s.phase === 'run' && s.balls[0].age >= this.limit)
+      this.decideByDistance('Time is up', 'time')
   }
 
   /** Stamp the ending and celebrate the winner. */
@@ -224,7 +233,7 @@ class BallRun extends RunnerGame<State> {
       name: this.ctx.names[side],
       bot: this.isBot(side),
       outT: s.outT[side],
-      left: Math.max(0, TIME_CAP - s.balls[side].age),
+      left: Math.max(0, this.limit - s.balls[side].age),
       winner: s.winner,
       endAt: s.endAt,
       endWhy: s.endWhy,

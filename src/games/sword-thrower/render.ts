@@ -8,7 +8,6 @@ import {
   canThrow,
   CAP,
   dirOf,
-  MATCH,
   PIVOT,
   RELOAD,
   RIM,
@@ -356,7 +355,7 @@ export function drawScore(g: Draw, s: State, side: Side, win: boolean, now: numb
 
 /** Time running out: a fuse along the midline that burns toward the middle, yellow at the end. */
 export function drawFuse(g: Draw, s: State, now: number): void {
-  const k = Math.max(0, s.left / MATCH)
+  const k = Math.max(0, s.left / s.total)
   const urgent = s.left <= 10
   const half = 470 * k
   const col = urgent ? C.yellow : alpha(C.cream, 0.55)

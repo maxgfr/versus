@@ -1,5 +1,5 @@
 import { floatFor } from '../../core/fx/fx.ts'
-import { type Side, other } from '../../core/game.ts'
+import { type MatchSpec, type Side, other } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -9,6 +9,7 @@ import { choose } from './bot.ts'
 import { drawTray, hint, render } from './render.ts'
 import {
   advance,
+  CUPS,
   type Event,
   fire,
   newState,
@@ -18,16 +19,23 @@ import {
   sunkBy,
 } from './rules.ts'
 
+/** Rival cups to sink before the match is won; the players pick it on the ready screen. */
+export const match: MatchSpec = { unit: 'points', default: CUPS, min: 1, max: CUPS }
+
 type Game = State & { endAt: number }
 
 class CupPong extends TurnGame<Game> {
   /** The computer's flick for its turn, chosen as its turn starts and shown while it thinks. */
   private botShot: ShotParams | null = null
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): Game {
     // In local 2P the player whose turn it is may flick from anywhere.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return { ...newState(this.ctx.rng.chance(0.5) ? 0 : 1), endAt: -1 }
+    return { ...newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.target), endAt: -1 }
   }
 
   protected override busy(): boolean {
@@ -42,7 +50,11 @@ class CupPong extends TurnGame<Game> {
       this.s.endAt = this.s.t
       this.ctx.fx.confetti(winner)
       this.ctx.audio.play('powerup', 1.2)
-      this.finish(winner, { score, note: 'Cleared every cup', delay: 2.2 })
+      const note =
+        this.target === CUPS
+          ? 'Cleared every cup'
+          : `Sank ${this.target} ${this.target === 1 ? 'cup' : 'cups'}`
+      this.finish(winner, { score, note, delay: 2.2 })
       return
     }
     if (this.s.phase === 'aim' && this.isBot(this.s.turn) && !this.botShot) {

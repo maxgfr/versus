@@ -1,6 +1,6 @@
 import { DragAim } from '../../core/controls.ts'
 import { floatFor } from '../../core/fx/fx.ts'
-import type { Side } from '../../core/game.ts'
+import type { MatchSpec, Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import type { ShotParams } from '../../engines/aim/index.ts'
@@ -10,6 +10,7 @@ import { hud, render } from './render.ts'
 import {
   advance,
   done,
+  HOLES,
   holeOf,
   holeStrokes,
   type Event,
@@ -23,6 +24,9 @@ import {
   WIND_MAX,
 } from './rules.ts'
 
+/** Holes in the course: the match length, in holes. */
+export const match: MatchSpec = { unit: 'rounds', default: HOLES, min: 1, max: 6 }
+
 const EVERYWHERE = { x: -600, y: -600, w: 2200, h: 3000 }
 /** The name of a holed hole, judged against its par. */
 function parWord(strokes: number, par: number): string {
@@ -35,6 +39,10 @@ function parWord(strokes: number, par: number): string {
 }
 
 class Golf extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   private aims: [DragAim, DragAim] = [
     new DragAim(0, EVERYWHERE, 360, 0.1),
     new DragAim(1, EVERYWHERE, 360, 0.1),
@@ -45,7 +53,7 @@ class Golf extends TurnGame<State> {
   protected setup(): State {
     // The player whose turn it is may pull anywhere on the course.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(this.ctx.rng, this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind())
+    return newState(this.ctx.rng, this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind(), this.target)
   }
 
   private rollWind(): number {

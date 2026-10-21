@@ -17,6 +17,19 @@ export const DY = [-1, 0, 1, 0]
 /** One maze per level, small to large. */
 export const LEVEL_SIZES = [5, 6, 7]
 
+/**
+ * Seed of round `round` (0-based) of a match. Round 0 is the match seed itself,
+ * so a one-round match is the maze run it always was; later rounds mix the round
+ * in, and both phones carve the same levels from it.
+ */
+export function roundSeed(seed: number, round: number): number {
+  if (round === 0) return seed >>> 0
+  let h = (seed ^ Math.imul(round, 0x9e3779b1)) >>> 0
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  return (h ^ (h >>> 16)) >>> 0
+}
+
 export interface Level {
   n: number
   /** 1 = wall, 0 = floor; row-major, n * n entries. */

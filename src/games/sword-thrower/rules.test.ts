@@ -202,6 +202,14 @@ describe('sword thrower rules', () => {
     expect(advance(s, STEP, [true, true])).toEqual([])
   })
 
+  it('a match of another length ends on its own clock', () => {
+    const s = newState(new Rng(1), 20)
+    for (let i = 0; i < 19 * 60; i++) advance(s, STEP, [false, false])
+    expect(s.left).toBeGreaterThan(0)
+    for (let i = 0; i < 60 + 2; i++) advance(s, STEP, [false, false])
+    expect(s.left).toBe(0)
+  })
+
   it('the swords stuck in total decide the match; equal totals are a tie', () => {
     const s = still()
     s.score = [3, 1]

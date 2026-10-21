@@ -14,7 +14,6 @@ import {
   OUTER_BULL,
   type Pt,
   result,
-  ROUNDS,
   SEGMENTS,
   type State,
   TREBLE_IN,
@@ -324,8 +323,8 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 
   // Round banner as each round starts.
   const roundAge = now - s.roundAt
-  if (roundAge < 2 && s.rounds < ROUNDS && s.endAt < 0) {
-    const label = s.rounds === ROUNDS - 1 ? 'Final round' : `Round ${s.rounds + 1} of ${ROUNDS}`
+  if (roundAge < 2 && s.rounds < s.total && s.endAt < 0) {
+    const label = s.rounds === s.total - 1 ? 'Final round' : `Round ${s.rounds + 1} of ${s.total}`
     const k = outBack(clamp01(roundAge / 0.35))
     g.alpha(Math.min(1, (2 - roundAge) * 2.5), () =>
       g.at(

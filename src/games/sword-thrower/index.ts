@@ -1,24 +1,31 @@
 import { floatFor } from '../../core/fx/fx.ts'
-import { BaseGame, other, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, other, type Side } from '../../core/game.ts'
 import { clock, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import { Bot } from './bot.ts'
 import { drawFuse, drawScore, drawTimeUp, render } from './render.ts'
-import { advance, coast, type Event, leader, newState, type State } from './rules.ts'
+import { advance, coast, type Event, leader, MATCH, newState, type State } from './rules.ts'
 
 type Game = State & { endAt: number }
 
+/** Seconds the match lasts; the players pick it on the ready screen. */
+export const match: MatchSpec = { unit: 'seconds', default: MATCH, min: 15, max: 180, step: 15 }
+
 class SwordThrower extends BaseGame<Game> {
   private bots: [Bot | null, Bot | null] = [null, null]
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): Game {
     const rng = this.ctx.rng
     this.bots = [0, 1].map((side) =>
       this.isBot(side as Side) ? new Bot(this.ctx.difficulty, rng.fork()) : null,
     ) as [Bot | null, Bot | null]
-    return { ...newState(rng), endAt: -1 }
+    return { ...newState(rng, this.target), endAt: -1 }
   }
 
   protected step(dt: number): void {
