@@ -386,11 +386,14 @@ export class Draw {
     const yy = y + (depth - d)
     this.rrect(x, yy + d, w, h - depth, r, shade(color, -0.35))
     this.rrect(x, yy, w, h - depth, r, color)
-    const hl = this.lin(0, yy, 0, yy + (h - depth) * 0.55, [
-      [0, 'rgba(255,255,255,0.32)'],
+    // The gloss fades out inside a face-shaped highlight, so it never ends in a
+    // hard edge; big boards get a gentler sheen than small keys.
+    const face = h - depth
+    const hl = this.lin(0, yy, 0, yy + face * 0.55, [
+      [0, `rgba(255,255,255,${face > 360 ? 0.16 : 0.32})`],
       [1, 'rgba(255,255,255,0)'],
     ])
-    this.rrect(x + 4, yy + 3, w - 8, (h - depth) * 0.5, Math.max(0, r - 4), hl)
+    this.rrect(x + 4, yy + 3, w - 8, face - 6, Math.max(0, r - 4), hl)
   }
 
   /** Glossy sphere with contact shadow off (call `shadow` separately when it sits on a floor). */

@@ -33,7 +33,10 @@ export function namePill(
     if (o.active) {
       g.alpha(0.25 + pulse * 0.25, () => g.rrect(-w / 2 - 10, -46, w + 20, 92, 46, SIDE[side].main))
     }
-    g.rrect(-w / 2, -36, w, 72, 36, o.active ? SIDE[side].main : shade(SIDE[side].main, -0.62))
+    // Idle pills keep a team-coloured rim so they hold up on team-tinted tables.
+    if (o.active) g.rrect(-w / 2, -36, w, 72, 36, SIDE[side].main)
+    else
+      g.rrect(-w / 2, -36, w, 72, 36, shade(SIDE[side].main, -0.62), alpha(SIDE[side].main, 0.7), 3)
     g.sideMark(side, -w / 2 + 38, 0, 12, o.active ? C.white : SIDE[side].main)
     g.text(label, 14, 2, {
       size: 38,
@@ -55,6 +58,13 @@ export function pips(
   // To each player's right.
   const x = o.x ?? (side === 0 ? W - 150 : 150)
   g.forSide(side, x, y, () => {
+    // Long matches would run a row of pips off the screen: show one pip and a tally.
+    if (target > 5) {
+      g.rrect(-74, -30, 148, 60, 30, alpha(C.ink, 0.55))
+      g.circle(-40, 0, 15, wins > 0 ? SIDE[side].main : alpha(C.white, 0.14))
+      g.text(`${wins}/${target}`, 18, 2, { size: 36, weight: 700, color: C.white })
+      return
+    }
     const gap = 46
     const x0 = -((target - 1) * gap) / 2
     for (let i = 0; i < target; i++) {
@@ -95,8 +105,8 @@ export function clock(g: Draw, seconds: number, y: number, urgent = seconds <= 5
       g.text(label, 0, 3, { size: 46, weight: 700, color: col })
     })
   if (g.flipTop) {
-    draw(0, y + 42)
-    draw(Math.PI, y - 42)
+    draw(0, y + 46)
+    draw(g.orient(1), y - 46)
   } else draw(g.orient(), y)
 }
 
@@ -109,6 +119,7 @@ export function banner(
   o: { size?: number; color?: string; alpha?: number; gap?: number } = {},
 ): void {
   const size = o.size ?? 64
+  if (size <= 0) return
   const one = (angle: number, cy: number) =>
     g.at(W / 2, cy, angle, () => {
       const w = g.measure(text, size, 700) + size * 1.1
@@ -119,8 +130,8 @@ export function banner(
     if (side !== undefined) one(g.orient(side), y)
     else if (g.flipTop) {
       const gap = o.gap ?? size * 1.15
-      one(0, y + gap)
-      one(Math.PI, y - gap)
+      one(g.orient(0), y + gap)
+      one(g.orient(1), y - gap)
     } else one(g.orient(), y)
   })
 }

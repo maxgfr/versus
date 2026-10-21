@@ -6,6 +6,8 @@ const base = process.env.BASE
 
 export default defineConfig({
   testDir: 'e2e',
+  // Parallel runs (one per agent or port) must not share artefact folders.
+  outputDir: process.env.PW_OUT ?? (base ? `test-results/${new URL(base).port}` : 'test-results'),
   timeout: 60_000,
   fullyParallel: true,
   reporter: [['list']],

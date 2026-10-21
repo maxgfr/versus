@@ -442,7 +442,7 @@ export function drawRollButton(
               color: C.white,
               drop: alpha('#000000', 0.25),
             })
-            if (o.sub) g.text(o.sub, 0, 34, { size: 26, weight: 600, color: alpha(C.white, 0.85) })
+            if (o.sub) g.text(o.sub, 0, 36, { size: 30, weight: 600, color: alpha(C.white, 0.85) })
           })
         })
       },
@@ -488,7 +488,7 @@ export function drawTotal(
   const ta = textAngle(g, side)
   inFrame(g, side, () =>
     g.at(x, y, ta, () => {
-      g.text(label, 0, -34, { size: 26, weight: 600, color: alpha(C.white, 0.6) })
+      g.text(label, 0, -36, { size: 30, weight: 600, color: alpha(C.white, 0.7) })
       g.text(total, 0, 14, {
         size: 64,
         weight: 700,

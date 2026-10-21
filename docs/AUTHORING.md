@@ -50,7 +50,8 @@ The direction is **Night Match Scoreboard**: a floodlit dark table, chunky gloss
 
 - Palette: `C` and `SIDE` from `src/core/render/palette.ts`; `shade`, `alpha`, `mix` for variants. Yellow (`C.yellow`) marks the one active thing.
 - Draw kit (`src/core/render/draw.ts`): `tile` (raised lipped block), `ball`, `disc`, `blob` (the mascot cast, with moods and squash), `emoji` (cached colour glyphs: fruit, animals, objects), `shadow`, `rrect`, `circle`, `line`, `poly`, `star`, `lin`/`rad` gradients, `text` / `sideText` / `both`.
-- HUD kit (`src/core/hud.ts`): `namePill` (glows on your turn), `pips` (rounds won), `bigScore`, `clock`, `banner`.
+- HUD kit (`src/core/hud.ts`): `namePill` (glows on your turn), `pips` (rounds won; a compact `wins/target` tally above 5), `bigScore`, `clock`, `banner`.
+  - `banner(g, undefined, …)` draws one copy per player in local 2P, `gap` units either side of `y`. The default gap is small: over a centred board, pass a `gap` that puts each copy in its owner's free space (beside the HUD or the trays), never on the pieces.
 - Juice is mandatory: every hit, score and win has feedback. `fx.burst`, `fx.sparks`, `fx.puff`, `fx.shake`, `fx.stop` (hit-stop), `fx.flash`, `fx.ring`, `fx.float(text, x, y, color, size, side)`, `fx.confetti(side)`, `floatFor(fx, side, '+1')`. Squash & stretch with `Spring` from `core/fx/ease.ts`.
 - Sounds (`ctx.audio.play(name, pitch?)`): tap, click, pop, place, hit, bounce, wall, thud, score, coin, win, lose, draw, count, go, explode, shoot, whoosh, swish, splash, zap, boing, error, flip, roll, slide, tick, chomp, powerup, slap, buzz.
 - Text is Fredoka; size ≥ 34 world units for anything a player must read (the world is ~2.5× CSS px on a phone).

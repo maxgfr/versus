@@ -145,7 +145,8 @@ export abstract class PuzzleRace<S extends RaceBase> extends BaseGame<S> {
     this.ctx.audio.play('error')
     this.ctx.audio.buzz(30)
     const f = this.frames[side]
-    const at = toWorld(f, f.w / 2, HEADER / 2)
+    // Beside the clock (centre of the header), not over it.
+    const at = toWorld(f, f.w * 0.8, HEADER / 2)
     this.ctx.fx.float(`+${sec}s`, at.x, at.y + (f.angle ? -60 : 60), C.red, 54, side)
   }
 

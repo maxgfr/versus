@@ -99,12 +99,12 @@ export function laneHud(
   y = 70,
 ): void {
   const vw = g.measure(String(value), 60, 700)
-  const lw = g.measure(label, 30, 600)
+  const lw = g.measure(label, 34, 600)
   const w = vw + lw + 84
   g.rrect(x - w / 2, y - 44, w, 88, 44, alpha(C.ink, 0.62))
   g.text(value, x - w / 2 + 34, y + 3, { size: 60, weight: 700, align: 'left', color: C.white })
   g.text(label, x - w / 2 + 50 + vw, y + 4, {
-    size: 30,
+    size: 34,
     weight: 600,
     align: 'left',
     color: SIDE[side].light,
