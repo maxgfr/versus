@@ -54,10 +54,10 @@ const PER = {
   'reflex-race': { frame: 'wide', wait: 5000 },
   'sea-battle': { frame: 'wide', wait: 12000 },
   tanks: { frame: 'wide', wait: 4500 },
-  'cup-pong': { frame: 'wide', wait: 5000 },
+  'cup-pong': { frame: 'half', wait: 5000 },
   throw: { frame: 'wide', wait: 6000 },
-  'target-practice': { frame: 'wide', wait: 5000 },
-  'archery-master': { frame: 'wide', wait: 5000 },
+  'target-practice': { frame: 'half', wait: 6000 },
+  'archery-master': { frame: 'half', wait: 3000 },
   'beach-ball': { frame: 'wide', wait: 4000 },
   'brainrot-stack': { frame: 'wide', wait: 9000 },
   'crabby-volley': { frame: 'wide', wait: 4000 },
@@ -66,8 +66,8 @@ const PER = {
   bowling: { frame: 'half', wait: 3600 },
   'water-game': { frame: 'half', wait: 4000 },
   'road-dodge': { frame: 'half', wait: 5000 },
-  'spike-attacks': { frame: 'wide', wait: 6000 },
-  stampede: { frame: 'wide', wait: 5200 },
+  'spike-attacks': { frame: 'wide', wait: 2600 },
+  stampede: { wait: 6400 },
 }
 
 const browser = await webkit.launch()
