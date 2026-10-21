@@ -80,7 +80,7 @@ export default defineConfig({
       },
       workbox: {
         // Every game chunk is precached: the whole arcade works in airplane mode.
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,txt,woff2,webmanifest}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,webp,ico,txt,woff2,webmanifest}'],
         navigateFallback: `${BASE}index.html`,
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
@@ -88,6 +88,8 @@ export default defineConfig({
   ],
   build: {
     target: 'es2022',
+    // Card captures stay separate files, loaded lazily, never inlined into the home bundle.
+    assetsInlineLimit: (file) => (file.includes('/thumbs/') ? false : undefined),
     cssMinify: 'lightningcss',
   },
   test: {

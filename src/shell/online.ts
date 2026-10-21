@@ -8,12 +8,12 @@ import { ui } from './state.ts'
 import { toast } from './toast.ts'
 
 /** Guests follow the host: when the host starts a round, jump into that game. */
-let pendingSeed: number | undefined
+let pending: { seed: number; target?: number } | undefined
 
-export function takePendingSeed(): number | undefined {
-  const s = pendingSeed
-  pendingSeed = undefined
-  return s
+export function takePending(): { seed: number; target?: number } | undefined {
+  const p = pending
+  pending = undefined
+  return p
 }
 
 function connect(code: string, role: 'host' | 'guest'): Link {
@@ -23,9 +23,9 @@ function connect(code: string, role: 'host' | 'guest'): Link {
   ui.mode = 'online'
   if (role === 'guest') {
     link.on('round', (d) => {
-      const r = d as { id: string; seed: number }
+      const r = d as { id: string; seed: number; target?: number }
       if (location.hash === `#/play/${r.id}`) return
-      pendingSeed = r.seed
+      pending = r.target === undefined ? { seed: r.seed } : { seed: r.seed, target: r.target }
       go(`/play/${r.id}`)
     })
   }

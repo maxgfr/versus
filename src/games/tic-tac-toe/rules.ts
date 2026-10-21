@@ -52,5 +52,5 @@ export function place(cells: readonly Cell[], i: number, side: Side): Cell[] {
   return next
 }
 
-/** Rounds are played first to this many wins. */
+/** Rounds are played first to this many wins (the players can change it). */
 export const TARGET = 3

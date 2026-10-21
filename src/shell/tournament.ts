@@ -160,11 +160,12 @@ export function tournament(root: HTMLElement): () => void {
     const c = cup
     const meta = c?.games[c.at]
     if (!c || !meta) return
-    const factory = await loadGame(meta.id)
+    const mod = await loadGame(meta.id)
     page.replaceChildren()
     session = new Session(page, {
       meta,
-      factory,
+      factory: mod.default,
+      match: mod.match,
       mode: '2p',
       link: null,
       banner: `Game ${c.at + 1} of ${c.games.length}`,

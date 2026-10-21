@@ -1,6 +1,15 @@
 import { audio } from '../core/audio.ts'
 import { Fx, type FxCmd } from '../core/fx/fx.ts'
-import type { Game, GameContext, GameFactory, Mode, Result, Side } from '../core/game.ts'
+import {
+  matchLabel,
+  type Game,
+  type GameContext,
+  type GameFactory,
+  type MatchSpec,
+  type Mode,
+  type Result,
+  type Side,
+} from '../core/game.ts'
 import { Input } from '../core/input.ts'
 import { Loop } from '../core/loop.ts'
 import type { Link } from '../core/net/link.ts'
@@ -17,6 +26,8 @@ import { segmented } from './settings.ts'
 export interface SessionOpts {
   meta: GameMeta
   factory: GameFactory
+  /** The game's match-length setting, if it has one. */
+  match?: MatchSpec | undefined
   mode: Mode
   link: Link | null
   /** Guest only: the seed the host sent with the round. */
@@ -28,8 +39,10 @@ export interface SessionOpts {
   onNext?: () => void
   /** e.g. "Game 2 of 5" */
   banner?: string
-  /** Computer vs computer, no ready screen, `speed`× time (end-to-end tests). */
-  demo?: { speed: number }
+  /** Guest only: the match length the host chose. */
+  target?: number
+  /** Computer vs computer, no ready screen, `speed`× time (end-to-end tests, card captures). */
+  demo?: { speed: number; clean?: boolean }
 }
 
 type Phase = 'ready' | 'count' | 'play' | 'result'
@@ -66,6 +79,8 @@ export class Session {
   private offs: (() => void)[] = []
   private rounds = 0
   private disposed = false
+  /** Match length (see MatchSpec); 0 when the game has no setting. */
+  private target = 0
 
   constructor(
     parent: HTMLElement,
@@ -74,6 +89,12 @@ export class Session {
     this.guest = o.mode === 'online' && o.link?.role === 'guest'
     this.host = o.mode === 'online' && o.link?.role === 'host'
     this.local = this.guest ? 1 : 0
+    const spec = o.match
+    if (spec) {
+      const saved = o.demo ? undefined : store.match[o.meta.id]
+      this.target = clampTarget(spec, saved ?? spec.default)
+    }
+    if (o.target !== undefined) this.target = o.target
     this.root = h('div.screen.game-screen')
     parent.append(this.root)
     this.stage = new Stage(this.root)
@@ -92,7 +113,8 @@ export class Session {
     }
     const pauseBtn = h('button.pause-btn', { 'aria-label': 'Pause' }, icon('pause'))
     onTap(pauseBtn, () => this.pause(true))
-    this.root.append(pauseBtn)
+    // Card captures want the bare game.
+    if (!o.demo?.clean) this.root.append(pauseBtn)
     if (o.mode === 'online' && o.link) this.wireNet(o.link)
     this.newRound(o.seed)
     this.loop.start()
@@ -129,6 +151,7 @@ export class Session {
       names: this.names(),
       local: this.local,
       seed: s,
+      target: this.target,
     }
     this.game = this.o.factory()
     this.game.init(ctx)
@@ -138,7 +161,7 @@ export class Session {
     this.ready = [false, this.o.mode === '1p']
     this.steps = 0
     this.rounds++
-    if (this.host) this.o.link?.send('round', { id: this.o.meta.id, seed: s })
+    if (this.host) this.o.link?.send('round', { id: this.o.meta.id, seed: s, target: this.target })
     if (this.o.demo) {
       this.loop.speed = this.o.demo.speed
       this.clearOverlay()
@@ -206,8 +229,10 @@ export class Session {
       on('rematch', () => this.rematch())
     } else {
       on('round', (d) => {
-        const r = d as { id: string; seed: number }
-        if (r.id === this.o.meta.id) this.newRound(r.seed)
+        const r = d as { id: string; seed: number; target?: number }
+        if (r.id !== this.o.meta.id) return
+        if (typeof r.target === 'number') this.target = r.target
+        this.newRound(r.seed)
       })
       on('ready', () => this.markReady(0))
       on('count', () => void this.countdown())
@@ -363,6 +388,8 @@ export class Session {
       favBtn.replaceChildren(fav())
     })
     strip.append(favBtn)
+    const spec = this.o.match
+    if (spec) strip.append(this.matchStepper(spec))
 
     const top = halfFor(1)
     const bottom = halfFor(0)
@@ -375,6 +402,37 @@ export class Session {
     }
     this.overlay = ov
     this.root.append(ov)
+  }
+
+  /** − value + : the match length, editable by the host / local players only. */
+  private matchStepper(spec: MatchSpec): HTMLElement {
+    const step = spec.step ?? 1
+    const label = h('span.stepper-value', { 'aria-live': 'polite' }, matchLabel(spec, this.target))
+    const set = (v: number) => {
+      const n = clampTarget(spec, v)
+      if (n === this.target) return
+      this.target = n
+      store.match[this.o.meta.id] = n
+      save()
+      audio.play('click')
+      this.newRound()
+    }
+    const minus = h(
+      'button.stepper-btn',
+      { 'aria-label': 'Shorter match', disabled: this.target <= spec.min },
+      '−',
+    )
+    const plus = h(
+      'button.stepper-btn',
+      { 'aria-label': 'Longer match', disabled: this.target >= spec.max },
+      '+',
+    )
+    onTap(minus, () => set(this.target - step))
+    onTap(plus, () => set(this.target + step))
+    const el = h('div.stepper', { role: 'group', 'aria-label': 'Match length' }, minus, label, plus)
+    // Only the host decides online; the guest sees the value.
+    if (this.guest) el.classList.add('is-readonly')
+    return el
   }
 
   private markReady(side: Side): void {
@@ -542,4 +600,10 @@ export function fmtRecord(v: number): string {
   const m = Math.floor(v / 60)
   const s = v - m * 60
   return m > 0 ? `${m}:${s.toFixed(1).padStart(4, '0')}` : `${s.toFixed(1)} s`
+}
+
+function clampTarget(spec: MatchSpec, v: number): number {
+  const step = spec.step ?? 1
+  const n = Math.round((v - spec.min) / step) * step + spec.min
+  return Math.max(spec.min, Math.min(spec.max, n))
 }

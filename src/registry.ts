@@ -1,4 +1,4 @@
-import type { Family, GameFactory } from './core/game.ts'
+import type { Family, GameModule } from './core/game.ts'
 
 export interface GameMeta {
   id: string
@@ -623,7 +623,7 @@ export const GAMES: GameMeta[] = (Object.keys(TABLE) as Family[]).flatMap((famil
   })),
 )
 
-const loaders = import.meta.glob<{ default: GameFactory }>('./games/*/index.ts')
+const loaders = import.meta.glob<GameModule>('./games/*/index.ts')
 
 const loaderFor = (id: string) => loaders[`./games/${id}/index.ts`]
 
@@ -634,8 +634,8 @@ export const builtGames = (): GameMeta[] => GAMES.filter((g) => isBuilt(g.id))
 
 export const findGame = (id: string): GameMeta | undefined => GAMES.find((g) => g.id === id)
 
-export async function loadGame(id: string): Promise<GameFactory> {
+export async function loadGame(id: string): Promise<GameModule> {
   const l = loaderFor(id)
   if (!l) throw new Error(`Unknown game ${id}`)
-  return (await l()).default
+  return l()
 }

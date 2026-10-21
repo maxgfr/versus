@@ -29,6 +29,7 @@ The phone lies flat between two players. The world is a fixed **1000 × 1800** p
 - `setup()` returns the initial state. Keep **all** game state in `this.s`, as plain JSON (numbers, strings, arrays, plain objects). The online host streams `snapshot()` (which is `this.s`) to the guest; no class instances, Maps or functions in `this.s`.
 - `step(dt)` runs at a fixed 60 Hz. Use `this.time` (seconds) for timers and animations stamped in state (e.g. `placedAt: this.time`). Never use `Date.now()` / `performance.now()`.
 - `render(g, alpha)` draws from state only. It must not change `this.s` (the guest only renders).
+- **Match length is the players' choice.** Export a spec from `index.ts`: `export const match: MatchSpec = { unit: 'wins' | 'points' | 'seconds' | 'rounds', default, min, max, step? }` (e.g. first to 3 round wins 1–9, first to 7 points 3–21, 45 seconds 15–180 step 15, 5 rounds 1–10). The ready screen shows a − / + stepper; read the chosen value as `this.ctx.target || match.default` and use it everywhere the old constant was (end condition, pips, clock, HUD). Never hard-code the match length.
 - End the game with `this.finish(winner, { score?, note?, delay? })` — `winner` is `0`, `1` or `'draw'`. The shell shows the result screen after `delay` (default 1.4 s); `afterEnd(dt)` keeps animating meanwhile.
 - `this.ctx` gives: `input`, `fx`, `audio`, `rng` (seeded — use it for anything that affects play), `mode` (`'1p' | '2p' | 'online'`), `difficulty`, `bots` (`[bool, bool]`), `teams` (2 vs 2), `names`, `local`, `seed`, `stage`.
 

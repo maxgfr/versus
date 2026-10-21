@@ -1,0 +1,71 @@
+// Card art: capture each game in action (computer vs computer) and save a
+// small WebP under src/assets/thumbs/. Run against a dev or preview server:
+//   BASE=http://localhost:5173/versus/ node scripts/thumbs.mjs [--force] [id ...]
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { webkit } from '@playwright/test'
+
+const base = process.env.BASE ?? 'http://localhost:4173/versus/'
+const args = process.argv.slice(2)
+const force = args.includes('--force')
+const only = args.filter((a) => !a.startsWith('--'))
+const ids = readdirSync('src/games').filter(
+  (id) => existsSync(`src/games/${id}/index.ts`) && (!only.length || only.includes(id)),
+)
+const out = 'src/assets/thumbs'
+mkdirSync(out, { recursive: true })
+mkdirSync('.thumbs-tmp', { recursive: true })
+
+// Card art is 1 : 0.82. Default framing: the middle band of a phone-shaped
+// stage. 'wide' framing: a square viewport, so the stage is letterboxed by the
+// game's own backdrop and the frame shows most of the field.
+const FRAMES = {
+  band: { w: 400, h: 720 },
+  wide: { w: 720, h: 760 },
+}
+// Per game: framing and when to grab the frame (ms of real time at 2x speed).
+const PER = {
+  'air-hockey': { frame: 'wide', wait: 4200 },
+  'animal-stack': { frame: 'wide', wait: 6000 },
+  'cannon-duel': { frame: 'wide', wait: 7000 },
+  'find-match': { frame: 'wide', wait: 4000 },
+  'reflex-race': { frame: 'wide', wait: 5000 },
+  'sea-battle': { frame: 'wide', wait: 12000 },
+  tanks: { frame: 'wide', wait: 4500 },
+}
+
+const browser = await webkit.launch()
+let done = 0
+for (const id of ids) {
+  const file = `${out}/${id}.webp`
+  if (existsSync(file) && !force) continue
+  const cfg = PER[id] ?? {}
+  const { w, h } = FRAMES[cfg.frame ?? 'band']
+  const png = `.thumbs-tmp/${id}.png`
+  const ch = Math.round(w * 0.82)
+  // A capture must show play, never the result screen: retry earlier if the game already ended.
+  for (let wait = cfg.wait ?? 3200; wait >= 400; wait = Math.round(wait / 2)) {
+    const ctx = await browser.newContext({
+      viewport: { width: w, height: h },
+      deviceScaleFactor: 2,
+    })
+    const page = await ctx.newPage()
+    await page.goto(`${base}#/play/${id}?demo&clean&speed=2`)
+    await page.waitForSelector('.stage')
+    await page.waitForTimeout(wait)
+    const ended = await page.evaluate(() => document.body.dataset.result !== undefined)
+    if (!ended)
+      await page.screenshot({
+        path: png,
+        clip: { x: 0, y: Math.round((h - ch) / 2), width: w, height: ch },
+      })
+    await ctx.close()
+    if (!ended) break
+  }
+  execFileSync('cwebp', ['-quiet', '-q', '72', '-resize', '480', '0', png, '-o', file])
+  done++
+  console.log(`thumb ${id}`)
+}
+await browser.close()
+rmSync('.thumbs-tmp', { recursive: true, force: true })
+console.log(`${done} captured, ${ids.length - done} kept`)

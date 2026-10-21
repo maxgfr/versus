@@ -11,6 +11,18 @@ import { FAMILIES, type GameMeta } from '../registry.ts'
 const W = 320
 const H = 262
 const urls = new Map<string, string>()
+
+// Real captures of each game in action (scripts/thumbs.mjs). Only their URLs
+// are bundled; the images load lazily as cards scroll into view.
+const captures = import.meta.glob<string>('../assets/thumbs/*.webp', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+})
+
+export function capture(id: string): string | undefined {
+  return captures[`../assets/thumbs/${id}.webp`]
+}
 let canvas: HTMLCanvasElement | null = null
 
 /** Stable per-game pseudo-random, so the art never reshuffles between visits. */

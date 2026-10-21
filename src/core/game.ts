@@ -37,6 +37,43 @@ export interface GameContext {
   local: Side
   /** Seed shared by both devices online; puzzle races use it so both halves get the same puzzle. */
   seed: number
+  /**
+   * Match length chosen by the players before the game, in the unit the game's
+   * `match` spec declares (wins needed, points, seconds, rounds). Read it as
+   * `this.ctx.target || match.default` (tests' fake contexts may omit it).
+   */
+  target?: number
+}
+
+/**
+ * How long a match lasts, declared by each game module as
+ * `export const match: MatchSpec = { … }`. The ready screen shows a − / +
+ * stepper for it, remembers the choice per game and sends it to the online
+ * guest; the game reads the value from `ctx.target`.
+ */
+export interface MatchSpec {
+  /**
+   * wins: first to N round wins. points: first to N points. seconds: timed
+   * match. rounds: a fixed number of rounds / turns / throws each.
+   */
+  unit: 'wins' | 'points' | 'seconds' | 'rounds'
+  default: number
+  min: number
+  max: number
+  step?: number
+}
+
+export function matchLabel(spec: MatchSpec, n: number): string {
+  switch (spec.unit) {
+    case 'wins':
+      return n === 1 ? 'Single round' : `First to ${n} wins`
+    case 'points':
+      return `First to ${n} points`
+    case 'seconds':
+      return n >= 60 && n % 60 === 0 ? `${n / 60} min` : `${n} s`
+    case 'rounds':
+      return n === 1 ? '1 round' : `${n} rounds`
+  }
 }
 
 export interface Game {
@@ -52,6 +89,11 @@ export interface Game {
 }
 
 export type GameFactory = () => Game
+
+export interface GameModule {
+  default: GameFactory
+  match?: MatchSpec
+}
 
 export const STEP = 1 / 60
 

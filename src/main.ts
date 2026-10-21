@@ -36,7 +36,7 @@ route(/^\/$/, (root) => home(root))
 route(/^\/play\/([\w-]+)(?:\?.*)?$/, async (root, id) => {
   const params = new URLSearchParams(location.hash.split('?')[1] ?? '')
   const demo = params.has('demo')
-    ? { speed: Math.min(8, Number(params.get('speed')) || 1) }
+    ? { speed: Math.min(8, Number(params.get('speed')) || 1), clean: params.has('clean') }
     : undefined
   const meta = findGame(id)
   if (!meta || !isBuilt(id)) {
@@ -52,18 +52,20 @@ route(/^\/play\/([\w-]+)(?:\?.*)?$/, async (root, id) => {
   }
   const loading = h('div.loading', h('span.spinner'))
   root.append(loading)
-  const [factory] = await Promise.all([loadGame(id), fontReady])
+  const [mod] = await Promise.all([loadGame(id), fontReady])
   loading.remove()
-  let seed: number | undefined
+  let pending: { seed: number; target?: number } | undefined
   if (ui.mode === 'online' && ui.link?.role === 'guest') {
-    seed = (await import('./shell/online.ts')).takePendingSeed()
+    pending = (await import('./shell/online.ts')).takePending()
   }
   const s = new Session(root, {
     meta,
-    factory,
+    factory: mod.default,
+    match: mod.match,
     mode: ui.mode,
     link: ui.mode === 'online' ? ui.link : null,
-    ...(seed === undefined ? {} : { seed }),
+    ...(pending ? { seed: pending.seed } : {}),
+    ...(pending?.target !== undefined ? { target: pending.target } : {}),
     ...(demo ? { demo, mode: '1p' as const } : {}),
     onExit: () => go('/'),
   })

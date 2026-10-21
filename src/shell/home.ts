@@ -1,7 +1,7 @@
 import type { Mode } from '../core/game.ts'
 import { store } from '../core/store.ts'
 import { FAMILIES, builtGames, type GameMeta } from '../registry.ts'
-import { cardArt, familyColor } from './art.ts'
+import { capture, cardArt, familyColor } from './art.ts'
 import { h, onTap } from './dom.ts'
 import { icon, type IconName } from './icons.ts'
 import { go } from './router.ts'
@@ -41,8 +41,11 @@ export function home(root: HTMLElement): () => void {
   )
 
   const card = (g: GameMeta): HTMLElement => {
-    const img = h('img', { alt: '', 'data-id': g.id, decoding: 'async' })
-    art.observe(img)
+    const shot = capture(g.id)
+    const img = shot
+      ? h('img', { alt: '', src: shot, loading: 'lazy', decoding: 'async' })
+      : h('img', { alt: '', 'data-id': g.id, decoding: 'async' })
+    if (!shot) art.observe(img)
     const fav = store.favorites.includes(g.id)
     const el = h(
       'button.card.tile',
@@ -54,6 +57,7 @@ export function home(root: HTMLElement): () => void {
         'div.card-art',
         img,
         g.isNew && h('span.badge.new', 'NEW'),
+        shot && h('span.glyph', { 'aria-hidden': 'true' }, g.glyph),
         fav && h('span.fav-mark', { 'aria-label': 'Favourite' }, icon('starFill')),
       ),
       h('span.card-name', g.name),

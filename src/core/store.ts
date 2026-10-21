@@ -20,6 +20,8 @@ export interface Saved {
   /** Best solo time / score per game id. */
   records: Record<string, number>
   plays: Record<string, number>
+  /** Match length chosen per game (see MatchSpec). */
+  match: Record<string, number>
   iosGuideSeen: boolean
 }
 
@@ -32,6 +34,7 @@ const defaults = (): Saved => ({
   favorites: [],
   records: {},
   plays: {},
+  match: {},
   iosGuideSeen: false,
 })
 

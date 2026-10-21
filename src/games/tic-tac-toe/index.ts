@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -24,7 +24,13 @@ export interface State {
 
 const GEO = geom(3, 3, 780, 780, MID)
 
+export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 9 }
+
 class TicTacToe extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
@@ -95,7 +101,7 @@ class TicTacToe extends TurnGame<State> {
     s.roundText = `${this.ctx.names[o.winner]} takes the round`
     this.ctx.audio.play('score')
     this.ctx.fx.flash(SIDE[o.winner].main, 0.25)
-    if (s.wins[o.winner] >= TARGET) this.finish(o.winner, { score: s.wins, delay: 1.5 })
+    if (s.wins[o.winner] >= this.target) this.finish(o.winner, { score: s.wins, delay: 1.5 })
   }
 
   render(g: Draw): void {
@@ -103,8 +109,8 @@ class TicTacToe extends TurnGame<State> {
     tableBackdrop(g)
     renderBoard(g, s, GEO, this.time)
     this.drawTurns(g, undefined, s.endedAt < 0)
-    pips(g, 0, s.wins[0], TARGET, { inset: 170 })
-    pips(g, 1, s.wins[1], TARGET, { inset: 170 })
+    pips(g, 0, s.wins[0], this.target, { inset: 170 })
+    pips(g, 1, s.wins[1], this.target, { inset: 170 })
     if (s.roundText && !this.over) {
       const a = Math.min(1, (this.time - s.endedAt) * 4)
       banner(g, undefined, s.roundText, MID, { size: 58, alpha: a })
