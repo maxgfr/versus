@@ -58,6 +58,13 @@ const PER = {
   throw: { frame: 'wide', wait: 6000 },
   'target-practice': { frame: 'wide', wait: 5000 },
   'archery-master': { frame: 'wide', wait: 5000 },
+  'beach-ball': { frame: 'wide', wait: 4000 },
+  'brainrot-stack': { frame: 'wide', wait: 9000 },
+  'crabby-volley': { frame: 'wide', wait: 4000 },
+  'happy-hippos': { frame: 'wide', wait: 5000 },
+  'penalty-kicks': { frame: 'wide', wait: 2600 },
+  bowling: { frame: 'half', wait: 3600 },
+  'water-game': { frame: 'half', wait: 4000 },
 }
 
 const browser = await webkit.launch()
