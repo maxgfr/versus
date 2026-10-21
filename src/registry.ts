@@ -203,14 +203,19 @@ const TABLE: Record<Family, Row[]> = {
     ],
   ],
   puck: [
-    ['ping-pong', 'Ping Pong', '🏓', 'Slide your paddle to return the ball. First to 7.'],
+    [
+      'ping-pong',
+      'Ping Pong',
+      '🏓',
+      'Slide your paddle to return the ball. Miss it and your rival scores.',
+    ],
     [
       'tennis',
       'Tennis',
       '🎾',
-      'Run to the ball and the racket swings itself; where it hits decides the angle. First to 7.',
+      'Run to the ball and the racket swings itself; where it hits decides the angle.',
     ],
-    ['air-hockey', 'Air Hockey', '🏒', "Smash the puck into your rival's goal. First to 7.", 't'],
+    ['air-hockey', 'Air Hockey', '🏒', "Smash the puck into your rival's goal.", 't'],
     [
       'penalty-kicks',
       'Penalty Kicks',
@@ -234,14 +239,14 @@ const TABLE: Record<Family, Row[]> = {
       'basket-ball',
       'Basket Ball',
       '🏀',
-      'Flick the ball into the hoop. Most baskets in 45 seconds.',
+      'Flick the ball into the hoop. Most baskets before the buzzer.',
     ],
     ['beach-ball', 'Beach Ball', '🏐', "Keep it up and land it on your rival's sand.", 't'],
     [
       'crabby-volley',
       'Crabby Volley',
       '🦀',
-      'Scuttle and hop to volley the ball over the net. First to 7.',
+      'Scuttle and hop to volley the ball over the net. Let it land on your sand and your rival scores.',
       't',
     ],
     ['pool', 'Pool', '🎱', 'Pot your colour, then the black. Pull back to set the power.'],
@@ -270,7 +275,13 @@ const TABLE: Record<Family, Row[]> = {
       '👑',
       'Stay on the crown zone and bump your rival off. Hold it the longest.',
     ],
-    ['pinball', 'Pinball', '🕹️', "Flip the ball past your rival's flippers. First to 5.", 'o'],
+    [
+      'pinball',
+      'Pinball',
+      '🕹️',
+      "Flip the ball past your rival's flippers and into their drain.",
+      'o',
+    ],
   ],
   aim: [
     ['golf', 'Golf', '🏌️', 'Pull back to swing, mind the wind. Hole out in fewer strokes.'],
@@ -291,7 +302,7 @@ const TABLE: Record<Family, Row[]> = {
       'cornhole',
       'Cornhole',
       '🌽',
-      'Toss bean bags at the board: in the hole is 3, on the board is 1. First to 11.',
+      'Toss bean bags at the board: in the hole is 3, on the board is 1.',
     ],
     [
       'target-practice',
