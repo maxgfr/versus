@@ -208,28 +208,31 @@ function carBody(g: Draw, body: string, marker?: Side): void {
 
 /** Oncoming cars, nose toward the driver, headlights blazing, growing out of the fog. */
 function oncoming(g: Draw, side: Side, s: World): void {
-  inFrame(g, side, () => {
-    for (const o of s.obs[side]) {
-      const a = clamp((o.y - HORIZON) / 160, 0, 1)
-      if (a <= 0) continue
-      const x = LANE_X[o.lane] as number
-      const sc = 0.72 + 0.28 * clamp((o.y - HORIZON) / 520, 0, 1)
-      const body = OTHER_COLS[o.id % OTHER_COLS.length] as string
-      g.alpha(a, () => {
-        g.shadow(x + 8, o.y + 14, CAR_HW * 1.1 * sc, CAR_HH * 1.02 * sc, 0.38)
-        g.at(
-          x,
-          o.y,
-          Math.PI,
-          () => {
-            beams(g, 200, 0.18)
-            carBody(g, body)
-          },
-          sc,
-        )
-      })
-    }
-  })
+  // Clipped at the horizon: a car crests the seam instead of ghosting across into the rival's road.
+  inFrame(g, side, () =>
+    g.clip(-600, HORIZON, W + 1200, H, 0, () => {
+      for (const o of s.obs[side]) {
+        const a = clamp((o.y - HORIZON) / 160, 0, 1)
+        if (a <= 0) continue
+        const x = LANE_X[o.lane] as number
+        const sc = 0.72 + 0.28 * clamp((o.y - HORIZON) / 520, 0, 1)
+        const body = OTHER_COLS[o.id % OTHER_COLS.length] as string
+        g.alpha(a, () => {
+          g.shadow(x + 8, o.y + 14, CAR_HW * 1.1 * sc, CAR_HH * 1.02 * sc, 0.38)
+          g.at(
+            x,
+            o.y,
+            Math.PI,
+            () => {
+              beams(g, 200, 0.18)
+              carBody(g, body)
+            },
+            sc,
+          )
+        })
+      }
+    }),
+  )
 }
 
 /** A car knocked out of the way by a crash: it spins off the road and fades. */

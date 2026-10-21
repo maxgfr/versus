@@ -11,10 +11,21 @@ const JUNGLE = '#16302a'
 const MUD = '#3a2d28'
 const WATER_TOP = '#11507f'
 const WATER_BOT = '#0b3760'
-const FISH_BODY = '#ff5a4a'
-const FISH_BELLY = '#ffd7a8'
+/** Silver-backed with a fiery belly: a real piranha, and never mistaken for red's team colour. */
+const FISH_BODY = '#9fabc8'
+const FISH_BELLY = '#ff8b3d'
 /** Reeds along each bank (x), kept clear of the jetties and the pause button. */
 const REEDS = [180, 300, 700, 820, 930]
+/** Jungle on red's bank (red's layout; blue's is mirrored): x, y, glyph, size. Clear of the stick, clock and HUD. */
+const PLANTS: readonly [number, number, string, number][] = [
+  [120, 1250, '🌴', 96],
+  [830, 1235, '🌴', 104],
+  [690, 1420, '🪨', 54],
+  [930, 1430, '🌱', 50],
+  [330, 1300, '🌱', 44],
+  [960, 1250, '🪨', 40],
+]
+
 /** Lily pads drifting on the river: x, y, size. */
 const PADS: readonly [number, number, number][] = [
   [170, 760, 34],
@@ -131,6 +142,24 @@ function banks(g: Draw, t: number): void {
     const y0 = 140 + ((i * 97) % 440)
     for (const y of [y0, 1800 - y0])
       g.ellipse(x, y, 12 + (i % 3) * 4, 7 + (i % 2) * 3, alpha('#ffffff', 0.05))
+  }
+  // Grass clumps and jungle plants, upright for the bank's owner.
+  for (const side of [0, 1] as Side[]) {
+    for (let i = 0; i < 26; i++) {
+      const x = 40 + ((i * 337) % 920)
+      const y0 = 1170 + ((i * 151) % 600)
+      const y = side === 0 ? y0 : 1800 - y0
+      g.ellipse(x, y, 18, 7, alpha('#000000', 0.14))
+      g.ellipse(x, y - 3, 14, 6, alpha(shade(C.grass, -0.3), 0.45))
+    }
+    for (const [px, py, glyph, size] of PLANTS) {
+      const x = side === 0 ? px : W - px
+      const y = side === 0 ? py : 1800 - py
+      const sway = glyph === '🌴' ? Math.sin(t * 1.2 + px) * 0.04 : 0
+      const a = g.orient(side)
+      g.shadow(x + 10, y + Math.cos(a) * size * 0.38, size * 0.42, size * 0.16, 0.35)
+      g.emoji(glyph, x, y, size, a + sway)
+    }
   }
   g.rect(v.x - 2, RIVER_BOT, v.w + 4, 22, MUD)
   g.rect(v.x - 2, RIVER_TOP - 22, v.w + 4, 22, MUD)

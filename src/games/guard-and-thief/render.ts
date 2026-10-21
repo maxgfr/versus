@@ -79,6 +79,12 @@ function floor(g: Draw, lv: Level, now: number): void {
           [1, 'rgba(8,5,18,0)'],
         ]),
       )
+      // A slow dashed rim, so a shadow reads as a hiding place, not a hole.
+      g.save()
+      g.ctx.setLineDash([14, 12])
+      g.ctx.lineDashOffset = -now * 12
+      g.ring(x, y, s * 0.46, alpha('#9d6bff', 0.32), 3)
+      g.restore()
       // A few drifting motes, so a shadow reads as a place, not a hole.
       for (let i = 0; i < 3; i++) {
         const a = now * 0.7 + i * 2.1 + c
@@ -356,8 +362,8 @@ function stamp(g: Draw, title: string, sub: string, age: number, color: string, 
     )
   g.alpha(clamp(age * 6, 0, 1), () => {
     if (g.flipTop) {
-      one(0, y + 150)
-      one(Math.PI, y - 150)
+      one(g.orient(0), y + 150)
+      one(g.orient(1), y - 150)
     } else one(g.orient(), y)
   })
 }
@@ -400,8 +406,11 @@ export function renderGuard(
     )
   for (const side of [0, 1] as Side[]) {
     const role = side === w.thief ? 'Thief' : 'Guard'
+    // The role is what each player needs at a glance; "name · role" ran the pill
+    // into the joystick, so the name only shows when the pair fits.
+    const both = `${names[side]} · ${role}`
     namePill(g, side, names[side], {
-      text: `${names[side]} · ${role}`,
+      text: g.measure(both, 40, 600) + 80 <= 270 ? both : role,
       active: s.phase === 'play' && side === w.thief,
     })
     clock(g, ROUND_T - w.t, side, s.phase === 'play')

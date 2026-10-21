@@ -41,12 +41,15 @@ function streets(g: Draw, grid: Grid): void {
       if (solidCell(grid, c + 1, r) && c < grid.cols - 1) g.rect(x + cell - 10, y, 10, cell, KERB)
       if (solidCell(grid, c, r - 1) && r > 0) g.rect(x, y, cell, 10, KERB)
       if (solidCell(grid, c, r + 1) && r < grid.rows - 1) g.rect(x, y + cell - 10, cell, 10, KERB)
-      const cx = x + cell / 2
-      const cy = y + cell / 2
-      if (!solidCell(grid, c + 1, r) && !isCorner(grid, c, r) && !isCorner(grid, c + 1, r))
-        g.dashed(cx, cy, cx + cell, cy, LANE, 5, [16, 14])
-      if (!solidCell(grid, c, r + 1) && !isCorner(grid, c, r) && !isCorner(grid, c, r + 1))
-        g.dashed(cx, cy, cx, cy + cell, LANE, 5, [16, 14])
+      // Centre line through every straight piece of road, edge to edge, so the
+      // markings run as continuous lanes instead of stray dashes.
+      if (!isCorner(grid, c, r)) {
+        const cx = x + cell / 2
+        const cy = y + cell / 2
+        if (!solidCell(grid, c + 1, r) || !solidCell(grid, c - 1, r))
+          g.dashed(x + 8, cy, x + cell - 8, cy, LANE, 5, [22, 16])
+        else g.dashed(cx, y + 8, cx, y + cell - 8, LANE, 5, [22, 16])
+      }
     }
 }
 

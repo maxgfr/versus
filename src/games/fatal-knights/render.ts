@@ -52,6 +52,24 @@ function field(g: Draw, now: number): void {
   // Team ends.
   g.rect(x0 - 20, y0 - 20, w + 40, (h + 40) / 2, alpha(SIDE[1].main, 0.08))
   g.rect(x0 - 20, y0 + (h + 40) / 2 - 20, w + 40, (h + 40) / 2, alpha(SIDE[0].main, 0.1))
+  // Each end's heraldry painted on the grass: a big faint shield with the team's mark.
+  for (const side of [0, 1] as const) {
+    const cy = y0 + h * (side === 0 ? 0.85 : 0.15)
+    g.forSide(side, (x0 + x1) / 2, cy, () => {
+      g.ctx.scale(0.66, 0.66)
+      const shield = (c: CanvasRenderingContext2D) => {
+        c.moveTo(-120, -130)
+        c.lineTo(120, -130)
+        c.lineTo(120, 10)
+        c.quadraticCurveTo(110, 110, 0, 150)
+        c.quadraticCurveTo(-110, 110, -120, 10)
+        c.closePath()
+      }
+      g.path(shield, alpha(SIDE[side].main, 0.1), alpha(C.white, 0.12), 8)
+      g.sideMark(side, 0, 0, 52, alpha(SIDE[side].light, 0.16))
+    })
+  }
+  g.ring((x0 + x1) / 2, (y0 + y1) / 2, 110, alpha(C.white, 0.14), 6)
   // The tilt line and end lines.
   g.dashed(x0, (y0 + y1) / 2, x1, (y0 + y1) / 2, alpha(C.white, 0.25), 6, [22, 18])
   g.rect(x0 + 60, y0 + 40, w - 120, 6, alpha(SIDE[1].light, 0.3))
@@ -302,8 +320,8 @@ function stamp(g: Draw, title: string, sub: string, age: number, color: string, 
     )
   g.alpha(clamp(age * 6, 0, 1), () => {
     if (g.flipTop) {
-      one(0, y + 150)
-      one(Math.PI, y - 150)
+      one(g.orient(0), y + 150)
+      one(g.orient(1), y - 150)
     } else one(g.orient(), y)
   })
 }

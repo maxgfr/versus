@@ -13,7 +13,23 @@ const SEA = '#0f3d5e'
 const BEAK = '#ff9f1c'
 const FEATHER = '#1d2442'
 /** Penguins are drawn a little larger than their collision disc (they are round toys). */
-const S = 1.3
+const S = 1.5
+/**
+ * The rink (floe, trails, penguins) is drawn scaled about the floe's centre so
+ * its rim and splash zone stay clear of the pause button on the left edge at
+ * mid-height. Pure presentation: the rules keep their own units.
+ */
+export const RINK_K = 0.8
+
+/** Where a rules-space point is drawn on screen (for effects spawned at rink positions). */
+export const rinkXY = (x: number, y: number): [number, number] => [
+  FLOE.cx + (x - FLOE.cx) * RINK_K,
+  FLOE.cy + (y - FLOE.cy) * RINK_K,
+]
+
+function rink(g: Draw, fn: () => void): void {
+  g.at(FLOE.cx, FLOE.cy, 0, () => g.at(-FLOE.cx, -FLOE.cy, 0, fn), RINK_K)
+}
 
 /** Cracks in the ice, as fractions of the floe's radius. */
 const CRACKS: [number, number][][] = [
@@ -365,8 +381,8 @@ function stamp(g: Draw, title: string, sub: string, age: number, color: string, 
     )
   g.alpha(clamp(age * 6, 0, 1), () => {
     if (g.flipTop) {
-      one(0, y + 150)
-      one(Math.PI, y - 150)
+      one(g.orient(0), y + 150)
+      one(g.orient(1), y - 150)
     } else one(g.orient(), y)
   })
 }
@@ -382,14 +398,16 @@ export function renderIce(
   const r = s.rounds
   sea(g, w.t)
   bergs(g, w.t)
-  floe(g, w.t)
-  for (const side of [0, 1] as Side[]) trail(g, w.p[side], w.t)
   const won = (side: Side) => (r.phase === 'between' || over) && r.last === side
   // The penguin in the water is drawn first, under the one still standing.
   const order = ([0, 1] as Side[]).sort(
     (a, b) => (w.p[b].fell >= 0 ? 1 : 0) - (w.p[a].fell >= 0 ? 1 : 0),
   )
-  for (const side of order) penguin(g, w.p[side], side, w.t, won(side))
+  rink(g, () => {
+    floe(g, w.t)
+    for (const side of [0, 1] as Side[]) trail(g, w.p[side], w.t)
+    for (const side of order) penguin(g, w.p[side], side, w.t, won(side))
+  })
   for (const c of s.ctl) stick(g, c)
   for (const c of s.ctl) dashPad(g, c)
   for (const side of [0, 1] as Side[]) {

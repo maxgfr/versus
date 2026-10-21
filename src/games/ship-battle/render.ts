@@ -88,7 +88,8 @@ function dock(g: Draw, side: Side): void {
   const col = SIDE[side]
   const y0 = side === 0 ? SEA.bottom : v.y - 2
   const y1 = side === 0 ? v.y + v.h + 2 : SEA.top
-  const wood = mix(WOOD_DARK, col.dark, 0.45)
+  // Blue stain over brown wood turns grey, so blue's planks take more of the team colour.
+  const wood = mix(WOOD_DARK, col.dark, side === 0 ? 0.45 : 0.68)
   g.rect(v.x - 2, y0, v.w + 4, y1 - y0, shade(wood, -0.25))
   for (let x = v.x, k = 0; x < v.x + v.w; x += 48, k++) {
     g.rect(x + 2, y0, 44, y1 - y0, shade(wood, (k % 3) * 0.04 - 0.1))
@@ -345,7 +346,8 @@ export function renderShips(g: Draw, s: State, now: number, v: View): void {
   for (const c of s.ctl) drawControl(g, c)
   for (const side of [0, 1] as const) {
     namePill(g, side, v.names[side], { inset: 44, active: champ === side })
-    pips(g, side, r.wins[side], r.target, { inset: 44 })
+    // Above the pill, between stick and fire button (the edge corner sits under the button).
+    pips(g, side, r.wins[side], r.target, { inset: 122, x: W / 2 })
   }
   if (v.over) return
   if (r.phase === 'between' && r.text) {

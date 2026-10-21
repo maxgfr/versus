@@ -26,8 +26,9 @@ export const match: MatchSpec = { unit: 'rounds', default: 5, min: 1, max: 10 }
 /** Seconds the finishing banner stays before the result. */
 const DELAY = 1.6
 /** Throttle button radius and spot in red's frame (bottom-right corner, clear of the pills). */
-const THROTTLE_R = 88
-const THROTTLE_AT = { x: 800, y: 1700 }
+const THROTTLE_R = 80
+/** Low enough to sit under the thumb, high enough that the power ring never runs off the screen edge. */
+const THROTTLE_AT = { x: 810, y: 1688 }
 
 /** Keeps a floating label of half-width `half` inside the stage (x, world units). */
 const keepInside = (x: number, half: number): number => Math.min(W - half, Math.max(half, x))
@@ -156,10 +157,11 @@ class SlotCars extends BaseGame<State> {
         }
         const last = e.lap === laps - 1
         audio.play(last ? 'powerup' : 'coin', 1 + e.lap * 0.04)
+        // The line crosses the middle of the table: each lap call lands in its owner's half.
         fx.float(
           last ? 'Final lap!' : `Lap ${e.lap + 1}/${laps}`,
           keepInside(e.x, 170),
-          e.y + up,
+          e.y - up * 1.4,
           last ? C.yellow : col.light,
           54,
           e.side,

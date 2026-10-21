@@ -4,7 +4,6 @@ import { frame } from '../../core/frame.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
-import { W } from '../../core/stage.ts'
 import { roundEnd, roundsNew, roundsStep, type Rounds } from '../../engines/reflex/index.ts'
 import { SnakeBot } from './bot.ts'
 import { renderSnakes, type TurnLook } from './render.ts'
@@ -61,9 +60,6 @@ function spotsOf(
         { x: 880, y: 1600 },
       ]
 }
-
-/** Keeps a floating label of half-width `half` inside the stage (x, world units). */
-const keepInside = (x: number, half: number): number => Math.min(W - half, Math.max(half, x))
 
 class Snakes extends BaseGame<State> {
   /** Per bike: [turn left, turn right]. */
@@ -190,7 +186,8 @@ class Snakes extends BaseGame<State> {
       const c = k ? cellCentre(k.x, k.y) : undefined
       if (c) {
         ctx.fx.ring(c.x, c.y, C.yellow, 160)
-        floatFor(ctx.fx, w, 'Survivor!', keepInside(c.x, 170), c.y + (w === 0 ? -90 : 90))
+        // In the winner's own half, clear of the crash it walked away from.
+        floatFor(ctx.fx, w, 'Survivor!')
       }
     }
     if (roundEnd(s.rounds, w, this.time, ctx.names) && w !== 'draw') {

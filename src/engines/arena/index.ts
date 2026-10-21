@@ -504,8 +504,18 @@ export function drawStrip(
   bottom = ARENA.y0 + ARENA.rows * ARENA.cell,
 ): void {
   const v = g.stage.view
-  g.rect(v.x - 2, v.y - 2, v.w + 4, top - v.y + 2, shade(C.blue, -0.76))
-  g.rect(v.x - 2, bottom, v.w + 4, v.y + v.h - bottom + 2, shade(C.red, -0.76))
+  // Each strip glows faintly at the arena's edge and darkens toward the player,
+  // with a team-coloured lip where it meets the floor.
+  const strip = (col: string, y0: number, y1: number, edge: number) => {
+    const fill = g.lin(0, edge, 0, edge === y0 ? y1 : y0, [
+      [0, shade(col, -0.6)],
+      [1, shade(col, -0.84)],
+    ])
+    g.rect(v.x - 2, y0, v.w + 4, y1 - y0, fill)
+    g.rect(v.x - 2, edge === y0 ? y0 : y1 - 6, v.w + 4, 6, alpha(col, 0.55))
+  }
+  strip(C.blue, v.y - 2, top, top)
+  strip(C.red, bottom, v.y + v.h + 2, bottom)
 }
 
 /** Checkered floor, faintly tinted toward each team's end. */

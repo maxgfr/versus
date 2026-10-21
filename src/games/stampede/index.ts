@@ -116,9 +116,7 @@ class Stampede extends BaseGame<State> {
         audio.play('thud', 0.8 + rng.next() * 0.15)
         fx.shake(0.12)
         break
-      case 'dust':
-        fx.puff(e.x, e.y + 40, 'rgba(214,190,150,0.45)', 2)
-        break
+      // Dust is drawn by the renderer as a trail behind each animal (fx puffs piled up on top of the herd).
       case 'bump':
         audio.play('boing', 1.1 + rng.next() * 0.2)
         fx.ring(e.x, e.y, C.white, 70)

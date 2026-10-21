@@ -19,13 +19,15 @@ import type { PadLook } from './index.ts'
 
 const SAVANNA = '#1f2d1c'
 const DUST = '#c9a878'
-const ANIMALS = ['🦬', '🐘', '🦏']
+// Warm-coated runners: they read as a herd from across the table, not as grey rocks.
+const ANIMALS = ['🦬', '🐂', '🐎']
+const ANIMAL_SIZE = 156
 
 /** The night savanna: team-tinted halves, dusty patches, a few bushes, a moonlit glow. */
 function ground(g: Draw): void {
   const v = g.stage.view
-  g.rect(v.x - 2, v.y - 2, v.w + 4, MID - v.y + 2, mix(SAVANNA, C.blueDark, 0.16))
-  g.rect(v.x - 2, MID, v.w + 4, v.y + v.h - MID + 2, mix(SAVANNA, C.redDark, 0.12))
+  g.rect(v.x - 2, v.y - 2, v.w + 4, MID - v.y + 2, mix(SAVANNA, C.blueDark, 0.28))
+  g.rect(v.x - 2, MID, v.w + 4, v.y + v.h - MID + 2, mix(SAVANNA, C.redDark, 0.26))
   for (let i = 0; i < 22; i++) {
     const x = ((i * 397) % 1000) + 20
     const y = ((i * 613) % 1800) + 20
@@ -60,41 +62,79 @@ function warnings(g: Draw, w: World): void {
     const k = 1 - left / WARN
     const pulse = 0.5 + 0.5 * Math.sin(now * (10 + 16 * k))
     const a = Math.min(1, (WARN - left) * 4)
+    // Each chevron pops in one after the other, then they all throb faster as the herd nears.
+    const pop = (i: number) => outBack(clamp((WARN - left) * 5 - i * 0.6, 0, 1))
     g.alpha(a, () => {
-      const band = alpha(C.yellow, 0.07 + 0.08 * pulse)
-      const edge = alpha(C.yellow, 0.35 + 0.3 * pulse)
+      const band = alpha(C.orange, 0.1 + 0.12 * pulse)
+      const edge = alpha(C.yellow, 0.55 + 0.4 * pulse)
       if (h.axis === 0) {
         g.rect(-200, h.lane - HIT_D, W + 400, HIT_D * 2, band)
-        g.dashed(0, h.lane - HIT_D, W, h.lane - HIT_D, edge, 5, [22, 20])
-        g.dashed(0, h.lane + HIT_D, W, h.lane + HIT_D, edge, 5, [22, 20])
-        const x = h.dir > 0 ? 160 : W - 160
+        g.dashed(0, h.lane - HIT_D, W, h.lane - HIT_D, edge, 7, [30, 18])
+        g.dashed(0, h.lane + HIT_D, W, h.lane + HIT_D, edge, 7, [30, 18])
+        const x = h.dir > 0 ? 170 : W - 170
         for (let i = 0; i < 3; i++)
-          arrow(g, x + h.dir * i * 60, h.lane, h.dir > 0 ? 0 : Math.PI, (pulse + i * 0.3) % 1)
+          arrow(
+            g,
+            x + h.dir * i * 78,
+            h.lane,
+            h.dir > 0 ? 0 : Math.PI,
+            (pulse + i * 0.3) % 1,
+            pop(i),
+          )
       } else {
         g.rect(h.lane - HIT_D, -200, HIT_D * 2, H + 400, band)
-        g.dashed(h.lane - HIT_D, 0, h.lane - HIT_D, H, edge, 5, [22, 20])
-        g.dashed(h.lane + HIT_D, 0, h.lane + HIT_D, H, edge, 5, [22, 20])
-        const y = h.dir > 0 ? 230 : H - 230
+        g.dashed(h.lane - HIT_D, 0, h.lane - HIT_D, H, edge, 7, [30, 18])
+        g.dashed(h.lane + HIT_D, 0, h.lane + HIT_D, H, edge, 7, [30, 18])
+        const y = h.dir > 0 ? 240 : H - 240
         for (let i = 0; i < 3; i++)
           arrow(
             g,
             h.lane,
-            y + h.dir * i * 60,
+            y + h.dir * i * 78,
             h.dir > 0 ? Math.PI / 2 : -Math.PI / 2,
             (pulse + i * 0.3) % 1,
+            pop(i),
           )
       }
     })
   }
 }
 
-/** A chevron pointing `angle` (0 = right). */
-function arrow(g: Draw, x: number, y: number, angle: number, pulse: number): void {
-  g.at(x, y, angle, () => {
-    g.alpha(0.55 + 0.45 * pulse, () => {
-      g.poly([-34, -34, 22, 0, -34, 34, -18, 0], C.yellow, C.ink, 6)
-    })
-  })
+/** A chunky chevron pointing `angle` (0 = right), with a glow that throbs. */
+function arrow(g: Draw, x: number, y: number, angle: number, pulse: number, scale: number): void {
+  if (scale <= 0) return
+  g.at(
+    x,
+    y,
+    angle,
+    () => {
+      g.circle(0, 0, 52, alpha(C.yellow, 0.12 + 0.18 * pulse))
+      g.poly([-40, -44, 30, 0, -40, 44, -20, 0], C.ink)
+      g.poly([-34, -38, 22, 0, -34, 38, -16, 0], C.yellow)
+      g.poly([-34, -38, 22, 0, -16, 0], alpha(C.white, 0.35))
+    },
+    scale,
+  )
+}
+
+/** Dust kicked up behind a running animal: soft puffs that trail and fade (time-driven, no state). */
+function dust(g: Draw, h: Herd, i: number, t: number): void {
+  const p = animalAt(h, i, t)
+  if (p.x < -200 || p.x > W + 200 || p.y < -200 || p.y > H + 200) return
+  const bx = h.axis === 0 ? -h.dir : 0
+  const by = h.axis === 1 ? -h.dir : 0
+  for (let j = 0; j < 4; j++) {
+    const ph = (t * 3 + j / 4 + i * 0.37) % 1
+    const d = 40 + ph * 120
+    const r = 22 + ph * 40
+    const wob = Math.sin((t + j) * 7 + i) * 14
+    g.circle(
+      p.x + bx * d + by * wob,
+      p.y + 40 + by * d + bx * wob * 0.5,
+      r,
+      alpha(DUST, 0.32 * (1 - ph)),
+    )
+  }
 }
 
 /** One animal of a herd: a big emoji galloping (bob and tilt), facing its direction of travel. */
@@ -104,10 +144,20 @@ function animal(g: Draw, h: Herd, i: number, t: number): void {
   const gait = t * 14 + i * 1.7
   const bob = Math.abs(Math.sin(gait)) * -12
   const tilt = Math.sin(gait) * 0.08
-  g.shadow(p.x + 6, p.y + 50, 58 - bob * 0.6, 16, 0.4)
+  // A hot ground glow under each animal marks the danger zone at a glance.
+  g.circle(
+    p.x,
+    p.y + 30,
+    84,
+    g.rad(p.x, p.y + 30, 10, 84, [
+      [0, alpha(C.orange, 0.42)],
+      [1, alpha(C.orange, 0)],
+    ]),
+  )
+  g.shadow(p.x + 6, p.y + 60, 62 - bob * 0.6, 15, 0.3)
   // Emoji animals face left: mirror the ones running right.
   const sx = h.axis === 0 && h.dir > 0 ? -1 : 1
-  g.emoji(ANIMALS[h.kind % ANIMALS.length] as string, p.x, p.y + bob, 128, tilt, sx, 1)
+  g.emoji(ANIMALS[h.kind % ANIMALS.length] as string, p.x, p.y + bob, ANIMAL_SIZE, tilt, sx, 1)
 }
 
 function blob(g: Draw, side: Side, d: Driver, t: number, real: number): void {
@@ -193,6 +243,7 @@ export function renderStampede(
   }
   // Draw back to front so lower animals overlap the ones behind them.
   const herds = s.herds.filter((h) => s.rt >= h.t0)
+  for (const h of herds) for (let i = 0; i < h.n; i++) dust(g, h, i, s.rt)
   for (const h of herds) for (let i = h.n - 1; i >= 0; i--) animal(g, h, i, s.rt)
   for (const side of [0, 1] as Side[]) {
     const d = s.drivers[side]

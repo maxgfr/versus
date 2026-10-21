@@ -53,6 +53,9 @@ const ZONE = [
   { x: 0, y: 0, w: 1000, h: 300 },
 ]
 
+/** Keeps a floating label's centre far enough from the side edges that it never gets clipped. */
+const inX = (x: number): number => Math.max(170, Math.min(830, x))
+
 class TaxiRace extends BaseGame<State> {
   private pads!: [Joystick, Joystick]
   private bots: (TaxiBot | null)[] = [null, null]
@@ -152,7 +155,7 @@ class TaxiRace extends BaseGame<State> {
         audio.play('boing', 1.3)
         fx.ring(e.x, e.y, SIDE[e.side].light, 120)
         fx.puff(e.x, e.y, 'rgba(255,255,255,0.5)', 4)
-        fx.float('Hop in!', e.x, e.y - 70, SIDE[e.side].light, 46, e.side)
+        fx.float('Hop in!', inX(e.x), e.y - 70, SIDE[e.side].light, 46, e.side)
         break
       case 'deliver':
         this.s.hops.push({ kind: 'out', side: e.side, id: e.id, x: e.x, y: e.y, at: this.time })
@@ -166,7 +169,7 @@ class TaxiRace extends BaseGame<State> {
           life: 0.9,
           gravity: 900,
           kind: 'emoji',
-          glyph: '🪙',
+          glyph: '⭐',
         })
         fx.shake(0.15)
         fx.burst(e.x, e.y, C.yellow, {
@@ -177,14 +180,23 @@ class TaxiRace extends BaseGame<State> {
           colors: [C.yellow, C.white, SIDE[e.side].light],
         })
         fx.ring(e.x, e.y, SIDE[e.side].main, 180)
-        fx.float(`+${e.value}`, e.x, e.y - 90, C.yellow, 84, e.side)
+        fx.float(`+${e.value}`, inX(e.x), e.y - 90, C.yellow, 84, e.side)
         break
       case 'drop':
         this.s.hops.push({ kind: 'drop', side: e.side, id: e.id, x: e.x, y: e.y, at: this.time })
         audio.play('slide', 0.8)
         audio.play('error', 1.2)
         fx.sparks(e.x, e.y, C.orange, 12)
-        fx.float('Dropped!', e.x, e.y, C.orange, 58, e.side)
+        {
+          // A bump can drop both fares at once: push each label out past its own cab,
+          // away from the rival, so the two never stack on top of each other.
+          const me = this.s.taxis[e.side]
+          const other = this.s.taxis[e.side === 0 ? 1 : 0]
+          const dx = me.x - other.x
+          const dy = me.y - other.y
+          const d = Math.hypot(dx, dy) || 1
+          fx.float('Dropped!', inX(e.x + (dx / d) * 110), e.y + (dy / d) * 90, C.orange, 58, e.side)
+        }
         break
       case 'bump':
         audio.play('thud', 1.15)

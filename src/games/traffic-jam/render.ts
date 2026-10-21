@@ -20,9 +20,9 @@ import {
   STALL,
 } from './rules.ts'
 
-/** The Go buttons sit between the two streets, in each player's half (red's layout, mirrored for blue). */
+/** The Go buttons sit between the two streets, in each player's half (red's layout, mirrored for blue), clear of the name pill below. */
 export const GO_R = 92
-export const GO_AT = [frame(0, 520, 1580), frame(1, 520, 1580)] as const
+export const GO_AT = [frame(0, 520, 1552), frame(1, 520, 1552)] as const
 
 /** Where a side's big score figure sits (matches `bigScore`'s default spot). */
 export function scoreAt(side: Side, stage?: Partial<Stage>): { x: number; y: number } {

@@ -164,7 +164,8 @@ class NeonSnake extends BaseGame<State> {
       if (h) {
         const c = cellCentre(h)
         ctx.fx.ring(c.x, c.y, C.yellow, 150)
-        floatFor(ctx.fx, w, 'Survivor!', keepInside(c.x, 170), c.y + (w === 0 ? -90 : 90))
+        // In the winner's own half, clear of the crash it walked away from.
+        floatFor(ctx.fx, w, 'Survivor!')
       }
     } else ctx.fx.flash(C.white, 0.25)
     if (roundEnd(s.rounds, w, this.time, ctx.names) && w !== 'draw') {

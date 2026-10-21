@@ -2,7 +2,7 @@
 
 Two-player mini-games for one phone, played face to face: put the phone flat on the table, red plays from the bottom, blue from the top. Also against the computer, or online between two phones.
 
-**Play now: https://maxgfr.github.io/versus/** — then *Share → Add to Home Screen* to install it. It works offline.
+**Play now: https://maxgfr.github.io/versus/** — then _Share → Add to Home Screen_ to install it. It works offline.
 
 - 114 original mini-games: board classics, dice, cards and quizzes, ball games, aiming, reflex duels, arena battles, runners, physics and puzzle races.
 - **2P on one phone** with the top half upside down, **1P against the computer** (easy, normal, hard), **online** with a 4-letter room code, link or QR, and **2 vs 2** on one phone for some games.
@@ -12,6 +12,7 @@ Two-player mini-games for one phone, played face to face: put the phone flat on 
 ## Games
 
 <!-- games:start -->
+
 114 games, all playable two players on one phone.
 
 **Board** (11): ❌ Tic Tac Toe · 🔲 Ultimate Tic Tac Toe · 🔴 4 in a Row · ♟️ Chess · 🏁 Checkers · ⚪ Reversi · 🫘 Mancala · ✏️ Dots and Boxes · 🚢 Sea Battle · 🎨 Color Wars · 🫧 Pop It

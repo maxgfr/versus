@@ -44,18 +44,38 @@ function table(g: Draw): void {
     ]),
   )
   const v = g.stage.view
+  // The play mat: a faint printed grid with brighter major lines, like a toy circuit board.
+  for (let x = 0; x <= W; x += 50)
+    g.line(
+      x,
+      v.y,
+      x,
+      v.y + v.h,
+      alpha(C.white, x % 250 === 0 ? 0.05 : 0.022),
+      x % 250 === 0 ? 3 : 2,
+    )
+  for (let y = 0; y <= 1800; y += 50)
+    g.line(
+      v.x,
+      y,
+      v.x + v.w,
+      y,
+      alpha(C.white, y % 250 === 0 ? 0.05 : 0.022),
+      y % 250 === 0 ? 3 : 2,
+    )
   g.rect(
     v.x - 2,
     v.y - 2,
     v.w + 4,
     v.h + 4,
     g.lin(0, v.y, 0, v.y + v.h, [
-      [0, alpha(C.blue, 0.22)],
+      [0, alpha(C.blue, 0.3)],
       [0.15, alpha(C.blue, 0)],
       [0.85, alpha(C.red, 0)],
-      [1, alpha(C.red, 0.22)],
+      [1, alpha(C.red, 0.3)],
     ]),
   )
+  g.vignette(0.35)
 }
 
 /** A closed path through a lane's points. */
@@ -273,7 +293,7 @@ function laps(g: Draw, c: Car, total: number): void {
   const side = c.side
   const x = side === 0 ? 150 : W - 150
   g.forSide(side, x, hudY(g, side), () => {
-    g.text('LAP', 0, -34, { size: 26, weight: 700, color: alpha(C.white, 0.7) })
+    g.text('LAP', 0, -40, { size: 34, weight: 700, color: alpha(C.white, 0.75) })
     g.text(c.finishT >= 0 ? '🏁' : `${Math.min(total, c.laps + 1)}/${total}`, 0, 12, {
       size: 52,
       weight: 700,

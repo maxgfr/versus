@@ -50,75 +50,146 @@ function tileStates(f: Floor): { h: Float32Array; warn: Float32Array } {
   return { h, warn }
 }
 
+/** Stone faces per half: cool slate toward blue's end, warm plum toward red's. */
+const FACE: [[string, string], [string, string]] = [
+  ['#47304f', '#3f2a47'],
+  ['#2c3a66', '#27345c'],
+]
+
 function floor(g: Draw, warn: Float32Array, h: Float32Array, now: number): void {
   const w = COLS * TILE
   const ht = ROWS * TILE
   g.fillView('#14101f')
   drawStrip(g, Y0, Y0 + ht)
-  // Bezel round the floor.
+  // The floor is a sunken pit: a dark bezel, then an inner shadow along its top edge.
   g.rrect(X0 - 14, Y0 - 14, w + 28, ht + 34, 28, '#0b0814')
-  g.rrect(X0 - 14, Y0 - 14, w + 28, ht + 28, 28, undefined, alpha(C.white, 0.08), 4)
+  g.rect(X0, Y0, w, ht, '#100c1c')
+  g.rrect(X0 - 14, Y0 - 14, w + 28, ht + 28, 28, undefined, alpha(C.white, 0.1), 4)
   for (let i = 0; i < COLS * ROWS; i++) {
     const x = cellX(i)
     const y = cellY(i)
     const c = i % COLS
     const r = Math.floor(i / COLS)
-    const tint = r < ROWS / 2 ? SIDE[1].main : SIDE[0].main
+    const half = r < ROWS / 2 ? 1 : 0
     const wv = warn[i] ?? 0
-    const up = (h[i] ?? 0) > 0.02
-    const face = (c + r) % 2 === 0 ? '#353c63' : '#2f3558'
-    // Grout, then a raised stone slab; spiked slabs are steel plates.
-    g.rect(x, y, TILE, TILE, '#191629')
+    const hv = h[i] ?? 0
+    const up = hv > 0.02
+    const face = FACE[half][(c + r) % 2] as string
     if (up || wv > 0) {
-      g.rrect(x + 4, y + 4, TILE - 8, TILE - 8, 12, shade(STEEL, -0.35))
-      g.rrect(x + 4, y + 2, TILE - 8, TILE - 10, 12, STEEL)
-      // The holes the spikes come out of.
-      for (const [dx, dy] of HOLES) g.ellipse(x + 50 + dx, y + 52 + dy, 8, 4, '#1b1d2b')
-    } else {
-      g.rrect(x + 4, y + 6, TILE - 8, TILE - 8, 12, shade(face, -0.35))
-      g.rrect(x + 4, y + 3, TILE - 8, TILE - 10, 12, face)
-      g.rrect(x + 4, y + 3, TILE - 8, TILE - 10, 12, alpha(tint, 0.07))
-      g.rrect(x + 10, y + 7, TILE - 20, 8, 4, alpha(C.white, 0.06))
-    }
-    // Telegraph: the slab glows red and quickens as the spikes near.
-    if (wv > 0) {
+      // A steel trap plate, heating up as the spikes near and glowing hot while they are out.
+      const heat = up ? Math.min(1, hv) : 0.35 + 0.65 * wv
       const pulse = 0.5 + 0.5 * Math.sin(now * (8 + wv * 26))
+      if (heat > 0.3)
+        g.rrect(x - 4, y - 4, TILE + 8, TILE + 8, 20, alpha(C.red, 0.18 * heat + 0.12 * pulse * wv))
+      g.rrect(x + 4, y + 6, TILE - 8, TILE - 8, 12, shade(STEEL, -0.5))
       g.rrect(
         x + 4,
         y + 2,
         TILE - 8,
         TILE - 10,
         12,
-        alpha(C.red, 0.18 + wv * 0.3 + pulse * 0.2 * wv),
+        g.lin(0, y + 2, 0, y + TILE - 8, [
+          [0, shade(STEEL, 0.15)],
+          [1, shade(STEEL, -0.2)],
+        ]),
       )
       g.rrect(
-        x + 6,
-        y + 4,
-        TILE - 12,
-        TILE - 14,
-        10,
-        undefined,
-        alpha('#ff8f8f', 0.45 + 0.5 * wv * pulse),
-        5,
+        x + 4,
+        y + 2,
+        TILE - 8,
+        TILE - 10,
+        12,
+        alpha(up ? '#ff3b30' : C.red, 0.25 + 0.45 * heat),
       )
-      // Tips peek out of the holes just before they fire.
-      if (wv > 0.6) {
-        const k = (wv - 0.6) / 0.4
-        for (const [dx, dy] of HOLES)
+      // Hazard chevrons scored into the plate while it is armed.
+      g.clip(x + 4, y + 2, TILE - 8, TILE - 10, 12, () => {
+        for (let k = -1; k < 4; k++) {
+          const sx = x + k * 34 + ((now * 60) % 34)
           g.poly(
-            [
-              x + 50 + dx - 6,
-              y + 52 + dy,
-              x + 50 + dx + 6,
-              y + 52 + dy,
-              x + 50 + dx,
-              y + 52 + dy - 12 * k,
-            ],
-            '#dfe3f2',
+            [sx, y, sx + 16, y, sx - 34 + 16, y + TILE, sx - 34, y + TILE],
+            alpha('#000000', 0.16),
           )
+        }
+      })
+      // The holes the spikes come out of glow from below.
+      for (const [dx, dy] of HOLES) {
+        g.ellipse(x + 50 + dx, y + 52 + dy, 9, 5, '#14070a')
+        g.ellipse(
+          x + 50 + dx,
+          y + 52 + dy,
+          6,
+          3,
+          alpha(C.orange, 0.35 + 0.6 * heat * (up ? 1 : pulse)),
+        )
       }
+      g.rrect(
+        x + 5,
+        y + 3,
+        TILE - 10,
+        TILE - 12,
+        11,
+        undefined,
+        alpha(up ? '#ff6b5e' : '#ffb199', 0.5 + 0.5 * (up ? 1 : wv * pulse)),
+        up ? 6 : 5,
+      )
+    } else {
+      // A raised stone slab: dark lip, lit face, a soft top sheen and a team tint.
+      g.rrect(x + 4, y + 8, TILE - 8, TILE - 8, 12, shade(face, -0.5))
+      g.rrect(
+        x + 4,
+        y + 3,
+        TILE - 8,
+        TILE - 10,
+        12,
+        g.lin(0, y + 3, 0, y + TILE - 7, [
+          [0, shade(face, 0.14)],
+          [1, shade(face, -0.12)],
+        ]),
+      )
+      g.rrect(x + 10, y + 7, TILE - 20, 10, 5, alpha(C.white, 0.1))
+      // A few worn chips so the floor is not a flat grid.
+      if ((i * 7) % 5 === 0)
+        g.ellipse(x + 28 + ((i * 13) % 40), y + 60, 7, 4, alpha('#000000', 0.22))
+      if ((i * 11) % 7 === 0) g.line(x + 62, y + 34, x + 74, y + 52, alpha('#000000', 0.2), 3)
+    }
+    // Telegraph: tips peek out of the holes just before they fire.
+    if (wv > 0.6) {
+      const k = (wv - 0.6) / 0.4
+      for (const [dx, dy] of HOLES)
+        g.poly(
+          [
+            x + 50 + dx - 7,
+            y + 52 + dy,
+            x + 50 + dx + 7,
+            y + 52 + dy,
+            x + 50 + dx,
+            y + 52 + dy - 16 * k,
+          ],
+          '#eef1fa',
+        )
     }
   }
+  // Floodlight from above the middle of the table, dark toward the corners.
+  g.rect(
+    X0,
+    Y0,
+    w,
+    ht,
+    g.rad(W / 2, MID, 120, ht * 0.62, [
+      [0, 'rgba(255,240,210,0.06)'],
+      [1, 'rgba(0,0,0,0.3)'],
+    ]),
+  )
+  g.rect(
+    X0,
+    Y0,
+    w,
+    26,
+    g.lin(0, Y0, 0, Y0 + 26, [
+      [0, 'rgba(0,0,0,0.45)'],
+      [1, 'rgba(0,0,0,0)'],
+    ]),
+  )
 }
 
 /** Spike positions on a tile (back row first so the front row overlaps it). */
@@ -144,18 +215,19 @@ function spikes(g: Draw, h: Float32Array): void {
       const sx = cx + dx
       const base = cy + dy
       const top = base - SPIKE_H * k * (dy < 0 ? 0.8 : 1)
-      g.ellipse(sx + 4, base + 2, 12, 5, alpha('#000000', 0.35))
+      g.ellipse(sx + 5, base + 2, 13, 5, alpha('#000000', 0.45))
       g.poly(
-        [sx - 11, base, sx + 11, base, sx, top],
-        g.lin(sx - 11, base, sx + 11, base, [
-          [0, '#7d86a8'],
-          [0.45, '#ffffff'],
-          [1, '#5f6788'],
+        [sx - 12, base, sx + 12, base, sx, top],
+        g.lin(sx - 12, base, sx + 12, base, [
+          [0, '#6b7396'],
+          [0.42, '#ffffff'],
+          [1, '#4b5274'],
         ]),
-        alpha('#000000', 0.45),
+        alpha('#000000', 0.55),
         2,
       )
-      if (hurt) g.circle(sx, top + 2, 3.5, C.red)
+      // Blood-red tips while they hurt.
+      if (hurt) g.poly([sx - 5, top + 14, sx + 5, top + 14, sx, top], '#ff3b4a')
     }
   }
 }
@@ -182,22 +254,23 @@ function heart(
 
 /** A player's hearts by their name pill; the one just lost bursts and fades. */
 function hearts(g: Draw, side: Side, p: Fighter, t: number): void {
-  const x = side === 0 ? 128 : W - 128
+  // Compact and tucked into the corner, clear of the stick that floats above it.
+  const x = side === 0 ? 108 : W - 108
   const y = hudY(g, side)
   const lost = t - p.hit
   g.forSide(side, x, y, () => {
-    g.rrect(-100, -36, 200, 72, 36, alpha(C.ink, 0.75))
+    g.rrect(-88, -31, 176, 62, 31, alpha(C.ink, 0.8))
     for (let i = 0; i < HP; i++) {
-      const hx = (i - (HP - 1) / 2) * 58
+      const hx = (i - (HP - 1) / 2) * 50
       if (i < p.hp) {
         const beat = 1 + 0.08 * Math.sin(t * 6 + i)
-        g.at(hx, 0, 0, () => heart(g, 0, 0, 20, SIDE[side].main), beat)
+        g.at(hx, 0, 0, () => heart(g, 0, 0, 18, SIDE[side].main), beat)
         g.ellipse(hx - 7, -8, 5, 3, alpha('#ffffff', 0.6), -0.5)
       } else {
-        heart(g, hx, 0, 20, alpha('#ffffff', 0.08), alpha('#ffffff', 0.25))
+        heart(g, hx, 0, 18, alpha('#ffffff', 0.08), alpha('#ffffff', 0.25))
         if (i === p.hp && lost >= 0 && lost < 0.45) {
           const k = lost / 0.45
-          g.alpha(1 - k, () => g.at(hx, -k * 30, 0, () => heart(g, 0, 0, 20, C.white), 1 + k * 0.8))
+          g.alpha(1 - k, () => g.at(hx, -k * 30, 0, () => heart(g, 0, 0, 18, C.white), 1 + k * 0.8))
         }
       }
     }
@@ -209,11 +282,11 @@ function wave(g: Draw, side: Side, t: number): void {
   const lv = levelAt(t) + 1
   const y = hudY(g, side, 150)
   g.forSide(side, W / 2, y, () => {
-    g.rrect(-110, -24, 220, 48, 24, alpha(C.ink, 0.7))
-    g.text(`Wave ${lv}`, -46, 2, { size: 34, weight: 700, color: alpha(C.white, 0.9) })
+    g.rrect(-124, -27, 248, 54, 27, alpha(C.ink, 0.72))
+    g.text(`Wave ${lv}`, -50, 2, { size: 34, weight: 700, color: alpha(C.white, 0.9) })
     const sec = Math.floor(t)
-    g.text(`${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`, 56, 2, {
-      size: 30,
+    g.text(`${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`, 64, 2, {
+      size: 34,
       weight: 600,
       color: alpha(C.white, 0.6),
     })

@@ -240,7 +240,7 @@ function hud(g: Draw, s: State, tr: Track, side: Side, place: 1 | 2): void {
   const right = side === 0 ? W - 140 : 140
   const done = c.finishT >= 0
   g.forSide(side, left, y, () => {
-    g.text('LAP', 0, -34, { size: 26, weight: 700, color: alpha(C.white, 0.7) })
+    g.text('LAP', 0, -40, { size: 34, weight: 700, color: alpha(C.white, 0.75) })
     g.text(done ? '🏁' : `${lapOf(c, tr, s.laps)}/${s.laps}`, 0, 12, {
       size: 50,
       weight: 700,

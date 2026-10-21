@@ -405,7 +405,8 @@ function hints(g: Draw, w: World, now: number, show: readonly boolean[]): void {
         )
         continue
       }
-      marker(g, f.side, x, y, PAD_R + 12, alpha(col.light, 0.3 + 0.35 * k), 5)
+      // Vivid enough to read on the teal water, softly breathing.
+      marker(g, f.side, x, y, PAD_R + 12, alpha(mix(col.main, '#ffffff', 0.3), 0.5 + 0.4 * k), 6)
     }
   }
 }

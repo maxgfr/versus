@@ -40,8 +40,13 @@ const DEPTH = 20
 const FACE_BLUE = mix('#f2f7ff', C.blueLight, 0.4)
 const FACE_RED = mix('#fff4f2', C.redLight, 0.38)
 
+/** The odd middle row belongs to nobody: neutral stone, so neither half looks bigger. */
+const FACE_MID = mix('#f6f2ff', C.purple, 0.16)
+
 function faceOf(i: number): string {
-  return Math.floor(i / COLS) < ROWS / 2 ? FACE_BLUE : FACE_RED
+  const r = Math.floor(i / COLS)
+  if (ROWS % 2 === 1 && r === (ROWS - 1) / 2) return FACE_MID
+  return r < ROWS / 2 ? FACE_BLUE : FACE_RED
 }
 
 /** Cheap deterministic hash in 0..1, for per-tile variety. */
@@ -329,6 +334,8 @@ export function renderBroken(
 ): void {
   const b = s.b
   const since = s.rounds.phase === 'play' ? now - s.rounds.at : 9
+  // The first board is already standing during the countdown; later rounds rise in a wave.
+  const built = s.rounds.round > 1 ? since : 9
   table(g, now)
   notches(g)
   sinking(g, b, now)
@@ -338,7 +345,7 @@ export function renderBroken(
     for (const side of [0, 1] as const) if (b.p[side].alive && b.p[side].tile === i) return side
     return -1
   }
-  tiles(g, b, now, since, owner)
+  tiles(g, b, now, built, owner)
   // The body nearer the bottom of the screen is drawn last (in front).
   const order: Side[] = b.p[0].y >= b.p[1].y ? [1, 0] : [0, 1]
   for (const side of order) piece(g, s, side, now)
@@ -349,11 +356,11 @@ export function renderBroken(
       if (!humans[side] || s.ctl[side]?.on) continue
       const y = side === 0 ? MID + 640 : MID - 640
       g.alpha(Math.min(1, (3.2 - since) * 2) * 0.95, () =>
-        g.sideText(side, 'Drag to move', W / 2, y, {
-          size: 44,
-          weight: 700,
-          color: C.white,
-          stroke: alpha(C.ink, 0.8),
+        g.forSide(side, W / 2, y, () => {
+          const tw = g.measure('Drag to move', 44, 700) + 64
+          g.rrect(-tw / 2, -40, tw, 80, 40, alpha(C.ink, 0.82))
+          g.rrect(-tw / 2, -40, tw, 80, 40, undefined, alpha(SIDE[side].main, 0.8), 4)
+          g.text('Drag to move', 0, 2, { size: 44, weight: 700, color: C.white })
         }),
       )
     }

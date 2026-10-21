@@ -268,7 +268,7 @@ function sizeChip(g: Draw, side: Side, w: World, now: number): void {
   const foe = w.bugs[side === 0 ? 1 : 0].ball.r
   const win = flattens(me, foe)
   const lose = flattens(foe, me)
-  const x = side === 0 ? 128 : W - 128
+  const x = side === 0 ? 136 : W - 136
   const y = hudY(g, side)
   const label = win ? 'Flatten!' : lose ? 'Run!' : 'Grow'
   const col = win ? C.yellow : lose ? SIDE[side === 0 ? 1 : 0].light : alpha(C.white, 0.75)
@@ -279,13 +279,13 @@ function sizeChip(g: Draw, side: Side, w: World, now: number): void {
       0,
       0,
       () => {
-        g.rrect(-100, -36, 200, 72, 36, win ? alpha(C.yellow, 0.2) : alpha(C.ink, 0.75))
-        if (win) g.rrect(-100, -36, 200, 72, 36, undefined, alpha(C.yellow, 0.8), 4)
-        // Mine and theirs, to scale (max ball = 26 units here).
+        g.rrect(-112, -36, 224, 72, 36, win ? alpha(C.yellow, 0.2) : alpha(C.ink, 0.75))
+        if (win) g.rrect(-112, -36, 224, 72, 36, undefined, alpha(C.yellow, 0.8), 4)
+        // Mine and theirs, to scale (max ball = 22 units here), side by side.
         const k = 22 / 118
-        g.ball(-66, 0, Math.max(8, me * k), shade(SIDE[side].main, -0.1), 0.6)
-        g.ball(-32, 4, Math.max(8, foe * k), shade(SIDE[side === 0 ? 1 : 0].main, -0.1), 0.6)
-        g.text(label, 36, 2, { size: 34, weight: 700, color: col, maxWidth: 120 })
+        g.ball(-84, 0, Math.max(8, me * k), shade(SIDE[side].main, -0.1), 0.6)
+        g.ball(-46, 0, Math.max(8, foe * k), shade(SIDE[side === 0 ? 1 : 0].main, -0.1), 0.6)
+        g.text(label, 40, 2, { size: 34, weight: 700, color: col, maxWidth: 136 })
       },
       pulse,
     )
@@ -343,8 +343,8 @@ export function stamp(
     )
   g.alpha(clamp(age * 6, 0, 1), () => {
     if (g.flipTop) {
-      one(0, y + 150)
-      one(Math.PI, y - 150)
+      one(g.orient(0), y + 150)
+      one(g.orient(1), y - 150)
     } else one(g.orient(), y)
   })
 }

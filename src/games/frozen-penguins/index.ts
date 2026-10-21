@@ -10,7 +10,7 @@ import {
 } from '../../engines/arena/index.ts'
 import { type Rounds, roundEnd, roundsNew, roundsStep } from '../../engines/reflex/index.ts'
 import { PenguinBot } from './bot.ts'
-import { renderIce } from './render.ts'
+import { renderIce, rinkXY } from './render.ts'
 import { type Drive, type Ev, newWorld, roundWinner, stepWorld, type World } from './rules.ts'
 
 export interface State {
@@ -97,8 +97,11 @@ class FrozenPenguins extends BaseGame<State> {
     this.s.w.t += dt
   }
 
-  private feedback(e: Ev): void {
+  private feedback(ev: Ev): void {
     const { fx, audio, rng } = this.ctx
+    // Effects land where the rink is drawn (it is scaled about the floe's centre).
+    const [x, y] = rinkXY(ev.x, ev.y)
+    const e = { ...ev, x, y }
     switch (e.k) {
       case 'dash':
         audio.play('whoosh', 1 + rng.next() * 0.15)

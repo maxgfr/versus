@@ -122,38 +122,133 @@ function bikePos(k: Bike, p: number): { x: number; y: number } {
 }
 
 /**
+ * The order a bike laid its trail cells in (spawn to head). The board only
+ * stores who owns each cell, and stitching every pair of neighbours together
+ * turns two runs of one trail lying side by side into a ladder. The order is
+ * derived from the board (so the online guest gets the same picture): kept
+ * per bike and extended by the cells laid since the last frame, and rebuilt
+ * with a short search when it no longer fits (new round, a guest joining).
+ */
+const orderCache = new Map<number, number[]>()
+/** Cell counts for which the search already gave up, so it is not rerun every frame. */
+const orderFailed = new Map<number, number>()
+
+function trailOrder(cells: readonly number[], k: Bike): number[] | null {
+  const id = k.id + 1
+  const head = k.y * COLS + k.x
+  if (cells[head] !== id) return null
+  let n = 0
+  for (const c of cells) if (c === id) n++
+  const nbrs = (i: number): number[] => {
+    const x = i % COLS
+    const y = (i - x) / COLS
+    const out: number[] = []
+    if (x > 0) out.push(i - 1)
+    if (x < COLS - 1) out.push(i + 1)
+    if (y > 0) out.push(i - COLS)
+    if (y < ROWS - 1) out.push(i + COLS)
+    return out.filter((j) => cells[j] === id)
+  }
+  const cached = orderCache.get(k.id)
+  if (cached && cached.length <= n && cached.every((i) => cells[i] === id)) {
+    const inPath = new Set(cached)
+    const path = [...cached]
+    // Cells laid since: walk on from the old head through cells not on the path yet.
+    for (let guard = 0; path.length < n && guard < n; guard++) {
+      const last = path[path.length - 1] as number
+      const next = nbrs(last).filter((j) => !inPath.has(j))
+      const pick =
+        next.includes(head) && next.length > 1 && path.length < n - 1
+          ? next.find((j) => j !== head)
+          : next[0]
+      if (pick === undefined) break
+      path.push(pick)
+      inPath.add(pick)
+    }
+    if (path.length === n && path[path.length - 1] === head) {
+      orderCache.set(k.id, path)
+      return path
+    }
+  }
+  // Rebuild: a depth-first search from the head that must use every cell,
+  // trying the most cornered neighbour first, with a step budget.
+  const seen = new Set<number>([head])
+  const path = [head]
+  let budget = 40000
+  const go = (): boolean => {
+    if (path.length === n) return true
+    if (--budget < 0) return false
+    const at = path[path.length - 1] as number
+    const next = nbrs(at)
+      .filter((j) => !seen.has(j))
+      .sort(
+        (p, q) =>
+          nbrs(p).filter((j) => !seen.has(j)).length - nbrs(q).filter((j) => !seen.has(j)).length,
+      )
+    for (const j of next) {
+      seen.add(j)
+      path.push(j)
+      if (go()) return true
+      path.pop()
+      seen.delete(j)
+    }
+    return false
+  }
+  if (orderFailed.get(k.id) === n) return null
+  if (!go()) {
+    orderCache.delete(k.id)
+    orderFailed.set(k.id, n)
+    return null
+  }
+  path.reverse()
+  orderCache.set(k.id, path)
+  return path
+}
+
+/** Segments between consecutive trail cells (or every neighbour pair if the order is unknown). */
+function trailSegments(cells: readonly number[], k: Bike): [number, number, number, number][] {
+  const out: [number, number, number, number][] = []
+  const order = trailOrder(cells, k)
+  if (order) {
+    for (let i = 1; i < order.length; i++) {
+      const a = order[i - 1] as number
+      const b = order[i] as number
+      out.push([a % COLS, Math.floor(a / COLS), b % COLS, Math.floor(b / COLS)])
+    }
+    return out
+  }
+  const id = k.id + 1
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++) {
+      if (cells[y * COLS + x] !== id) continue
+      if (x + 1 < COLS && cells[y * COLS + x + 1] === id) out.push([x, y, x + 1, y])
+      if (y + 1 < ROWS && cells[(y + 1) * COLS + x] === id) out.push([x, y, x, y + 1])
+    }
+  return out
+}
+
+/**
  * Trails: one stroked path per bike (so the glow does not stack up at joints),
  * a soft halo, the solid wall, and a bright core. A bike that crashed when the
  * round ends dissolves (derezzes) to a faint ghost.
  */
 function trails(g: Draw, s: State, now: number): void {
   const { cells, bikes } = s.b
-  const owner = (x: number, y: number): number => {
-    if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return 0
-    return cells[y * COLS + x] ?? 0
-  }
   const p = clamp(s.b.acc / TICK, 0, 1)
   const r = s.rounds
   const c = g.ctx
   for (const k of bikes) {
-    const id = k.id + 1
     const col = bikeColour(k)
     const head = bikePos(k, p)
     const hc = cellCentre(k.x, k.y)
+    const segs = trailSegments(cells, k)
     const build = (q: CanvasRenderingContext2D) => {
-      for (let y = 0; y < ROWS; y++)
-        for (let x = 0; x < COLS; x++) {
-          if (owner(x, y) !== id) continue
-          const a = cellCentre(x, y)
-          if (owner(x + 1, y) === id) {
-            q.moveTo(a.x, a.y)
-            q.lineTo(a.x + CELL, a.y)
-          }
-          if (owner(x, y + 1) === id) {
-            q.moveTo(a.x, a.y)
-            q.lineTo(a.x, a.y + CELL)
-          }
-        }
+      for (const [ax, ay, bx, by] of segs) {
+        const a = cellCentre(ax, ay)
+        const b = cellCentre(bx, by)
+        q.moveTo(a.x, a.y)
+        q.lineTo(b.x, b.y)
+      }
       // Up to the bike itself, so the wall grows smoothly behind it.
       q.moveTo(hc.x, hc.y)
       q.lineTo(head.x, head.y)

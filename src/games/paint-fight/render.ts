@@ -208,21 +208,21 @@ function shareBar(
   const w = 780
   const lead = share > other
   g.forSide(side, W / 2, y, () => {
-    g.rrect(-w / 2 - 6, -28, w + 12, 56, 28, alpha(C.ink, 0.85))
-    g.rrect(-w / 2, -22, w, 44, 22, shade(col.main, -0.62))
-    const fill = Math.max(44, w * Math.min(1, share))
+    g.rrect(-w / 2 - 6, -25, w + 12, 50, 25, alpha(C.ink, 0.85))
+    g.rrect(-w / 2, -20, w, 40, 20, shade(col.main, -0.62))
+    const fill = Math.max(40, w * Math.min(1, share))
     g.rrect(
       -w / 2,
-      -22,
+      -20,
       fill,
-      44,
-      22,
-      g.lin(0, -22, 0, 22, [
+      40,
+      20,
+      g.lin(0, -20, 0, 20, [
         [0, shade(col.main, 0.25)],
         [1, shade(col.main, -0.1)],
       ]),
     )
-    g.rrect(-w / 2 + 10, -18, fill - 20, 10, 5, alpha('#ffffff', 0.25))
+    g.rrect(-w / 2 + 10, -16, fill - 20, 9, 4, alpha('#ffffff', 0.25))
     g.sideMark(side, -w / 2 + 28, 0, 10, C.white)
     g.text(name, -w / 2 + 50, 2, {
       size: 34,
@@ -262,8 +262,9 @@ export function renderPaint(g: Draw, s: State, now: number, v: View): void {
   g.vignette(0.3)
   for (const c of s.ctl) controls(g, c)
   const [red, blue] = shares(s.w)
-  shareBar(g, 0, red, blue, v.names[0], BOARD_BOTTOM + 44)
-  shareBar(g, 1, blue, red, v.names[1], BOARD.y0 - 44)
+  // Snug against the slab, so the joystick ring below never runs under the bar.
+  shareBar(g, 0, red, blue, v.names[0], BOARD_BOTTOM + 26)
+  shareBar(g, 1, blue, red, v.names[1], BOARD.y0 - 26)
   if (!v.over) clock(g, v.duration - now, MID)
   else if (v.winner !== null) {
     const col = v.winner === 'draw' ? C.white : mix(C.white, SIDE[v.winner].light, 0.5)
