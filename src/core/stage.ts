@@ -67,24 +67,9 @@ export class Stage {
     const vx = -this.ox / this.scale
     const vy = -this.oy / this.scale
     this.view = { x: vx, y: vy, w: this.cssW / this.scale, h: this.cssH / this.scale }
-    const inset = readSafeArea()
-    // Safe insets are measured from the screen edges; express them as world
-    // units measured from the visible edges.
-    const s = this.scale
-    this.safe =
-      this.rot === 0
-        ? {
-            top: inset.top / s,
-            bottom: inset.bottom / s,
-            left: inset.left / s,
-            right: inset.right / s,
-          }
-        : {
-            top: inset.bottom / s,
-            bottom: inset.top / s,
-            left: inset.right / s,
-            right: inset.left / s,
-          }
+    // The canvas is laid out inside the safe area (see .stage in style.css), so
+    // its edges are already safe; `safe` stays for layouts that want margins.
+    this.safe = { top: 0, bottom: 0, left: 0, right: 0 }
   }
 
   /** Apply the world transform to the context (device pixels). */
@@ -144,24 +129,5 @@ export class Stage {
     this.canvas.width = 1
     this.canvas.height = 1
     this.canvas.remove()
-  }
-}
-
-let probe: HTMLDivElement | null = null
-
-function readSafeArea(): { top: number; bottom: number; left: number; right: number } {
-  if (!probe) {
-    probe = document.createElement('div')
-    probe.style.cssText =
-      'position:fixed;visibility:hidden;pointer-events:none;' +
-      'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
-    document.body.appendChild(probe)
-  }
-  const cs = getComputedStyle(probe)
-  return {
-    top: parseFloat(cs.paddingTop) || 0,
-    bottom: parseFloat(cs.paddingBottom) || 0,
-    left: parseFloat(cs.paddingLeft) || 0,
-    right: parseFloat(cs.paddingRight) || 0,
   }
 }

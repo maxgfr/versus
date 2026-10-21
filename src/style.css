@@ -823,10 +823,15 @@ input {
 }
 
 .stage {
+  /* The playfield never goes under the notch, status bar or home indicator:
+     those strips stay black and every game edge is reachable and readable. */
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: var(--safe-t);
+  bottom: var(--safe-b);
+  left: var(--safe-l);
+  right: var(--safe-r);
+  width: calc(100% - var(--safe-l) - var(--safe-r));
+  height: calc(100% - var(--safe-t) - var(--safe-b));
   display: block;
   touch-action: none;
 }

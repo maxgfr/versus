@@ -2,7 +2,7 @@
 // small WebP under src/assets/thumbs/. Run against a dev or preview server:
 //   BASE=http://localhost:5173/versus/ node scripts/thumbs.mjs [--force] [id ...]
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { webkit } from '@playwright/test'
 
 const base = process.env.BASE ?? 'http://localhost:4173/versus/'
@@ -19,9 +19,19 @@ mkdirSync('.thumbs-tmp', { recursive: true })
 // Card art is 1 : 0.82. Default framing: the middle band of a phone-shaped
 // stage. 'wide' framing: a square viewport, so the stage is letterboxed by the
 // game's own backdrop and the frame shows most of the field.
+// 'half': split-screen games, where each player owns a half: show red's
+// half alone, upright and whole.
 const FRAMES = {
-  band: { w: 400, h: 720 },
-  wide: { w: 720, h: 760 },
+  band: { w: 400, h: 720, at: 0.5 },
+  wide: { w: 720, h: 760, at: 0.5 },
+  half: { w: 400, h: 720, at: 0.75 },
+}
+// Default framing by family (read from the registry table).
+const BY_FAMILY = { puzzle: 'half', runner: 'half' }
+const registry = readFileSync('src/registry.ts', 'utf8')
+const familyOf = (id) => {
+  const before = registry.slice(0, registry.indexOf(`'${id}'`))
+  return [...before.matchAll(/^ {2}([a-z]+): \[$/gm)].at(-1)?.[1]
 }
 // Per game: framing and when to grab the frame (ms of real time at 2x speed).
 const PER = {
@@ -40,7 +50,7 @@ for (const id of ids) {
   const file = `${out}/${id}.webp`
   if (existsSync(file) && !force) continue
   const cfg = PER[id] ?? {}
-  const { w, h } = FRAMES[cfg.frame ?? 'band']
+  const { w, h, at } = FRAMES[cfg.frame ?? BY_FAMILY[familyOf(id)] ?? 'band']
   const png = `.thumbs-tmp/${id}.png`
   const ch = Math.round(w * 0.82)
   // A capture must show play, never the result screen: retry earlier if the game already ended.
@@ -57,7 +67,7 @@ for (const id of ids) {
     if (!ended)
       await page.screenshot({
         path: png,
-        clip: { x: 0, y: Math.round((h - ch) / 2), width: w, height: ch },
+        clip: { x: 0, y: Math.min(h - ch, Math.round(h * at - ch / 2)), width: w, height: ch },
       })
     await ctx.close()
     if (!ended) break

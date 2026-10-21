@@ -173,6 +173,7 @@ export class Session {
 
   private names(): [string, string] {
     const [r, b] = store.settings.names
+    if (this.o.demo) return ['Computer', 'Computer']
     if (this.o.mode === '1p') return [r, this.o.meta.ai ? 'Computer' : 'Solo']
     return [r, b]
   }

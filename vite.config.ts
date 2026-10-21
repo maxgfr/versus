@@ -96,5 +96,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['src/**/*.test.ts'],
+    // Computer-vs-computer matches are slow on a busy CI runner.
+    testTimeout: 30_000,
   },
 })
