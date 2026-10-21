@@ -28,6 +28,18 @@ const FRAMES = {
 }
 // Default framing by family (read from the registry table).
 const BY_FAMILY = { puzzle: 'half', runner: 'half' }
+// Reflex games that give each player their own half.
+const HALF = [
+  'hammer-hit',
+  'whack-a-mole',
+  'fruit-duel',
+  'money-grabber',
+  'star-catcher',
+  'lumber-jack',
+  'rat-race',
+  'disco-battle',
+  'knife-thrower',
+]
 const registry = readFileSync('src/registry.ts', 'utf8')
 const familyOf = (id) => {
   const before = registry.slice(0, registry.indexOf(`'${id}'`))
@@ -42,6 +54,10 @@ const PER = {
   'reflex-race': { frame: 'wide', wait: 5000 },
   'sea-battle': { frame: 'wide', wait: 12000 },
   tanks: { frame: 'wide', wait: 4500 },
+  'cup-pong': { frame: 'wide', wait: 5000 },
+  throw: { frame: 'wide', wait: 6000 },
+  'target-practice': { frame: 'wide', wait: 5000 },
+  'archery-master': { frame: 'wide', wait: 5000 },
 }
 
 const browser = await webkit.launch()
@@ -50,7 +66,10 @@ for (const id of ids) {
   const file = `${out}/${id}.webp`
   if (existsSync(file) && !force) continue
   const cfg = PER[id] ?? {}
-  const { w, h, at } = FRAMES[cfg.frame ?? BY_FAMILY[familyOf(id)] ?? 'band']
+  const { w, h, at } =
+    FRAMES[
+      cfg.frame ?? (HALF.includes(id) ? 'half' : undefined) ?? BY_FAMILY[familyOf(id)] ?? 'band'
+    ]
   const png = `.thumbs-tmp/${id}.png`
   const ch = Math.round(w * 0.82)
   // A capture must show play, never the result screen: retry earlier if the game already ended.
