@@ -43,6 +43,9 @@ const contentSecurityPolicy = (): Plugin => ({
 export default defineConfig({
   base: BASE,
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  // Dev servers on an explicit port are agents' test servers: many of them edit
+  // files at once, and hot reload would restart every probe on every save.
+  server: process.argv.includes('--port') ? { hmr: false } : {},
   plugins: [
     contentSecurityPolicy(),
     VitePWA({

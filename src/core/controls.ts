@@ -128,6 +128,16 @@ export class Button {
     if (this.botPress > 0) this.botPress--
     if (!on) {
       const rr = (this.r * 1.25) ** 2
+      // A quick tap can go down and up between two steps: count presses too.
+      for (const p of input.downs) {
+        if ((p.x - this.x) ** 2 + (p.y - this.y) ** 2 <= rr) {
+          on = true
+          break
+        }
+      }
+    }
+    if (!on) {
+      const rr = (this.r * 1.25) ** 2
       for (const p of input.held.values()) {
         if ((p.x - this.x) ** 2 + (p.y - this.y) ** 2 <= rr) {
           on = true

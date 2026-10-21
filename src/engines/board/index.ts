@@ -148,7 +148,11 @@ export abstract class TurnGame<S extends TurnState> extends BaseGame<S> {
     return false
   }
 
+  /** Runs every step before anything else, even while `busy()`: flying shells, falling pieces… */
+  protected animate(_dt: number): void {}
+
   protected step(dt: number): void {
+    this.animate(dt)
     if (this.busy()) {
       this.thinking = 0
       return

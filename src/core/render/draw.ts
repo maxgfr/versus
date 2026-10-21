@@ -348,6 +348,24 @@ export class Draw {
     this.ellipse(x, y, rx, ry, `rgba(0,0,0,${a})`)
   }
 
+  private relit = false
+
+  /**
+   * Light comes from the top of the viewer's screen. On the rotated online
+   * guest, re-draw the shape rotated about its centre so lips and gloss still
+   * face the right way. Returns true when it handled the draw.
+   */
+  private lit(cx: number, cy: number, draw: () => void): boolean {
+    if (this.stage.rot === 0 || this.relit) return false
+    this.relit = true
+    this.at(cx, cy, Math.PI, () => {
+      this.ctx.translate(-cx, -cy)
+      draw()
+    })
+    this.relit = false
+    return true
+  }
+
   /**
    * A chunky raised tile: darker lip below, face on top, glossy top highlight.
    * `depth` is the lip height. Used for buttons, cards, cells, blocks.
@@ -362,6 +380,8 @@ export class Draw {
     depth = 10,
     pressed = 0,
   ): void {
+    if (this.lit(x + w / 2, y + h / 2, () => this.tile(x, y, w, h, r, color, depth, pressed)))
+      return
     const d = depth * (1 - pressed)
     const yy = y + (depth - d)
     this.rrect(x, yy + d, w, h - depth, r, shade(color, -0.35))
@@ -375,6 +395,7 @@ export class Draw {
 
   /** Glossy sphere with contact shadow off (call `shadow` separately when it sits on a floor). */
   ball(x: number, y: number, r: number, color: string, shine = 1): void {
+    if (this.lit(x, y, () => this.ball(x, y, r, color, shine))) return
     const g = this.rad(
       x,
       y,
@@ -398,6 +419,7 @@ export class Draw {
 
   /** Flat disc with a bevel (tokens, checkers, coins, pucks). */
   disc(x: number, y: number, r: number, color: string, depth = r * 0.18): void {
+    if (this.lit(x, y, () => this.disc(x, y, r, color, depth))) return
     this.circle(x, y + depth, r, shade(color, -0.4))
     this.circle(
       x,

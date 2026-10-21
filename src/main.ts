@@ -33,7 +33,11 @@ const app = document.getElementById('app') as HTMLElement
 
 route(/^\/$/, (root) => home(root))
 
-route(/^\/play\/([\w-]+)$/, async (root, id) => {
+route(/^\/play\/([\w-]+)(?:\?.*)?$/, async (root, id) => {
+  const params = new URLSearchParams(location.hash.split('?')[1] ?? '')
+  const demo = params.has('demo')
+    ? { speed: Math.min(8, Number(params.get('speed')) || 1) }
+    : undefined
   const meta = findGame(id)
   if (!meta || !isBuilt(id)) {
     go('/', true)
@@ -60,6 +64,7 @@ route(/^\/play\/([\w-]+)$/, async (root, id) => {
     mode: ui.mode,
     link: ui.mode === 'online' ? ui.link : null,
     ...(seed === undefined ? {} : { seed }),
+    ...(demo ? { demo, mode: '1p' as const } : {}),
     onExit: () => go('/'),
   })
   return () => s.destroy()
@@ -71,7 +76,7 @@ route(/^\/online(?:\/([A-Za-z]{4}))?$/, async (root, code) =>
 
 route(/^\/tournament$/, async (root) => (await import('./shell/tournament.ts')).tournament(root))
 
-app.append(
+document.body.append(
   h('div.rotate', { 'aria-live': 'polite' }, icon('phone'), 'Turn your phone upright to play'),
 )
 startRouter(app)

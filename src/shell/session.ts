@@ -28,6 +28,8 @@ export interface SessionOpts {
   onNext?: () => void
   /** e.g. "Game 2 of 5" */
   banner?: string
+  /** Computer vs computer, no ready screen, `speed`× time (end-to-end tests). */
+  demo?: { speed: number }
 }
 
 type Phase = 'ready' | 'count' | 'play' | 'result'
@@ -103,6 +105,7 @@ export class Session {
     this.input?.detach()
     this.fx.clear()
     const s = seed ?? (Math.random() * 2 ** 32) >>> 0
+    delete document.body.dataset.result
     this.input = new Input(this.stage, this.o.mode, this.local)
     this.input.attach(this.stage.canvas)
     if (this.guest && this.o.link) {
@@ -121,7 +124,7 @@ export class Session {
       rng: new Rng(s),
       mode: this.o.mode,
       difficulty: store.settings.difficulty,
-      bots: [false, this.o.mode === '1p' && this.o.meta.ai],
+      bots: this.o.demo ? [true, true] : [false, this.o.mode === '1p' && this.o.meta.ai],
       teams: this.teams && this.o.mode === '2p',
       names: this.names(),
       local: this.local,
@@ -136,6 +139,12 @@ export class Session {
     this.steps = 0
     this.rounds++
     if (this.host) this.o.link?.send('round', { id: this.o.meta.id, seed: s })
+    if (this.o.demo) {
+      this.loop.speed = this.o.demo.speed
+      this.clearOverlay()
+      this.phase = 'play'
+      return
+    }
     this.showReady()
   }
 
@@ -406,7 +415,7 @@ export class Session {
     const mode = this.o.mode
     const [rn, bn] = this.names()
     // Only human-vs-human games feed the red/blue scoreboard.
-    if (mode !== '1p' && r.winner !== 'draw') {
+    if (mode !== '1p' && !this.o.demo && r.winner !== 'draw') {
       store.score[r.winner]++
     }
     store.plays[this.o.meta.id] = (store.plays[this.o.meta.id] ?? 0) + 1
@@ -426,6 +435,7 @@ export class Session {
               : `${r.winner === 0 ? rn : bn} wins`
             : `${r.winner === 0 ? rn : bn} wins!`
     const cls = r.winner === 'draw' ? 'win-draw' : r.winner === 0 ? 'win-red' : 'win-blue'
+    document.body.dataset.result = String(r.winner)
     const mk = (top: boolean) => {
       const half = h(`div.half${top ? '.top' : ''}`)
       half.append(h('h2.result-title', title))

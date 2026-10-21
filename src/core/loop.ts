@@ -11,6 +11,8 @@ export class Loop {
   private acc = 0
   private running = false
   paused = false
+  /** Simulation speed multiplier (tests run computer-vs-computer games fast). */
+  speed = 1
 
   constructor(
     private step: (dt: number) => void,
@@ -53,14 +55,15 @@ export class Loop {
     const frameDt = Math.min(0.1, (now - this.last) / 1000)
     this.last = now
     if (!this.paused) {
-      this.acc += frameDt
+      this.acc += frameDt * this.speed
+      const max = 5 * this.speed
       let n = 0
-      while (this.acc >= STEP && n < 5) {
+      while (this.acc >= STEP && n < max) {
         this.step(STEP)
         this.acc -= STEP
         n++
       }
-      if (n === 5) this.acc = 0
+      if (n === max) this.acc = 0
     }
     this.draw(this.paused ? 1 : this.acc / STEP, frameDt)
   }
