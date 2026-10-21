@@ -303,8 +303,8 @@ function drawMark(g: Draw, s: State, m: Mark, best: boolean): void {
       () => {
         g.line(-20, -20, 20, 20, alpha('#000000', 0.4), 14)
         g.line(-20, 20, 20, -20, alpha('#000000', 0.4), 14)
-        g.line(-20, -22, 20, 18, SIDE[0].main, 10)
-        g.line(-20, 18, 20, -22, SIDE[0].main, 10)
+        g.line(-20, -22, 20, 18, col.light, 10)
+        g.line(-20, 18, 20, -22, col.light, 10)
       },
       pop,
     )
@@ -338,10 +338,24 @@ function drawMark(g: Draw, s: State, m: Mark, best: boolean): void {
     },
     pop,
   )
-  // Tag just in front of the divot (the flag stands behind it), upright for the thrower.
+}
+
+/**
+ * A mark's distance tag, just in front of the divot (the flag stands behind it),
+ * upright for the thrower. Drawn after the cages so a throw landing near the
+ * other circle still shows its number. Only the best throw keeps its tag; the
+ * others show it briefly, so tags of neighbouring flags never pile up.
+ */
+function drawTag(g: Draw, s: State, m: Mark, best: boolean): void {
+  if (m.foul) return
+  const age = s.t - m.at
+  const pop = outBack(Math.min(1, Math.max(0, age) / 0.35))
+  const col = SIDE[m.side]
+  const tagA = best ? pop : pop * Math.min(1, Math.max(0, (2.6 - age) / 0.4))
+  if (tagA <= 0) return
   const tx = m.x
   const ty = m.y + 50
-  g.alpha(pop, () => {
+  g.alpha(tagA, () => {
     g.forSide(m.side, tx, ty, () => {
       const label = `${fmt(m.range)} m`
       const w = g.measure(label, 36, 700) + 30
@@ -352,7 +366,7 @@ function drawMark(g: Draw, s: State, m: Mark, best: boolean): void {
 }
 
 /** The other side's best, drawn across the live sector: the distance to beat. */
-function drawToBeat(g: Draw, s: State): void {
+function drawToBeat(g: Draw, s: State, part: 'arc' | 'label'): void {
   if (s.phase === 'beat' || s.endAt >= 0) return
   const side = s.turn
   const rival = other(side)
@@ -360,8 +374,12 @@ function drawToBeat(g: Draw, s: State): void {
   if (r <= 0) return
   const a = ATHLETE[side] as { x: number; y: number }
   const f = forward(side)
-  g.arc(a.x, a.y, r, f - SECTOR - 0.03, f + SECTOR + 0.03, alpha('#000000', 0.3), 14)
-  g.arc(a.x, a.y, r, f - SECTOR - 0.03, f + SECTOR + 0.03, SIDE[rival].light, 8)
+  if (part === 'arc') {
+    g.arc(a.x, a.y, r, f - SECTOR - 0.03, f + SECTOR + 0.03, alpha('#000000', 0.3), 14)
+    g.arc(a.x, a.y, r, f - SECTOR - 0.03, f + SECTOR + 0.03, SIDE[rival].light, 8)
+    return
+  }
+  // The label rides over the flags, so a flag landing on it never hides the number.
   g.forSide(side, a.x + Math.cos(f) * (r - 46), a.y + Math.sin(f) * (r - 46), () => {
     const label = `To beat ${fmt(r)}`
     const w = g.measure(label, 34, 700) + 56
@@ -403,7 +421,7 @@ function drawFlight(g: Draw, s: State): void {
 export function render(g: Draw, s: State, now: number, human: [boolean, boolean]): void {
   drawField(g, s)
   for (const side of [0, 1] as Side[]) drawCircle(g, side, s.turn === side)
-  drawToBeat(g, s)
+  drawToBeat(g, s, 'arc')
   for (const side of [0, 1] as Side[]) drawWindow(g, s, side, now)
   const bests = s.marks.map((m) => !m.foul && m.range > 0 && m.range === s.best[m.side])
   // Far marks first so nearer flags overlap them.
@@ -413,10 +431,12 @@ export function render(g: Draw, s: State, now: number, human: [boolean, boolean]
   s.marks.forEach((m, i) => {
     if (bests[i]) drawMark(g, s, m, true)
   })
+  drawToBeat(g, s, 'label')
   for (const side of [0, 1] as Side[]) {
     drawCage(g, side)
     drawAthlete(g, s, side, now)
   }
+  s.marks.forEach((m, i) => drawTag(g, s, m, bests[i] ?? false))
   for (const side of [0, 1] as Side[]) drawReadout(g, s, side)
   drawFlight(g, s)
   drawMedal(g, s)

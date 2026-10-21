@@ -271,12 +271,12 @@ export function drawBow(g: Draw, s: State, side: Side): void {
     g.shadow(b.x + 8, b.y + 50, 90, 26, 0.45)
     g.at(b.x, b.y, rot, () =>
       g.at(0, kick, 0, () => {
-        // Stock in the team's paint, with a metal band.
-        g.rrect(-30, -12, 60, 112, 24, shade(col.main, -0.45))
-        g.rrect(-26, -16, 52, 108, 22, col.main)
-        g.rrect(-18, -10, 14, 90, 7, alpha('#ffffff', 0.25))
-        g.rrect(-28, 30, 56, 12, 4, '#9aa3b5')
-        g.sideMark(side, 0, 74, 13, C.white)
+        // Stock in the team's paint, with a metal band (short enough to clear the name pill).
+        g.rrect(-30, -12, 60, 92, 24, shade(col.main, -0.45))
+        g.rrect(-26, -16, 52, 88, 22, col.main)
+        g.rrect(-18, -10, 14, 70, 7, alpha('#ffffff', 0.25))
+        g.rrect(-28, 24, 56, 12, 4, '#9aa3b5')
+        g.sideMark(side, 0, 56, 13, C.white)
         // Rail.
         g.rrect(-12, -150, 24, 156, 8, shade(C.woodDark, -0.25))
         g.rrect(-8, -146, 6, 148, 3, alpha('#ffffff', 0.15))
@@ -299,13 +299,15 @@ export function drawBow(g: Draw, s: State, side: Side): void {
       }),
     )
     if (ready < 1) {
+      // Reload gauge: an arc over the limbs, toward the targets, never across the HUD row.
+      g.arc(b.x, b.y + 4, 172, Math.PI + 0.3, Math.PI * 2 - 0.3, alpha(C.ink, 0.45), 10)
       g.arc(
         b.x,
-        b.y,
-        180,
-        -Math.PI / 2,
-        -Math.PI / 2 + Math.PI * 2 * ready,
-        alpha(col.light, 0.8),
+        b.y + 4,
+        172,
+        Math.PI + 0.3,
+        Math.PI + 0.3 + (Math.PI - 0.6) * ready,
+        alpha(col.light, 0.9),
         8,
       )
     }

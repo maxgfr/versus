@@ -60,6 +60,9 @@ export interface State {
   rot: number
   lastDropper: Side | null
   aiming: boolean
+  /** When the tower fell and who knocked it over, for the "Toppled!" stamp. */
+  fellAt: number
+  loser: Side | null
 }
 
 class AnimalStack extends BaseGame<State> {
@@ -104,6 +107,8 @@ class AnimalStack extends BaseGame<State> {
       rot: 0,
       lastDropper: null,
       aiming: false,
+      fellAt: -1,
+      loser: null,
     }
   }
 
@@ -282,11 +287,14 @@ class AnimalStack extends BaseGame<State> {
     const winner = other(loser)
     const note = `${s.n} block${s.n === 1 ? '' : 's'} stacked`
     s.wins[winner]++
+    s.fellAt = this.time
+    s.loser = loser
     s.phase = 'settle'
     s.phaseAt = this.time
     if (matchWinner(s.wins, this.goal) !== null) {
       const o: { note: string; delay: number; score?: [number, number] } = { note, delay: 2.2 }
       if (this.goal > 1) o.score = [s.wins[0], s.wins[1]]
+      this.ctx.fx.confetti(winner)
       this.finish(winner, o)
       return
     }
@@ -317,6 +325,8 @@ class AnimalStack extends BaseGame<State> {
     s.ha = 0
     s.aiming = false
     s.lastDropper = null
+    s.fellAt = -1
+    s.loser = null
     s.phase = 'aim'
     s.phaseAt = this.time
     s.resetAt = -1
@@ -368,6 +378,8 @@ class AnimalStack extends BaseGame<State> {
       loading: this.world === null && s.bodies.length === 0 && this.ctx.mode !== 'online',
       aiming: s.aiming,
       glyph: PIECES[s.piece]?.glyph ?? '',
+      fellAt: s.fellAt,
+      loser: s.loser,
     }
     drawScene(g, view)
     if (this.goal > 1) {

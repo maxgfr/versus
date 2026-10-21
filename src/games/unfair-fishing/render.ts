@@ -61,7 +61,7 @@ export function renderFishing(g: Draw, rods: [Rod, Rod], now: number, v: View): 
 function background(g: Draw, now: number): void {
   const view = g.stage.view
   g.fillView('#123326')
-  g.halves(mix('#123326', C.red, 0.14), mix('#123326', C.blue, 0.16))
+  g.halves(mix('#123326', C.red, 0.3), mix('#123326', C.blue, 0.34))
   // Bushes on the banks.
   for (let i = 0; i < 26; i++) {
     const x = ((i * 337) % 1000) + 10
@@ -415,7 +415,8 @@ function meter(g: Draw, side: Side, rod: Rod, now: number): void {
   g.text('slack', x0 + 44, y - 60, { size: 34, weight: 600, color: alpha(C.white, 0.6), angle })
   g.text('snap', x1 - 40, y - 60, { size: 34, weight: 600, color: alpha(C.white, 0.6), angle })
   const p = mashPulse(rod.mash, now, 0.12)
-  g.text('MASH!', W / 2 - 70, y - 120, {
+  // Beside the pier on the bank, not over its planks.
+  g.text('MASH!', 205, y - 132, {
     size: 64 * (1 + p * 0.12),
     weight: 700,
     color: C.white,

@@ -347,11 +347,15 @@ function tally(g: Draw, side: Side, t: Tank, time: number): void {
   const y = Math.min(BUTTON.y - 40, hudY(g, 0) - 100)
   const last = Math.max(t.landAt[0], t.landAt[1])
   inFrame(g, side, () => {
+    // A recessed track so the score reads as a row of slots, even when empty.
+    const tw = (RINGS - 1) * gap + 64
+    g.rrect(W / 2 - tw / 2, y - 26, tw, 52, 26, alpha(C.ink, 0.55))
+    g.rrect(W / 2 - tw / 2, y - 26, tw, 52, 26, undefined, alpha(SIDE[side].main, 0.35), 3)
     for (let i = 0; i < RINGS; i++) {
       const x = W / 2 - ((RINGS - 1) * gap) / 2 + i * gap
       const id = ids[i]
       if (id === undefined) {
-        g.path((c) => c.ellipse(x, y, 17, 9, 0, 0, Math.PI * 2), undefined, alpha(C.white, 0.2), 6)
+        g.path((c) => c.ellipse(x, y, 17, 9, 0, 0, Math.PI * 2), undefined, alpha(C.white, 0.3), 6)
         continue
       }
       const fresh = i === ids.length - 1 ? time - last : 9

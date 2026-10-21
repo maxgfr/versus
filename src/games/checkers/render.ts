@@ -226,7 +226,7 @@ function drawTray(g: Draw, geo: Geom, s: State, side: Side, inFlight: number): v
     )
     g.rrect(-TRAY_W / 2, -52, TRAY_W, 104, 52, undefined, alpha(SIDE[side].main, 0.3), 4)
     if (took <= 0 && inFlight === 0)
-      g.text('Captures', 0, 2, { size: 34, weight: 600, color: alpha(C.white, 0.22) })
+      g.text('Captures', 0, 2, { size: 36, weight: 600, color: alpha(C.white, 0.36) })
     for (let i = 0; i < took; i++)
       drawChecker(g, pieceOf, -TRAY_W / 2 + 60 + i * TRAY_GAP, -6, TRAY_R)
     if (lead > 0) {

@@ -194,9 +194,17 @@ export function drawTray(g: Draw, s: State, now: number): void {
 
   // Locked turn: the other rows go dark, the row in play glows.
   if (s.lock >= 0 && !over) {
+    // Washed out, not muddied: draining the colour first keeps the dark veil from
+    // turning orange and yellow into brown and olive.
+    const c = g.ctx
     for (let r = 0; r < ROWS; r++) {
       if (r === s.lock) continue
-      g.rrect(X0 - 16, Y0 + r * CELL + 2, COLS * CELL + 32, CELL - 4, 50, alpha(C.ink, 0.5))
+      const ry = Y0 + r * CELL + 2
+      c.save()
+      c.globalCompositeOperation = 'saturation'
+      g.rrect(X0 - 16, ry, COLS * CELL + 32, CELL - 4, 50, alpha('#808080', 0.68))
+      c.restore()
+      g.rrect(X0 - 16, ry, COLS * CELL + 32, CELL - 4, 50, alpha(C.ink, 0.4))
     }
     const ry = Y0 + s.lock * CELL
     const p = 0.5 + 0.5 * Math.sin(now * 7)

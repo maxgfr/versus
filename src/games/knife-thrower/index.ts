@@ -66,10 +66,16 @@ class KnifeThrower extends BaseGame<State> {
     }
     for (const e of advance(s, dt, this.ctx.rng)) this.juice(e)
     if (s.ended && !this.over) {
-      const out = s.logs[0].lives <= 0 || s.logs[1].lives <= 0
+      const out = s.logs[0].lives <= 0 ? 0 : s.logs[1].lives <= 0 ? 1 : null
       this.finish(s.winner ?? 'draw', {
         score: [...s.cleared] as [number, number],
-        note: out ? 'Out of lives' : 'All stages cleared',
+        // Say whose lives ran out: the score is stages cleared, so a 2–2 needs the reason.
+        note:
+          out === null
+            ? 'All stages cleared'
+            : s.logs[0].lives <= 0 && s.logs[1].lives <= 0
+              ? 'Both out of lives'
+              : `${this.ctx.names[out]} ran out of lives`,
         delay: 2.2,
       })
     }

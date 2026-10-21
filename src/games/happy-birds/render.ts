@@ -2,7 +2,8 @@ import type { Side } from '../../core/game.ts'
 import { outBack, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
-import { laneHud, LANE_H, LANE_W, repeatX } from '../../engines/runner/index.ts'
+import { LANE_H, LANE_W, repeatX } from '../../engines/runner/index.ts'
+import { counterPill, laneCard, winPips } from './hud.ts'
 import { BIRD_R, BIRD_X, type Bird, GROUND, pipe, PIPE_W, SPACING, FIRST } from './rules.ts'
 
 export interface LaneView {
@@ -20,6 +21,8 @@ export interface LaneView {
   matchOver: boolean
   /** Round wins needed to take the match. */
   target: number
+  /** Game time this lane's bird last cleared a pipe (the counter pops). */
+  passAt: number
 }
 
 type View = { x0: number; y0: number; x1: number; y1: number }
@@ -158,50 +161,17 @@ function drawBird(g: Draw, side: Side, b: Bird, time: number, phase: LaneView['p
   })
 }
 
-/**
- * Round pips beside the counter. The lane's outer-left corner near the midline is the pause button's.
- * Long matches shrink the pips and anchor the row to the lane's right edge, so they stay on screen.
- */
-function winPips(g: Draw, side: Side, wins: number, target: number): void {
-  const long = target > 4
-  const r = long ? 11 : 19
-  const gap = long ? 30 : 52
-  const x0 = long ? LANE_W - 50 - (target - 1) * gap : LANE_W - 230
-  // A dark plate behind the row, so the pips read over the pipes.
-  const pad = 16
-  const span = (target - 1) * gap
-  g.rrect(
-    x0 - r - pad,
-    70 - r - pad,
-    span + 2 * (r + pad),
-    2 * (r + pad),
-    r + pad,
-    alpha(C.ink, 0.5),
-  )
-  for (let i = 0; i < target; i++) {
-    const x = x0 + i * gap
-    const on = i < wins
-    g.circle(x, 70, r, on ? SIDE[side].main : alpha(C.ink, 0.35))
-    if (on) g.circle(x - r * 0.26, 70 - r * 0.26, r * 0.32, alpha('#ffffff', 0.65))
-    else g.ring(x, 70, r, alpha('#ffffff', 0.55), 4)
-  }
+/** A crown bobs over the round's winner. */
+function crown(g: Draw, b: Bird, t: number): void {
+  const k = outBack(prog(t, 0, 0.35))
+  if (k <= 0.01) return
+  g.emoji('👑', BIRD_X + 6, b.y - BIRD_R * 2.4 + Math.sin(t * 5) * 8, 62 * k, 0.15)
 }
 
-function centreCard(g: Draw, text: string, sub: string, y: number, color: string, t: number): void {
-  const s = outBack(prog(t, 0, 0.35))
-  g.at(
-    LANE_W / 2 + 110,
-    y,
-    0,
-    () => {
-      const w = Math.max(420, g.measure(text, 76, 700) + 120)
-      g.rrect(-w / 2, -82, w, sub ? 176 : 150, 44, alpha(C.ink, 0.82))
-      g.text(text, 0, -14, { size: 76, weight: 700, color })
-      if (sub) g.text(sub, 0, 58, { size: 36, weight: 600, color: alpha(C.white, 0.8) })
-    },
-    s,
-  )
-}
+/** Round sockets x: a long match packs them toward the lane's right edge (the hud does the packing). */
+const PIPS_X = LANE_W - 200
+/** Centre cards sit right of the bird, mid-sky. */
+const CARD_X = LANE_W / 2 + 110
 
 export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const b = o.bird
@@ -219,24 +189,42 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   ground(g, v, scroll)
   drawBird(g, side, b, o.time, o.phase)
 
-  laneHud(g, side, b.pipes, o.bot ? 'Computer' : o.name, LANE_W / 2 - 40, 70)
-  winPips(g, side, o.wins, o.target)
+  const won = o.phase === 'end' && o.roundWinner === side
+  if (won) crown(g, b, o.since)
 
+  counterPill(g, side, b.pipes, o.bot ? 'Computer' : o.name, LANE_W / 2 - 60, 70, o.time - o.passAt)
+  winPips(g, side, o.wins, o.target, PIPS_X, 66, won ? o.since : 9)
+
+  const cy = LANE_H * 0.47
   if (o.phase === 'wait') {
     const label = o.round > 1 ? `Round ${o.round}` : o.bot ? 'Ready…' : 'Tap to flap!'
-    centreCard(
-      g,
-      label,
-      o.bot ? '' : o.round > 1 ? 'Tap to flap!' : 'Tap your half',
-      LANE_H * 0.47,
-      C.white,
-      o.since,
-    )
+    laneCard(g, label, CARD_X, cy, {
+      t: o.since,
+      sub: o.bot ? '' : o.round > 1 ? `${o.wins} – ${o.rivalWins}` : 'Tap your half',
+      accent: SIDE[side].main,
+    })
     if (!o.bot) g.emoji('👆', BIRD_X, 530 + Math.sin(o.time * 8) * 16, 84)
-  } else if (o.phase === 'end' && !o.matchOver) {
+  } else if (o.phase === 'end') {
     const w = o.roundWinner
-    const text = w === 'draw' ? 'Draw!' : w === side ? 'Round won!' : 'Crashed!'
+    const done = o.matchOver
+    const text =
+      w === 'draw'
+        ? 'Draw!'
+        : w === side
+          ? done
+            ? 'Winner!'
+            : 'Round won!'
+          : done
+            ? 'Beaten!'
+            : 'Crashed!'
     const col = w === 'draw' ? C.white : w === side ? C.yellow : SIDE[side].light
-    centreCard(g, text, `${o.wins} – ${o.rivalWins}`, LANE_H * 0.45, col, o.since)
+    laneCard(g, text, CARD_X, cy, {
+      t: o.since - 0.15,
+      sub: `${o.wins} – ${o.rivalWins}`,
+      color: col,
+      accent: w === side ? C.yellow : SIDE[side].main,
+      emoji: w === side ? (done ? '🏆' : '⭐') : w === 'draw' ? '🤝' : '💫',
+      big: done,
+    })
   }
 }

@@ -81,7 +81,8 @@ function drawCourse(g: Draw, geo: Geo, time: number): void {
       [1, shade(C.wood, -0.1)],
     ]),
   )
-  g.rrect(x0 - RIM + 10, y0 - RIM + 6, w + RIM * 2 - 20, 14, 7, alpha('#ffffff', 0.25))
+  // Varnish highlight along the top edge, kept inside the rounded corners.
+  g.rrect(x0 - RIM + 84, y0 - RIM + 6, w + RIM * 2 - 168, 12, 6, alpha('#ffffff', 0.25))
   // Bolts at the corners.
   for (const [bx, by] of [
     [x0 - 12, y0 - 12],
@@ -443,14 +444,14 @@ export function drawCard(g: Draw, side: Side, look: Look): void {
   const done = look.card[side]
   const col = SIDE[side]
   g.forSide(side, W / 2, y, () => {
-    g.rrect(-width / 2 - 16, -48, width + 32, 98, 30, alpha(C.ink, 0.82))
-    g.rrect(-width / 2 - 16, -48, width + 32, 98, 30, undefined, alpha(col.main, 0.35), 4)
+    g.rrect(-width / 2 - 16, -54, width + 32, 110, 32, alpha(C.ink, 0.82))
+    g.rrect(-width / 2 - 16, -54, width + 32, 110, 32, undefined, alpha(col.main, 0.35), 4)
     for (let i = 0; i < n; i++) {
       const x = -width / 2 + cw * (i + 0.5)
       const current = i === look.hole
-      if (current) g.tile(x - cw / 2 + 6, -40, cw - 12, 82, 20, shade(col.main, -0.35), 6)
-      g.text(String(i + 1), x, -16, {
-        size: 28,
+      if (current) g.tile(x - cw / 2 + 6, -46, cw - 12, 92, 20, shade(col.main, -0.35), 6)
+      g.text(String(i + 1), x, -20, {
+        size: 34,
         weight: 600,
         color: alpha(C.white, current ? 0.85 : 0.45),
       })
@@ -467,7 +468,7 @@ export function drawCard(g: Draw, side: Side, look: Look): void {
         value = '·'
         color = alpha(C.white, 0.3)
       }
-      g.text(value, x, 20, { size: 40, weight: 700, color })
+      g.text(value, x, 22, { size: 42, weight: 700, color })
     }
   })
 }

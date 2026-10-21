@@ -1,3 +1,4 @@
+import { outBack } from '../../core/fx/ease.ts'
 import type { Mode, Side } from '../../core/game.ts'
 import { namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -39,6 +40,8 @@ export interface SceneView {
   loading: boolean
   aiming: boolean
   glyph: string
+  fellAt: number
+  loser: Side | null
 }
 
 const SEA_Y = ISLAND.top + 330
@@ -179,10 +182,46 @@ function nextPreview(g: Draw, side: Side, k: number, at: { x: number; y: number 
   const p = PIECES[k]
   if (!p) return
   g.forSide(side, at.x, at.y, () => {
-    g.rrect(-62, -62, 124, 124, 30, alpha(C.ink, 0.6))
-    g.text('next', 0, -40, { size: 24, weight: 600, color: alpha('#ffffff', 0.75) })
-    g.emoji(p.glyph, 0, 12, 60)
+    g.rrect(-74, -74, 148, 148, 34, alpha(C.ink, 0.62))
+    g.rrect(-74, -74, 148, 148, 34, undefined, alpha('#ffffff', 0.2), 3)
+    g.text('next', 0, -46, { size: 34, weight: 600, color: alpha('#ffffff', 0.85) })
+    g.emoji(p.glyph, 0, 16, 64)
   })
+}
+
+/** The fall: a "Toppled!" stamp for whoever knocked it over, upright for them. */
+function toppled(g: Draw, v: SceneView): void {
+  if (v.fellAt < 0 || v.loser === null) return
+  const loser = v.loser
+  const t = v.time - v.fellAt
+  const s = outBack(Math.min(1, t / 0.35))
+  const a = Math.min(1, t * 6)
+  const stamp = (side: Side | undefined, y: number) =>
+    g.forSide(side, W / 2, y, () =>
+      g.alpha(a, () =>
+        g.at(
+          0,
+          0,
+          -0.1,
+          () => {
+            const label = 'Toppled!'
+            const w = g.measure(label, 84, 700) + 200
+            g.rrect(-w / 2, -72, w, 144, 48, shade(SIDE[loser].main, -0.45))
+            g.rrect(-w / 2, -72, w, 144, 48, undefined, C.yellow, 8)
+            g.emoji('💥', -w / 2 + 80, 0, 88)
+            g.text(label, 60, 4, {
+              size: 84,
+              weight: 700,
+              color: C.white,
+              drop: alpha('#000', 0.35),
+            })
+          },
+          s,
+        ),
+      ),
+    )
+  if (v.mode === '2p') stamp(loser, loser === 0 ? MID + 280 : MID - 280)
+  else stamp(undefined, MID - 280)
 }
 
 export function drawScene(g: Draw, v: SceneView): void {
@@ -221,5 +260,6 @@ export function drawScene(g: Draw, v: SceneView): void {
     rotateButton(g, side, ROTATE_BTN[side])
     nextPreview(g, side, v.next, NEXT_AT[side])
   }
+  toppled(g, v)
   if (v.loading) g.both('Loading…', { size: 48, color: shade(C.white, -0.2) })
 }

@@ -136,8 +136,24 @@ function drawBoard(g: Draw, side: Side): void {
     )
   })
   // The pit and its dark curtain at the far end.
-  g.rrect(x0 - 10, TOP - 4, x1 - x0 + 20, pitY - TOP + 22, 12, shade(C.ink, -0.45))
+  const pitH = pitY - TOP + 22
+  g.rrect(
+    x0 - 10,
+    TOP - 4,
+    x1 - x0 + 20,
+    pitH,
+    12,
+    g.lin(0, TOP, 0, TOP + pitH, [
+      [0, '#05030a'],
+      [0.7, shade(C.ink, -0.3)],
+      [1, shade(col.main, -0.7)],
+    ]),
+  )
+  // Curtain folds hanging in the pit, and the lit lip of the pin deck.
+  for (let x = x0 + 14; x < x1; x += 34)
+    g.rect(x, TOP + 8, 12, pitH - 22, alpha(shade(col.main, -0.5), 0.35))
   g.rect(x0 - 10, TOP - 4, x1 - x0 + 20, 12, shade(col.main, -0.4))
+  g.rect(x0, TOP + pitH - 10, x1 - x0, 4, alpha(col.light, 0.55))
   // Pin deck spots.
   for (let s = 0; s < 10; s++) {
     const r = s < 1 ? 0 : s < 3 ? 1 : s < 6 ? 2 : 3
@@ -244,7 +260,7 @@ function drawSheet(g: Draw, lane: Lane, side: Side, time: number): void {
   g.rrect(x, top - 12, w, rowH * rows + 74, 26, alpha(C.ink, 0.82))
   g.rrect(x, top - 12, w, rowH * rows + 74, 26, undefined, alpha(col.main, 0.35), 4)
   say(g, side, 'FRAME', x + w / 2, top + 24, {
-    size: 30,
+    size: 34,
     weight: 700,
     color: alpha(C.white, 0.6),
   })
@@ -257,10 +273,10 @@ function drawSheet(g: Draw, lane: Lane, side: Side, time: number): void {
       g.tile(x + 8, y - 6, w - 16, rowH - 8, 18, shade(col.main, -0.3 + p * 0.08), 6)
     }
     const big = rowH >= 80
-    say(g, side, String(f + 1), x + 24, y + (big ? 16 : rowH / 2 - 8), {
-      size: 28,
+    say(g, side, String(f + 1), x + 26, y + (big ? 16 : rowH / 2 - 8), {
+      size: 34,
       weight: 600,
-      color: alpha(C.white, 0.55),
+      color: alpha(C.white, active ? 0.85 : 0.55),
     })
     const sy = y + (big ? 16 : rowH / 2 - 8)
     const s0 = symbol(rolls, 0)

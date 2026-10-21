@@ -113,11 +113,26 @@ function tileBlock(
   }
 }
 
+/** A soft pool of team-coloured light under the play area: the floodlit table. */
+function floodlight(g: Draw, side: Side, x: number, y: number, r: number): void {
+  g.circle(
+    x,
+    y,
+    r,
+    g.rad(x, y, 0, r, [
+      [0, alpha(SIDE[side].main, 0.2)],
+      [0.55, alpha(SIDE[side].main, 0.07)],
+      [1, alpha(SIDE[side].main, 0)],
+    ]),
+  )
+}
+
 export function drawBoard(g: Draw, l: Layout, v: BoardView): void {
   const { x0, y0, c, gap } = l
   const pitch = c + gap
   const size = pitch * SIZE - gap
   const col = SIDE[v.side]
+  floodlight(g, v.side, x0 + size / 2, y0 + size / 2, size * 1.05)
   // The tray the tiles sit in: a lipped frame in the side's colour around a sunken well.
   g.rrect(x0 - 28, y0 - 14, size + 56, size + 56, 46, alpha('#000000', 0.4))
   g.rrect(

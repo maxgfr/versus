@@ -142,12 +142,16 @@ export function drawPad(g: Draw, p: PadView): void {
         breathe * (1 + press * 0.06),
         breathe * (1 - press * 0.1),
       )
+      // The hint steps aside entirely while a message holds the pad, so it never
+      // ghosts under the message's subtitle.
       if (p.label) {
-        g.text(p.label, 0, by + R + 74, {
-          size: 38,
-          weight: 600,
-          color: p.labelColor ?? alpha(C.white, ready ? 0.8 : 0.45),
-        })
+        g.alpha(1 - msgIn, () =>
+          g.text(p.label, 0, by + R + 74, {
+            size: 38,
+            weight: 600,
+            color: p.labelColor ?? alpha(C.white, ready ? 0.8 : 0.45),
+          }),
+        )
       }
     })
     if (msg && msgIn > 0) plaque(g, msg, col.main)

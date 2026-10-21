@@ -35,7 +35,7 @@ export const TRAY = trayLayout(5, 900, 108)
 /** Two columns: the upper section (with its bonus line) on the left, the lower section on the right. */
 export const SHEET = sheetLayout(2, 7, 1046, 70, 900)
 export const ROLL = { x: 500, y: 1612, w: 300, h: 92 }
-const TOTAL = { x: 178, w: 236, h: 84 }
+const TOTAL = { x: 184, w: 280, h: 84 }
 const PIPS_X = 832
 
 /** Row index for each sheet cell, row-major (cell = r * 2 + c). -1 is the upper bonus line. */
@@ -373,10 +373,10 @@ function drawTotal(g: Draw, side: Side, s: State, now: number, rounds: number): 
             -TOTAL.w / 2 + 20,
             24,
             {
-              size: 24,
+              size: 28,
               weight: 600,
               align: 'left',
-              color: alpha(C.white, 0.6),
+              color: alpha(C.white, 0.68),
             },
           )
           g.text(shown, TOTAL.w / 2 - 18, 0, {

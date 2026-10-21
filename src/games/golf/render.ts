@@ -286,6 +286,14 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
     drawBall(g, side, b.x, b.y, BALL_R)
   }
 
+  // The pin, lifted out while a ball drops.
+  const lift =
+    s.phase === 'beat' && sunkAge < 1.2 ? Math.sin(Math.min(1, sunkAge / 0.5) * Math.PI) * 30 : 0
+  // Whichever stands nearer the bottom of the screen is drawn last, so a golfer
+  // putting beside the pin is never speared by the flag (or hidden behind it).
+  let golferY = -Infinity
+  let golfer: (() => void) | null = null
+
   // The golfer on turn stands behind the ball and looks where it goes.
   if (!doneAt(s)) {
     const side = s.turn
@@ -304,14 +312,16 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
           : look.aim && look.aim.power > 0.8
             ? 'wow'
             : 'happy'
-    if (!(s.holed[side] && s.phase !== 'beat'))
-      drawGolfer(g, side, from, dir, look.aim?.power ?? 0, swing, mood)
+    if (!(s.holed[side] && s.phase !== 'beat')) {
+      const d = dir
+      golferY = from.y - d.dy * 26 - d.dx * 78
+      golfer = () => drawGolfer(g, side, from, d, look.aim?.power ?? 0, swing, mood)
+    }
   }
-
-  // The pin, lifted out while a ball drops.
-  const lift =
-    s.phase === 'beat' && sunkAge < 1.2 ? Math.sin(Math.min(1, sunkAge / 0.5) * Math.PI) * 30 : 0
+  const golferFirst = golferY + 40 < h.cup.y
+  if (golfer && golferFirst) golfer()
   drawFlag(g, h.cup, s.wind, now, lift)
+  if (golfer && !golferFirst) golfer()
 
   if (look.aim) {
     const side = s.turn

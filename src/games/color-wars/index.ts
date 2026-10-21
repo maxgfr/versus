@@ -1,12 +1,12 @@
 import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
-import { bigScore, pips } from '../../core/hud.ts'
+import { hudY, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import { cellAt, cellCenter, geom, tableBackdrop, TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
-import { FLIGHT, hint, notice, renderBoard } from './render.ts'
+import { cellCount, FLIGHT, hint, notice, renderBoard } from './render.ts'
 import {
   apply,
   burst,
@@ -305,8 +305,11 @@ class ColorWars extends TurnGame<State> {
     const live = !this.over && s.endedAt < 0 && s.pending.length === 0 && !this.isBot(s.turn)
     renderBoard(g, s, GEO, this.time, live)
     this.drawTurns(g, undefined, s.endedAt < 0 && s.pending.length === 0)
-    bigScore(g, 0, cellsOf(this.pos(), 0), { x: 130 })
-    bigScore(g, 1, cellsOf(this.pos(), 1), { x: 870 })
+    const counts = [cellsOf(this.pos(), 0), cellsOf(this.pos(), 1)]
+    for (const side of [0, 1] as Side[]) {
+      const n = counts[side] ?? 0
+      cellCount(g, side, n, side === 0 ? 130 : 870, hudY(g, side), n > (counts[other(side)] ?? 0))
+    }
     // Round wins sit in the same corner as the cell count; a single round shows none.
     if (this.target > 1) {
       for (const side of [0, 1] as Side[]) {

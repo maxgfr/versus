@@ -151,7 +151,7 @@ class WhackAMole extends BaseGame<State> {
     const p = frame(side, x, y)
     // "Above" the hole in the owner's frame, the same in every mode. Floats drift up for their reader,
     // so in 1P blue's top row would otherwise start at the top edge and run off it.
-    const above = frame(side, x, y - 120)
+    const above = frame(side, x, y - 60)
     if (c.kind === 'mole') {
       audio.play('hit', 0.95 + this.ctx.rng.next() * 0.12)
       audio.play('pop', 1.1 + this.ctx.rng.next() * 0.12)

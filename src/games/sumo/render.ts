@@ -21,6 +21,23 @@ export function backdrop(g: Draw): void {
       [1, shade(SIDE[0].main, -0.78)],
     ]),
   )
+  // A tatami floor round the mound: long mats in a staggered weave, each
+  // player's end tinted in their colour.
+  const v = g.stage.view
+  const mw = 250
+  const mh = 125
+  for (let row = Math.floor(v.y / mh) - 1; row * mh < v.y + v.h; row++) {
+    const y = row * mh
+    const off = row % 2 ? mw / 2 : 0
+    const tint = y + mh / 2 < RING.y ? SIDE[1].main : SIDE[0].main
+    const d = Math.abs(y + mh / 2 - RING.y) / 900
+    for (let x = Math.floor((v.x - off) / mw) * mw + off - mw; x < v.x + v.w; x += mw) {
+      if ((row + Math.round((x - off) / mw)) % 2)
+        g.rect(x, y, mw, mh, alpha(tint, 0.02 + 0.04 * Math.min(1, d)))
+      g.rect(x, y, mw, 3, alpha('#000000', 0.16))
+      g.rect(x, y, 3, mh, alpha('#000000', 0.16))
+    }
+  }
   // The floodlight over the ring.
   g.fillView(
     g.rad(W / 2, RING.y, 160, 1050, [
@@ -53,7 +70,7 @@ export function drawRing(g: Draw, radius: number, t: number): void {
       [1, shade(CLAY, -0.08)],
     ]),
   )
-  g.rrect(x - m + 10, y - m + 8, m * 2 - 20, 30, 15, alpha('#ffffff', 0.12))
+  g.rrect(x - m + 58, y - m + 8, m * 2 - 116, 22, 11, alpha('#ffffff', 0.12))
   // Team corners: each side owns its two corners of the mound.
   for (const side of [0, 1] as Side[]) {
     const cy = side === 0 ? y + m - 64 : y - m + 64

@@ -1,4 +1,4 @@
-import { banner, clock } from '../../core/hud.ts'
+import { banner } from '../../core/hud.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { inOutCubic, lerp, outCubic, prog } from '../../core/fx/ease.ts'
@@ -256,14 +256,14 @@ class Blocks extends BaseGame<State> {
         this.ctx.fx.ring(mid.x, mid.y, C.yellow, 420)
         this.ctx.fx.flash(C.yellow, 0.12 + 0.04 * r.lines)
       }
-      this.ctx.fx.float(
-        `+${clearPoints(r.lines)}`,
-        at.x,
-        at.y + (f.angle ? 90 : -90),
-        C.yellow,
-        64,
-        side,
+      // Above the placed piece, but low enough that its drift stays inside the
+      // grid: a clear on the top row must not float off into the header.
+      const top = toWorld(
+        f,
+        l.gx0 + (sx / r.placed.length) * l.cs,
+        Math.max(l.gy0 + 120, l.gy0 + (sy / r.placed.length) * l.cs - 90),
       )
+      this.ctx.fx.float(`+${clearPoints(r.lines)}`, top.x, top.y, C.yellow, 64, side)
       this.ctx.fx.shake(0.12 + 0.05 * r.lines)
       this.ctx.audio.play('score', 1 + r.lines * 0.12)
     } else {
@@ -353,7 +353,7 @@ class Blocks extends BaseGame<State> {
       back: b.back,
       dead: b.dead,
       deadAt: b.deadAt,
-      clock: this.solo ? this.left() : null,
+      clock: this.left(),
       hint: !this.isBot(side) && !b.dead && b.score === 0 && this.time < 8,
       best: this.solo ? (store.records.blocks ?? null) : null,
       now: this.time,
@@ -371,13 +371,16 @@ class Blocks extends BaseGame<State> {
       })
     }
     if (!this.solo) {
+      // Each board carries its own clock in its header row: a single midline
+      // clock sat on blue's tray whenever blue's half is not turned (online, demo).
       g.rect(g.stage.view.x - 2, MID - 7, g.stage.view.w + 4, 14, C.ink)
-      clock(g, this.left(), MID)
     }
-    // Final whistle: "Time!" over each board.
+    // Final whistle: "Time!" over each board still playing (a stuck board
+    // already shows its "No moves left" card there).
     if (this.time >= this.target) {
       const k = prog(this.time - this.target, 0, 0.2)
       for (const side of this.sides()) {
+        if (this.s.boards[side].dead) continue
         const f = this.frames[side]
         const l = layout(f.w, f.h)
         const at = toWorld(f, f.w / 2, l.gy0 + (N * l.cs) / 2)

@@ -18,6 +18,7 @@ import {
   NUT_COLOURS,
   nutY,
   place,
+  rodTop,
 } from './render.ts'
 import {
   buildPuzzle,
@@ -354,13 +355,19 @@ class NutsAndBolts extends PuzzleRace<State> {
       badAt: b.badAt,
       now: this.time,
     })
-    const base = geo.bases[geo.bases.length - 1] ?? h
     if (!hand && b.moves === 0 && this.time < 8 && !this.isBot(side) && this.s.endAt < 0) {
-      g.text('Tap a bolt to lift its top nuts, then tap where they go', w / 2, base + 92 * geo.k, {
-        size: 34,
-        weight: 600,
-        color: alpha(C.white, 0.85),
-        maxWidth: w - 80,
+      // In the open space above the bolts, clear of the edge HUD (round pips).
+      const y = rodTop(geo, geo.bases[0] ?? h) - 90 * geo.k
+      const text = 'Tap a bolt to lift its top nuts, then tap where they go'
+      const tw = Math.min(w - 60, g.measure(text, 34, 600) + 56)
+      g.alpha(Math.min(1, 8 - this.time), () => {
+        g.rrect(w / 2 - tw / 2, y - 32, tw, 64, 32, alpha(C.ink, 0.72))
+        g.text(text, w / 2, y + 2, {
+          size: 34,
+          weight: 600,
+          color: alpha(C.white, 0.92),
+          maxWidth: tw - 40,
+        })
       })
     }
     // The rival got there first.

@@ -2,6 +2,7 @@ import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import { W } from '../../core/stage.ts'
 import { tableBackdrop, TurnGame } from '../../engines/board/index.ts'
 import {
   buttonHit,
@@ -26,6 +27,8 @@ export interface State extends DiceState {
   sheets: [Sheet, Sheet]
   /** Last row scored, for the pop animation. */
   last: { side: Side; cat: number; at: number } | null
+  /** When and how the match ended, for the closing plaques. */
+  end: { at: number; winner: Side | 'draw' } | null
 }
 
 class Yazy extends TurnGame<State> {
@@ -41,6 +44,7 @@ class Yazy extends TurnGame<State> {
       turn: this.ctx.rng.chance(0.5) ? 0 : 1,
       sheets: [emptySheet(), emptySheet()],
       last: null,
+      end: null,
     }
   }
 
@@ -130,7 +134,15 @@ class Yazy extends TurnGame<State> {
     if (full(s.sheets[0], this.target) && full(s.sheets[1], this.target)) {
       const a = total(s.sheets[0])
       const b = total(s.sheets[1])
-      this.finish(a === b ? 'draw' : a > b ? 0 : 1, { score: [a, b], delay: 1.6 })
+      const winner = a === b ? 'draw' : a > b ? 0 : 1
+      s.end = { at: this.time, winner }
+      if (winner !== 'draw') {
+        fx.confetti(winner)
+        const w = frame(winner, W / 2, SHEET.y + SHEET.h / 2)
+        fx.burst(w.x, w.y, C.yellow, { count: 30, speed: 700, size: 14, kind: 'square' })
+      }
+      fx.shake(0.3)
+      this.finish(winner, { score: [a, b], delay: 2.4 })
       return
     }
     resetTurn(s)

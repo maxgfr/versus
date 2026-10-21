@@ -269,12 +269,15 @@ function strongman(g: Draw, side: Side, mood: Mood, squash: number, angle: numbe
   const col = SIDE[side]
   inFrame(g, side, () => {
     const { x, r } = STRONG
-    const y = STRONG.y - jump
-    g.shadow(x, STRONG.y + r * 0.98, r * (1 - jump / 400), r * 0.26)
+    // The blob turns to face its reader; its feet, shadow and hop follow it.
+    const ta = textAngle(g, side)
+    const up = ta ? -1 : 1
+    const y = STRONG.y - jump * up
+    g.shadow(x, STRONG.y + up * r * 0.98, r * (1 - jump / 400), r * 0.26)
     g.blob(x, y, r, col.main, {
       mood,
-      angle: textAngle(g, side),
-      look: textAngle(g, side) ? [-0.6, 0.5] : [0.6, -0.5],
+      angle: ta,
+      look: ta ? [-0.6, 0.5] : [0.6, -0.5],
       sx: 1 + squash * 0.14,
       sy: 1 - squash * 0.16,
     })
@@ -310,7 +313,9 @@ function strongman(g: Draw, side: Side, mood: Mood, squash: number, angle: numbe
       g.rrect(-24, -50, 12, 100, 6, alpha('#ffffff', 0.2))
     })
     g.ball(px, py, 20, shade(col.main, 0.12), 0.6)
-    g.ball(px - 34, py + 8, 18, shade(col.main, 0.05), 0.5)
+    // The lower hand grips below the face, so it never covers an eye (the
+    // blob turns upright for the viewer when its player is the computer).
+    g.ball(px - 20, py + 30, 18, shade(col.main, 0.05), 0.5)
   })
 }
 

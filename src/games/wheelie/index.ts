@@ -184,8 +184,9 @@ class Wheelie extends RunnerGame<State> {
   }
 
   private milestone(side: Side, b: Bike, t: Terrain): void {
-    // Behind the rider's head: clear of the cards on the right.
-    const at = this.at(side, 240, Math.min(260, BASE_Y - heightAt(t, b.d) - 400))
+    // Behind the rider's head, left of the balance gauge (x ≥ 280) and clear of
+    // the cards on the right; floored so its 90-unit drift stays under the run pips.
+    const at = this.at(side, 150, Math.max(230, BASE_Y - heightAt(t, b.d) - 400))
     this.ctx.audio.play('coin', 1 + Math.min(0.6, b.wheelie / 40000))
     this.ctx.fx.float(`${metres(b.wheelie)} m`, at.x, at.y, SIDE[side].light, 52, side)
   }

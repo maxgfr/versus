@@ -583,13 +583,13 @@ export function renderLudo(
       g.at(HOME_ROW.x, HOME_ROW.y, ta, () => {
         g.rrect(-300, -62, 600, 124, 62, alpha(C.ink, 0.55))
         g.rrect(-300, -62, 600, 124, 62, undefined, alpha(SIDE[side].main, on ? 0.6 : 0.25), 4)
-        g.text('HOME', -222, 2, { size: 30, weight: 700, color: alpha(C.white, 0.6) })
+        g.text('HOME', -218, 2, { size: 34, weight: 700, color: alpha(C.white, 0.6) })
         for (let i = 0; i < TOKENS; i++) {
           const x0 = -110 + i * 76
           if (i < home) pawn(g, side, x0, 4, 26)
           else {
             g.ellipse(x0, 22, 24, 9, alpha('#000000', 0.35))
-            g.alpha(0.16, () => pawn(g, side, x0, 4, 26))
+            g.alpha(0.3, () => pawn(g, side, x0, 4, 26))
           }
         }
         g.text(`${home}/${TOKENS}`, 226, 2, {

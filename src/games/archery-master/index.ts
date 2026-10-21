@@ -65,10 +65,14 @@ class ArcheryMaster extends TurnGame<State> {
       const s = this.s
       const w =
         winner(s) ?? (s.apples[0] === s.apples[1] ? 'draw' : s.apples[0] > s.apples[1] ? 0 : 1)
+      // The big score already shows the apples: the note says how it ended.
+      const out = s.lives[0] <= 0 ? 0 : s.lives[1] <= 0 ? 1 : null
       const note =
-        s.lives[0] <= 0 || s.lives[1] <= 0
-          ? `${s.apples[0]} to ${s.apples[1]} · out of lives`
-          : `${s.apples[0]} to ${s.apples[1]} apples`
+        out !== null
+          ? s.lives[0] <= 0 && s.lives[1] <= 0
+            ? 'Both out of lives'
+            : `${this.ctx.names[out]} ran out of lives`
+          : `First to ${s.target} apples`
       this.finish(w, { score: [...s.apples] as [number, number], note, delay: 1.8 })
     }
   }

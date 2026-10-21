@@ -41,9 +41,9 @@ const FRAME = { x: BOARD.x - 28, y: BOARD.y - 28, w: TRAY_X + 74 + 22 - (BOARD.x
 FRAME.h = BOARD.h + 56
 
 /** Dice pad, pip count and borne-off count, in red's frame (below the board); blue's is turned 180°. */
-export const DICE = { x: 500, y: 1462, size: 112, gap: 128, hit: { w: 470, h: 230 } }
-const PIPS_AT = { x: 138, y: 1462 }
-const OFF_AT = { x: 862, y: 1462 }
+export const DICE = { x: 500, y: 1500, size: 112, gap: 128, hit: { w: 470, h: 230 } }
+const PIPS_AT = { x: 138, y: 1500 }
+const OFF_AT = { x: 862, y: 1500 }
 
 /** Seconds the dice tumble after a roll. */
 export const ROLL_T = 0.6
@@ -499,7 +499,7 @@ export function renderDice(
         )
       // Pip count on the left, borne-off count on the right.
       g.at(PIPS_AT.x, PIPS_AT.y, ta, () => {
-        g.text('PIPS', 0, -44, { size: 28, weight: 700, color: alpha(C.white, 0.55) })
+        g.text('PIPS', 0, -48, { size: 34, weight: 700, color: alpha(C.white, 0.55) })
         g.text(pips(v.pos, s), 0, 14, {
           size: 64,
           weight: 700,
@@ -508,7 +508,7 @@ export function renderDice(
         })
       })
       g.at(OFF_AT.x, OFF_AT.y, ta, () => {
-        g.text('OFF', 0, -44, { size: 28, weight: 700, color: alpha(C.white, 0.55) })
+        g.text('OFF', 0, -48, { size: 34, weight: 700, color: alpha(C.white, 0.55) })
         g.text(v.pos.off[s], -8, 14, {
           size: 64,
           weight: 700,
@@ -517,7 +517,7 @@ export function renderDice(
           align: 'right',
         })
         g.text(`/${CHECKERS}`, -4, 24, {
-          size: 32,
+          size: 34,
           weight: 600,
           color: alpha(C.white, 0.55),
           align: 'left',

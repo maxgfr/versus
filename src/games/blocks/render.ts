@@ -107,7 +107,7 @@ export interface PanelView {
   back: { slot: number; x: number; y: number; at: number } | null
   dead: boolean
   deadAt: number
-  /** Seconds left, shown in the header in solo (2P shows the shared clock on the midline). */
+  /** Seconds left, shown in each board's header row. */
   clock: number | null
   hint: boolean
   /** The solo record (null when there is none or not solo). */
@@ -180,14 +180,29 @@ function timerPill(g: Draw, x: number, y: number, sec: number, now: number): voi
 
 const COMBO = ['', '', 'Double!', 'Triple!', 'Quad!', 'Mega!', 'Mega!']
 
+/** A soft pool of team-coloured light under the play area: the floodlit table. */
+function floodlight(g: Draw, side: Side, x: number, y: number, r: number): void {
+  g.circle(
+    x,
+    y,
+    r,
+    g.rad(x, y, 0, r, [
+      [0, alpha(SIDE[side].main, 0.2)],
+      [0.55, alpha(SIDE[side].main, 0.07)],
+      [1, alpha(SIDE[side].main, 0)],
+    ]),
+  )
+}
+
 export function drawPanel(g: Draw, w: number, h: number, v: PanelView): void {
   const l = layout(w, h)
   const col = SIDE[v.side]
   const { cs, gx0: x0, gy0: y0 } = l
   const size = cs * N
   const dim = v.dead ? prog(v.now - v.deadAt, 0, 0.5) : 0
+  floodlight(g, v.side, x0 + size / 2, y0 + size / 2, size * 1.0)
 
-  // Header: name, score (and the clock in solo).
+  // Header: name, clock, score.
   g.sideMark(v.side, 170, l.headerY, 14, col.light)
   g.text(v.name, 200, l.headerY + 2, {
     size: 40,

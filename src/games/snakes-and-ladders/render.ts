@@ -102,7 +102,7 @@ function drawNumbers(g: Draw): void {
       continue
     }
     g.at(p.x, p.y, g.orient(side), () =>
-      g.text(n, -off, -off + 2, { size: 26, weight: 800, color: alpha(C.ink, 0.6) }),
+      g.text(n, -off, -off + 2, { size: 30, weight: 800, color: alpha(C.ink, 0.62) }),
     )
   }
 }
@@ -410,9 +410,14 @@ function drawPad(g: Draw, side: Side, home: boolean): void {
     g.rrect(PAD.x - 86, PAD.y - 80, 172, 168, 44, alpha('#000000', 0.3))
     g.rrect(PAD.x - 86, PAD.y - 80, 172, 168, 44, undefined, alpha(col, home ? 0.25 : 0.6), 5)
     g.at(PAD.x, PAD.y + 58, textAngle(g, side), () =>
-      g.text('START', 0, 0, { size: 26, weight: 700, color: alpha(C.white, home ? 0.3 : 0.6) }),
+      g.text('START', 0, 0, { size: 34, weight: 700, color: alpha(C.white, home ? 0.3 : 0.6) }),
     )
   })
+  // Once the token is out on the board, a faint ghost keeps the well from reading as empty.
+  if (home) {
+    const at = frame(side, PAD.x, PAD.y - 6)
+    g.alpha(0.2, () => pawn(g, side, at.x, at.y, BOARD.cell * 0.38))
+  }
 }
 
 /** Everything on the board, tokens and dice, drawn for this frame. */
@@ -513,7 +518,7 @@ export function renderSnakes(
           }),
         )
       g.at(COUNT.x, COUNT.y, ta, () => {
-        g.text('SQUARE', 0, -50, { size: 28, weight: 700, color: alpha(C.white, 0.55) })
+        g.text('SQUARE', 0, -52, { size: 34, weight: 700, color: alpha(C.white, 0.55) })
         g.text(s.pos[side] === 0 ? '–' : s.pos[side], 0, 14, {
           size: 76,
           weight: 700,

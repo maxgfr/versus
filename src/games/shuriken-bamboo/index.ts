@@ -1,12 +1,11 @@
 import { floatFor } from '../../core/fx/fx.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
-import { clock, namePill } from '../../core/hud.ts'
+import { namePill } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C } from '../../core/render/palette.ts'
-import { MID } from '../../core/stage.ts'
 import { Bot } from './bot.ts'
-import { drawScore, drawTimeUp, render } from './render.ts'
+import { drawClock, drawScore, drawTimeUp, render } from './render.ts'
 import {
   type Aim,
   advance,
@@ -165,7 +164,7 @@ class ShurikenBamboo extends BaseGame<Game> {
       for (const f of s.fallen) if (f.side === side) last = Math.max(last, s.t - f.t)
       drawScore(g, s, side, w === side, last, this.time)
     }
-    if (s.left > 0) clock(g, s.left, MID)
+    if (s.left > 0) for (const side of [0, 1] as Side[]) drawClock(g, side, s.left, this.time)
     drawTimeUp(g, s.endAt >= 0 ? this.time - s.endAt : 0)
   }
 }

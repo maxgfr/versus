@@ -200,3 +200,32 @@ export function hint(g: Draw, side: Side, text: string, a: number): void {
     g.sideText(side, text, 500, y, { size: 40, weight: 600, color: alpha(C.white, 0.7) }),
   )
 }
+
+/**
+ * A side's cell count at its edge: a little team tile carrying that side's bead
+ * (circle red, square blue) beside the figure, upright for its player. The
+ * leader's figure lights up.
+ */
+export function cellCount(
+  g: Draw,
+  side: Side,
+  n: number,
+  x: number,
+  y: number,
+  lead: boolean,
+): void {
+  const col = SIDE[side]
+  g.forSide(side, x, y, () => {
+    g.rrect(-74, -22, 56, 56, 14, shade(col.main, -0.45))
+    g.rrect(-74, -28, 56, 56, 14, col.main)
+    g.alpha(0.35, () => g.rrect(-68, -24, 44, 18, 9, '#ffffff'))
+    dot(g, side, -46, -2, 13)
+    g.text(n, 2, 4, {
+      size: 76,
+      weight: 700,
+      align: 'left',
+      color: lead ? col.light : col.main,
+      drop: alpha('#000000', 0.35),
+    })
+  })
+}

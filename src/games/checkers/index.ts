@@ -14,7 +14,7 @@ import {
   TurnGame,
 } from '../../engines/board/index.ts'
 import type { Pos } from './bot.ts'
-import { moveTime, renderCheckers, type Route } from './render.ts'
+import { moveTime, renderCheckers, trayY, type Route } from './render.ts'
 import {
   apply,
   type Cell,
@@ -70,6 +70,16 @@ const ROUND_TIME = 3.2
 
 // Kept off the pause button's column at the left edge.
 const GEO = geom(8, 8, 760, 760, MID)
+
+/**
+ * A banner both players can read, laid over each player's captures tray so the
+ * final position stays in view (one copy per half in local 2P, else red's).
+ */
+function shout(g: Draw, text: string, size: number, a: number): void {
+  const gap = trayY(GEO, 0) - MID
+  if (g.flipTop) banner(g, undefined, text, MID, { size, alpha: a, gap })
+  else banner(g, 0, text, MID + gap, { size, alpha: a })
+}
 const centre = (sq: number) => cellCenter(GEO, colOf(sq), rowOf(sq))
 
 const COMBO = ['', '', 'Double jump!', 'Triple jump!', 'Quadruple!', 'Unstoppable!']
@@ -389,10 +399,10 @@ class Checkers extends TurnGame<State> {
       // A round that decides nothing yet: the ending, then who took the round.
       if (s.roundText && since >= arrive + 1.2) {
         const a = prog(since, arrive + 1.2, arrive + 1.5)
-        if (a > 0) banner(g, undefined, s.roundText, MID, { size: 58, alpha: a })
+        if (a > 0) shout(g, s.roundText, 58, a)
       } else if (s.endText) {
         const a = prog(since, arrive + 0.2, arrive + 0.5)
-        if (a > 0) banner(g, undefined, s.endText, MID, { size: 64, alpha: a })
+        if (a > 0) shout(g, s.endText, 64, a)
       }
     }
   }

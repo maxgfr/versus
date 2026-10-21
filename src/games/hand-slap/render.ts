@@ -214,7 +214,24 @@ function roleChip(g: Draw, side: Side, att: boolean, now: number, swapAge: numbe
           30,
           att ? C.yellow : shade(SIDE[side].main, -0.4),
         )
-        g.text(att ? '✋' : '🛡️', -w / 2 + 40, 2 + bob, { size: 32 })
+        // Drawn icons in the chip's own ink, not emoji: a red emoji shield on a
+        // blue chip (or a yellow hand on the yellow chip) clashed and vanished.
+        const ix = -w / 2 + 40
+        const iy = bob
+        if (att) {
+          g.rrect(ix - 13, iy - 6, 26, 24, 9, C.ink)
+          for (let i = 0; i < 4; i++) g.rrect(ix - 13 + i * 7, iy - 22, 6, 20, 3, C.ink)
+          g.at(ix - 12, iy + 4, -0.7, () => g.rrect(-4, -14, 8, 18, 4, C.ink))
+        } else {
+          g.poly(
+            [ix - 15, iy - 18, ix + 15, iy - 18, ix + 15, iy - 2, ix, iy + 20, ix - 15, iy - 2],
+            C.white,
+          )
+          g.poly(
+            [ix - 9, iy - 12, ix + 9, iy - 12, ix + 9, iy - 3, ix, iy + 10, ix - 9, iy - 3],
+            SIDE[side].main,
+          )
+        }
         g.text(text, 22, 3 + bob, { size: 40, weight: 700, color: att ? C.ink : C.white })
       },
       pop,
@@ -310,6 +327,8 @@ export function renderSlap(
   if (m.kind === 'swap' && age < 1.1 && !o.over) {
     const a = 1 - prog(age, 0.8, 1.1)
     for (const side of [0, 1] as Side[]) {
+      // Only the halves somebody reads (a demo with two bots keeps both).
+      if (o.bots[side] && !o.bots[other(side)]) continue
       const p = frame(side, W / 2, MID + 520)
       banner(g, side, side === d.att ? 'Your turn to slap!' : 'Roles swap!', p.y, {
         size: 50,

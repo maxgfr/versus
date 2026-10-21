@@ -43,7 +43,24 @@ function drawPitch(g: Draw, side: Side, active: boolean, t: number): void {
   // The foul line sits in front of the thrower, toward the board.
   const lineY = side === 0 ? o.y - 96 : o.y + 96
   g.dashed(o.x - 330, lineY, o.x + 330, lineY, alpha(col.main, 0.6), 8, [30, 18])
-  g.rrect(o.x - 140, o.y - 70, 280, 140, 40, alpha(shade(col.main, -0.55), 0.75))
+  // A padded throwing mat: a lip, a stitched seam and the team's mark woven in.
+  g.rrect(o.x - 140, o.y - 62, 280, 140, 40, alpha('#000000', 0.3))
+  g.rrect(o.x - 140, o.y - 70, 280, 140, 40, alpha(shade(col.main, -0.55), 0.85))
+  g.rrect(
+    o.x - 140,
+    o.y - 70,
+    280,
+    70,
+    40,
+    g.lin(0, o.y - 70, 0, o.y, [
+      [0, alpha('#ffffff', 0.08)],
+      [1, alpha('#ffffff', 0)],
+    ]),
+  )
+  g.ctx.setLineDash([14, 10])
+  g.rrect(o.x - 122, o.y - 52, 244, 104, 26, undefined, alpha(col.light, active ? 0.45 : 0.22), 4)
+  g.ctx.setLineDash([])
+  g.sideMark(side, o.x, o.y, 22, alpha(col.main, active ? 0.18 : 0.3))
   g.rrect(o.x - 140, o.y - 70, 280, 140, 40, undefined, alpha(col.main, active ? 0.8 : 0.3), 5)
   if (active) {
     g.alpha(0.25 + 0.15 * Math.sin(t * 5), () =>
@@ -94,8 +111,20 @@ export function drawBoard(g: Draw, glow: number): void {
   g.sideMark(0, x + w / 2, y + h - 54, 26, alpha('#ffffff', 0.85))
   // Painted border.
   g.rrect(x + 16, y + 16, w - 32, h - 32, 16, undefined, alpha('#ffffff', 0.35), 5)
-  // Gloss.
-  g.alpha(0.18, () => g.rrect(x + 10, y + 8, w * 0.35, h - 16, 18, '#ffffff'))
+  // Varnish sheen: a soft diagonal light falling off across the deck (no hard edge).
+  g.rrect(
+    x - 6,
+    y - 6,
+    w + 12,
+    h + 12,
+    28,
+    g.lin(x, y, x + w * 0.9, y + h * 0.5, [
+      [0, alpha('#ffffff', 0.2)],
+      [0.35, alpha('#ffffff', 0.05)],
+      [0.6, alpha('#ffffff', 0)],
+      [1, alpha('#000000', 0.1)],
+    ]),
+  )
   drawHole(g, glow)
 }
 

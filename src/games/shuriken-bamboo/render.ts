@@ -383,6 +383,31 @@ export function drawScore(
   })
 }
 
+/**
+ * The match clock in a player's own HUD row (opposite their score plaque), so
+ * it never sits over the bamboo in the middle of the grove.
+ */
+export function drawClock(g: Draw, side: Side, left: number, now: number): void {
+  const sec = Math.max(0, Math.ceil(left))
+  const label = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+  const urgent = sec <= 5
+  const y = hudY(g, side, 74)
+  const x = side === 0 ? W - 120 : 120
+  const beat = urgent ? Math.max(0, Math.sin(now * Math.PI * 2)) * 0.12 : 0
+  g.forSide(side, x, y, () =>
+    g.at(
+      0,
+      0,
+      0,
+      () => {
+        g.rrect(-82, -40, 164, 80, 26, alpha(C.ink, 0.78))
+        g.text(label, 0, 3, { size: 48, weight: 700, color: urgent ? C.yellow : C.white })
+      },
+      1 + beat,
+    ),
+  )
+}
+
 /** "Time!" stamped over the grove as the gong goes, readable from both ends. */
 export function drawTimeUp(g: Draw, end: number): void {
   if (end <= 0 || end > 1.6) return

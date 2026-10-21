@@ -25,14 +25,35 @@ export function teamLayout(side: Side, pos: number): { x: number; y: number }[] 
 }
 
 function field(g: Draw): void {
+  // A floodlit pitch at night: dark mowed bands, each end owned by its team.
   const v = g.stage.view
-  g.fillView(C.grass)
-  // Mowed bands.
+  g.fillView(shade(C.grassDark, -0.6))
   const band = 120
   for (let y = Math.floor(v.y / band) * band; y < v.y + v.h; y += band * 2) {
-    g.rect(v.x - 2, y, v.w + 4, band, shade(C.grass, -0.07))
+    g.rect(v.x - 2, y, v.w + 4, band, alpha(shade(C.grass, -0.45), 0.5))
   }
-  g.vignette(0.35)
+  for (const side of [0, 1] as Side[]) {
+    const y = knotY(side === 0 ? 1 : -1)
+    const y0 = side === 0 ? y : v.y - 2
+    const y1 = side === 0 ? v.y + v.h + 2 : y
+    g.rect(
+      v.x - 2,
+      y0,
+      v.w + 4,
+      y1 - y0,
+      g.lin(0, y, 0, side === 0 ? y1 : y0, [
+        [0, alpha(SIDE[side].dark, 0.28)],
+        [1, alpha(SIDE[side].dark, 0.6)],
+      ]),
+    )
+  }
+  g.fillView(
+    g.rad(W / 2, MID, 80, 760, [
+      [0, alpha('#fff4d8', 0.16)],
+      [1, alpha('#fff4d8', 0)],
+    ]),
+  )
+  g.vignette(0.4)
 }
 
 function mud(g: Draw, splash: number): void {

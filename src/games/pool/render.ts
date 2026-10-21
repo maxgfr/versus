@@ -357,14 +357,21 @@ function drawInHand(g: Draw, w: World, turn: Side, human: boolean): void {
   }
 }
 
+/**
+ * The HUD row sits tight to each edge so the pills clear the end rail and its
+ * pockets (the table runs almost edge to edge).
+ */
+const HUD_INSET = 40
+
 /** Each player's tray: their group's balls still to pot (or "Open table"), and rack pips. */
 function tray(g: Draw, w: World, side: Side, target: number): void {
-  const y = hudY(g, side)
+  const y = hudY(g, side, HUD_INSET)
   const ang = textAngle(g, side)
   const grp: Group = w.groups[side]
   inFrame(g, side, () => {
     const yy = frame(side, 0, y).y
-    g.rrect(560, yy - 34, 380, 68, 34, alpha(C.ink, 0.78))
+    g.rrect(560, yy - 34, 380, 68, 34, alpha(C.ink, 0.86))
+    g.rrect(560, yy - 34, 380, 68, 34, undefined, alpha(SIDE[side].main, 0.45), 3)
     if (grp === null) {
       g.at(750, yy, ang, () =>
         g.text('Open table', 0, 2, { size: 34, weight: 600, color: alpha(C.white, 0.7) }),
@@ -384,12 +391,15 @@ function tray(g: Draw, w: World, side: Side, target: number): void {
           g.text('Black!', 64, 2, { size: 30, weight: 700, color: C.yellow }),
         )
     }
-    // Racks won, only when the match is longer than one rack.
+    // Racks won, only when the match is longer than one rack: a column of
+    // pips in the corner beside the name pill, clear of the rail.
     if (target > 1) {
+      const gap = 26
       for (let i = 0; i < target; i++) {
-        const x = 560 + 190 + (i - (target - 1) / 2) * 34
+        const x = 80 + (i - (target - 1) / 2) * gap
         const on = i < w.wins[side]
-        g.circle(x, yy - 58, 11, on ? SIDE[side].main : alpha(C.white, 0.18))
+        g.circle(x, yy, 10, on ? SIDE[side].main : alpha(C.white, 0.18))
+        if (on) g.circle(x - 3, yy - 3, 3.5, alpha(C.white, 0.6))
       }
     }
   })
@@ -501,7 +511,8 @@ export function render(g: Draw, look: Look, human: [boolean, boolean]): void {
     namePill(g, side, look.names[side], {
       active: look.active[side] && !look.end,
       text: look.status[side],
-      x: side === 0 ? 290 : W - 290,
+      x: side === 0 ? 310 : W - 310,
+      inset: HUD_INSET,
     })
     tray(g, w, side, look.target)
   }

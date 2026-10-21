@@ -17,7 +17,7 @@ export const CHIPS = { x0: 70, y0: 1440, w: 206, h: 58, gap: 12, rowGap: 68, col
 /** HUD row: the secret card on the left, the Guess button on the right (frame x). */
 export const SECRET_X = 120
 export const GUESS_X = 868
-export const SECRET = { w: 96, h: 120 }
+export const SECRET = { w: 110, h: 128 }
 export const GUESS = { w: 196, h: 78 }
 /** Frame x of the "faces left" counter in the HUD row. */
 const COUNT_X = 282
@@ -77,7 +77,7 @@ export function hudFrameY(stage: Stage, side: Side): number {
 }
 
 /** Frame y of the secret card (a touch higher than the row so its lip clears the edge). */
-export const secretFrameY = (stage: Stage, side: Side): number => hudFrameY(stage, side) - 8
+export const secretFrameY = (stage: Stage, side: Side): number => hudFrameY(stage, side) - 12
 
 /** Frame point → world point, the same mapping `frame` uses for every side. */
 export const hudWorld = (stage: Stage, side: Side, x: number): { x: number; y: number } =>
@@ -545,10 +545,16 @@ export function renderSecret(
         g.rrect(-w / 2 + 8, -h / 2 + 8, w - 16, h - 16, 11, undefined, alpha('#ffffff', 0.45), 4)
         if (o.holdHint) {
           // Hold to peek: an eye and the word.
-          g.ellipse(0, -14, 26, 17, C.white)
-          g.circle(0, -14, 11, C.ink)
-          g.circle(-4, -18, 4, C.white)
-          g.text('HOLD', 0, 32, { size: 24, weight: 700, color: C.white })
+          g.ellipse(0, -20, 28, 18, C.white)
+          g.circle(0, -20, 12, C.ink)
+          g.circle(-4, -24, 4, C.white)
+          g.text('HOLD', 0, 32, {
+            size: 34,
+            weight: 700,
+            color: C.white,
+            drop: alpha(C.ink, 0.35),
+            maxWidth: w - 14,
+          })
         } else {
           g.text('?', 0, 4, { size: 60, weight: 700, color: C.white, drop: alpha(C.ink, 0.4) })
         }

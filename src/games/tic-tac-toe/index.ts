@@ -23,6 +23,8 @@ export interface State {
 }
 
 const GEO = geom(3, 3, 780, 780, MID)
+/** Round banners sit this far from the midline: between the board and each player's pips. */
+const BANNER_GAP = 560
 
 export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 9 }
 
@@ -113,7 +115,10 @@ class TicTacToe extends TurnGame<State> {
     pips(g, 1, s.wins[1], this.target, { inset: 170 })
     if (s.roundText && !this.over) {
       const a = Math.min(1, (this.time - s.endedAt) * 4)
-      banner(g, undefined, s.roundText, MID, { size: 58, alpha: a })
+      // Clear of the board, so the winning line stays in view: one copy per half in local 2P.
+      const o = { size: 58, alpha: a }
+      if (g.flipTop) banner(g, undefined, s.roundText, MID, { ...o, gap: BANNER_GAP })
+      else banner(g, 0, s.roundText, MID + BANNER_GAP, o)
     }
   }
 }

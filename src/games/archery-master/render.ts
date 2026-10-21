@@ -60,8 +60,22 @@ export function drawRange(g: Draw, gap: number): void {
   for (const side of [0, 1] as Side[]) {
     const y = lineY(side, gap)
     const col = SIDE[side]
-    // Shooting mat and line.
-    g.rrect(W / 2 - 150, y - 70, 300, 140, 40, alpha(shade(col.main, -0.55), 0.7))
+    // Shooting mat: a round woven rug in the team colour under bow and archer.
+    const my = side === 0 ? y + 30 : y - 30
+    g.ellipse(W / 2 + 8, my + 12, 172, 112, alpha('#000000', 0.3))
+    g.ellipse(W / 2, my, 172, 112, shade(col.main, -0.6))
+    g.path(
+      (c) => c.ellipse(W / 2, my, 146, 90, 0, 0, Math.PI * 2),
+      undefined,
+      alpha(col.main, 0.5),
+      6,
+    )
+    g.path(
+      (c) => c.ellipse(W / 2, my, 112, 66, 0, 0, Math.PI * 2),
+      undefined,
+      alpha(col.main, 0.22),
+      4,
+    )
     const front = side === 0 ? y - 96 : y + 96
     g.dashed(150, front, W - 150, front, alpha(col.main, 0.6), 7, [26, 16])
   }

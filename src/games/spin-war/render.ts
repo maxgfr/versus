@@ -22,6 +22,8 @@ export interface Look {
   time: number
   /** Per top: 0..1 white flash after a clash. */
   flash: number[]
+  /** Which sides are people (they get the first-round coaching). */
+  human?: [boolean, boolean]
 }
 
 const RIM = 46
@@ -36,6 +38,21 @@ function drawBowl(g: Draw): void {
       [1, shade(C.red, -0.8)],
     ]),
   )
+  // Diamond-plate steel floor round the bowl, each end tinted for its player.
+  const v = g.stage.view
+  const step = 64
+  for (let row = Math.floor(v.y / step) - 1; row * step < v.y + v.h; row++) {
+    const py = row * step
+    const tint = py < MID ? SIDE[1].light : SIDE[0].light
+    const off = row % 2 ? step / 2 : 0
+    for (let px = Math.floor(v.x / step) * step - step + off; px < v.x + v.w; px += step) {
+      const a = (row + Math.round(px / step)) % 2 ? 0.6 : -0.6
+      g.at(px, py, a, () => {
+        g.rrect(-16, -4, 32, 8, 4, alpha('#000000', 0.22))
+        g.rrect(-16, -5, 32, 6, 3, alpha(tint, 0.06))
+      })
+    }
+  }
   // Floodlight on the table under the bowl.
   g.fillView(
     g.rad(W / 2, MID, BOWL.r * 0.6, BOWL.r * 1.9, [
@@ -221,6 +238,33 @@ export function render(g: Draw, w: World, look: Look): void {
       active: w.phase === 'over' && w.result === side,
     })
     pips(g, side, w.wins[side], look.target)
+  }
+  // First-round coaching for each person, in the floor space at their end.
+  if (look.human && w.round === 1 && w.phase === 'play' && w.t < 5) {
+    const a = clamp01((5 - w.t) / 0.5)
+    for (const side of [0, 1] as Side[]) {
+      if (!look.human[side]) continue
+      g.alpha(a, () =>
+        g.forSide(
+          side,
+          W / 2,
+          side === 0 ? MID + BOWL.r + RIM + 150 : MID - BOWL.r - RIM - 150,
+          () => {
+            g.text('Drag in your half to steer', 0, -24, {
+              size: 40,
+              weight: 700,
+              color: C.white,
+              drop: alpha('#000000', 0.45),
+            })
+            g.text('Knock the other top out!', 0, 30, {
+              size: 34,
+              weight: 600,
+              color: alpha(C.white, 0.75),
+            })
+          },
+        ),
+      )
+    }
   }
   // Round call at the start of each round.
   if (w.phase === 'play' && w.t < 1.3) {

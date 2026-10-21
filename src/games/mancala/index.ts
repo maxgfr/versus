@@ -144,7 +144,17 @@ class Mancala extends TurnGame<State> {
     const s = this.s
     const win = s.winner
     if (win === null) return
-    if (win !== 'draw') s.wins[win]++
+    if (win !== 'draw') {
+      s.wins[win]++
+      // The fuller store bursts the moment the count is in.
+      const c = pitCentre(STORE[win])
+      const fx = this.ctx.fx
+      fx.burst(c.x, c.y, SIDE[win].main, { count: 26, speed: 560, size: 13, life: 0.7 })
+      fx.burst(c.x, c.y, C.yellow, { count: 12, speed: 420, size: 8, life: 0.5, kind: 'spark' })
+      fx.ring(c.x, c.y, SIDE[win].light, 260)
+      fx.flash(SIDE[win].main, 0.2)
+      this.ctx.audio.play('score')
+    } else this.ctx.audio.play('draw')
     // A single game ends the match as it always did, draws included.
     const decided = win === 'draw' ? this.target <= 1 : s.wins[win] >= this.target
     if (decided) {

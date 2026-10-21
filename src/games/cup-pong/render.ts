@@ -38,7 +38,13 @@ export function drawTable(g: Draw): void {
       ]),
     )
   }
-  g.rrect(36, 36, W - 72, H - 72, 56, undefined, alpha(C.white, 0.7), 10)
+  // Side rails run on past both ends: the table carries on under each player's
+  // HUD row to their edge, so the name pills and trays never sit on a rail.
+  const v = g.stage.view
+  for (const x of [36, W - 36]) {
+    g.line(x + 4, v.y - 10, x + 4, v.y + v.h + 10, alpha('#000000', 0.35), 12, 'butt')
+    g.line(x, v.y - 10, x, v.y + v.h + 10, alpha(C.white, 0.7), 10, 'butt')
+  }
   g.line(36, MID, W - 36, MID, alpha(C.white, 0.5), 8)
   g.ring(W / 2, MID, 120, alpha(C.white, 0.22), 8)
   g.ring(W / 2, MID, 26, alpha(C.white, 0.22), 8)
@@ -194,7 +200,7 @@ export function hint(g: Draw, s: State, now: number): void {
 /** Cups this side has sunk, as balls in a tray beside its name pill. */
 export function drawTray(g: Draw, s: State, side: Side, sunk: number, now: number): void {
   const y = hudY(g, side, 70)
-  const x = side === 0 ? W - 190 : 190
+  const x = side === 0 ? W - 205 : 205
   const col = SIDE[side]
   g.forSide(side, x, y, () => {
     g.rrect(-150, -32, 300, 64, 32, alpha(C.ink, 0.7))

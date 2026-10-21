@@ -80,7 +80,13 @@ class BrickBlast extends BaseGame<State> {
       fx.stop(6)
       audio.buzz(40)
     }
-    this.finish(won, { score: [a.broken, b.broken], delay: 2 })
+    const note =
+      why === 'KNOCKOUT!'
+        ? 'Knockout: out of balls'
+        : why === 'WALL CLEAR!'
+          ? 'Wall cleared first'
+          : 'Bricks broken'
+    this.finish(won, { score: [a.broken, b.broken], note, delay: 2 })
   }
 
   /** A side's paddle target (in its own frame) and launch tap for this step. */

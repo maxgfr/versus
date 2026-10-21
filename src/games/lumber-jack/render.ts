@@ -54,8 +54,8 @@ const TUFTS: { x: number; y: number; s: number; leaf: boolean }[] = (() => {
   for (let i = 0; i < 26; i++) {
     const x = 120 + r() * 760
     const y = 1000 + r() * 760
-    // Keep the trunk column and the lumberjacks' footprints clear.
-    if (Math.abs(x - TRUNK_X) < 160) continue
+    // Keep the trunk column clear, and the HUD row (score, name pill) clean.
+    if (Math.abs(x - TRUNK_X) < 160 || y > 1650) continue
     out.push({ x, y, s: 0.7 + r() * 0.6, leaf: r() < 0.35 })
   }
   return out

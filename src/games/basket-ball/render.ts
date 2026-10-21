@@ -240,28 +240,25 @@ function hoopFront(g: Draw, time: number, swishAt: number): void {
   }
 }
 
+/** The ball's body and seams at the origin, radius `r` (shared by the court ball and the HUD chip). */
+function ballFace(g: Draw, r: number): void {
+  g.ball(0, 0, r, '#f07a2a', 0)
+  const seam = alpha(C.ink, 0.85)
+  const lw = Math.max(3, r * 0.1)
+  g.line(0, -r, 0, r, seam, lw)
+  g.line(-r, 0, r, 0, seam, lw)
+  // The two side seams bow out toward the edge of the ball.
+  g.arc(r * 1.2, 0, r * 1.9, Math.PI - 0.55, Math.PI + 0.55, seam, lw)
+  g.arc(-r * 1.2, 0, r * 1.9, -0.55, 0.55, seam, lw)
+}
+
 /** A basketball: orange, black seams, turning as it flies, and lifted by its height. */
 function drawBall(g: Draw, lx: number, ly: number, z: number, spin: number, pop = 1): void {
   const s = (1 + 0.26 * Math.min(1, z / 360)) * pop
   const sh = BALL_R * (1 - Math.min(0.5, z / 700)) * pop
   g.shadow(lx, ly + 6, sh, sh * 0.42, 0.4 * (1 - Math.min(0.7, z / 500)))
   const cy = ly - z * K
-  g.at(
-    lx,
-    cy,
-    spin,
-    () => {
-      g.ball(0, 0, BALL_R, '#f07a2a', 0)
-      const seam = alpha(C.ink, 0.85)
-      g.line(0, -BALL_R, 0, BALL_R, seam, 5)
-      g.line(-BALL_R, 0, BALL_R, 0, seam, 5)
-      // The two side seams bow out toward the edge of the ball.
-      g.arc(BALL_R * 1.2, 0, BALL_R * 1.9, Math.PI - 0.55, Math.PI + 0.55, seam, 5)
-      g.arc(-BALL_R * 1.2, 0, BALL_R * 1.9, -0.55, 0.55, seam, 5)
-    },
-    s,
-    s,
-  )
+  g.at(lx, cy, spin, () => ballFace(g, BALL_R), s, s)
   // Highlight stays put while the ball spins.
   g.alpha(0.6, () =>
     g.ellipse(
@@ -348,7 +345,8 @@ function hud(g: Draw, look: Look, side: Side): void {
       () => {
         g.rrect(-80, -44, 160, 88, 26, alpha(C.ink, 0.8))
         g.rrect(-80, -44, 160, 88, 26, undefined, alpha(col.main, 0.6 + p * 0.4), 5)
-        g.emoji('🏀', -40, 0, 40)
+        g.at(-40, 0, -0.5, () => ballFace(g, 22))
+        g.alpha(0.55, () => g.ellipse(-48, -8, 7, 4, '#fff', -0.6))
         g.text(w.score[side], 26, 4, {
           size: 62,
           weight: 700,

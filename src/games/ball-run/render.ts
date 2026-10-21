@@ -390,7 +390,7 @@ function hud(g: Draw, side: Side, o: LaneView): void {
   if (!o.bot && (o.phase === 'ready' || o.since < 1.6) && o.winner === null) {
     const sw = Math.sin(o.time * 4)
     g.alpha(o.phase === 'ready' ? 1 : 1 - prog(o.since, 1, 1.6), () =>
-      g.emoji('👆', 500 + sw * 170, 850, 84, sw * 0.25),
+      g.emoji('👆', 500 + sw * 170, 826, 84, sw * 0.25),
     )
   }
   if (o.phase === 'ready') return

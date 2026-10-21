@@ -84,7 +84,11 @@ class CannonDuel extends TurnGame<State> {
     s.roundText = `${this.ctx.names[w]} takes the round`
     if (s.wins[w] < this.target) return
     const score: [number, number] = [s.wins[0], s.wins[1]]
-    this.finish(w, this.target > 1 ? { score, delay: ROUND_PAUSE } : { delay: ROUND_PAUSE })
+    const note = `${this.ctx.names[other(w)]}'s keep is rubble`
+    this.finish(
+      w,
+      this.target > 1 ? { score, note, delay: ROUND_PAUSE } : { note, delay: ROUND_PAUSE },
+    )
   }
 
   /** The other side opens the next round; the computer picks its first shot straight away. */

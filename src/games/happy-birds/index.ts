@@ -26,6 +26,8 @@ export interface State {
   /** Each round gets a fresh course, the same for both lanes. */
   course: number
   roundWinner: Side | 'draw' | null
+  /** Game time each bird last cleared a pipe, for the counter pop. */
+  passAt: [number, number]
 }
 
 const WAIT = 1.1
@@ -49,6 +51,7 @@ class HappyBirds extends RunnerGame<State> {
       flyT: 0,
       course: this.courseFor(1),
       roundWinner: null,
+      passAt: [-10, -10],
     }
   }
 
@@ -110,6 +113,12 @@ class HappyBirds extends RunnerGame<State> {
     const r = stepBird(s.course, b, dt, speedAt(s.flyT), flapNow, this.time)
     if (r === 'pipe') {
       this.ctx.audio.play('coin', 1 + Math.min(0.5, b.pipes * 0.02))
+      s.passAt[side] = this.time
+      const at = toWorld(this.frames[side], BIRD_X, b.y)
+      this.ctx.fx.sparks(at.x, at.y, C.yellow, 8)
+      // Kept below the lane's counter pill, which sits along the top of the lane.
+      const up = toWorld(this.frames[side], BIRD_X + 70, Math.max(230, b.y - 100))
+      this.ctx.fx.float('+1', up.x, up.y, C.yellow, 52, side)
     } else if (r === 'crash') {
       b.alive = false
       b.deadAt = this.time
@@ -147,8 +156,15 @@ class HappyBirds extends RunnerGame<State> {
     s.roundWinner = w
     if (w !== 'draw') {
       s.wins[w]++
-      this.ctx.audio.play('score')
-      if (s.wins[w] >= this.target) this.finish(w, { score: s.wins, delay: END })
+      // The round's winner gets a burst of light where it flies.
+      const at = toWorld(this.frames[w], BIRD_X, s.birds[w].y)
+      this.ctx.fx.ring(at.x, at.y, C.yellow, 180)
+      this.ctx.fx.sparks(at.x, at.y, C.yellow, 14)
+      if (s.wins[w] >= this.target) {
+        this.ctx.fx.confetti(w)
+        this.ctx.fx.flash(SIDE[w].light, 0.3)
+        this.finish(w, { score: s.wins, delay: END + 0.4 })
+      } else this.ctx.audio.play('score')
     } else this.ctx.audio.play('draw')
   }
 
@@ -162,6 +178,12 @@ class HappyBirds extends RunnerGame<State> {
     s.phaseAt = this.time
     s.flyT = 0
     s.roundWinner = null
+    s.passAt = [-10, -10]
+  }
+
+  /** While the ending plays, the winner hovers and the loser tumbles down. */
+  protected override afterEnd(dt: number): void {
+    for (const b of this.s.birds) this.drop(b, dt)
   }
 
   protected renderLane(
@@ -184,6 +206,7 @@ class HappyBirds extends RunnerGame<State> {
       bot: this.isBot(side),
       matchOver: this.over,
       target: this.target,
+      passAt: s.passAt[side],
     })
   }
 }

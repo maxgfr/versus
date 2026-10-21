@@ -61,6 +61,19 @@ export function backdrop(g: Draw): void {
       [1, shade(SIDE[0].main, -0.8)],
     ]),
   )
+  // The tabletop the board sits on: long dark planks, each end tinted in the
+  // colour of the player sitting there.
+  const v = g.stage.view
+  const ph = 96
+  for (let row = Math.floor(v.y / ph) - 1; row * ph < v.y + v.h; row++) {
+    const y = row * ph
+    const tint = y + ph / 2 < MID ? SIDE[1].main : SIDE[0].main
+    if (row % 2) g.rect(v.x, y, v.w, ph, alpha(tint, 0.05))
+    g.rect(v.x, y, v.w, 3, alpha('#000000', 0.22))
+    const seam = ((row * 337) % 600) + 120
+    g.rect(seam, y, 3, ph, alpha('#000000', 0.18))
+    g.rect(seam + 520, y, 3, ph, alpha('#000000', 0.18))
+  }
   g.fillView(
     g.rad(W / 2, MID, 100, 1050, [
       [0, alpha('#fff2d6', 0.12)],
@@ -88,7 +101,7 @@ function drawBoardFrame(g: Draw): void {
       [1, shade(FRAME, -0.12)],
     ]),
   )
-  g.rrect(x0 - RIM + 12, y0 - RIM + 6, w + RIM * 2 - 24, 12, 6, alpha('#ffffff', 0.22))
+  g.rrect(x0 - RIM + 40, y0 - RIM + 6, w + RIM * 2 - 80, 12, 6, alpha('#ffffff', 0.22))
   // Team ends of the frame: each side's rail carries its colour.
   g.rrect(x0 + 60, y1 + 14, w - 120, 12, 6, alpha(SIDE[0].main, 0.85))
   g.rrect(x0 + 60, y0 - 26, w - 120, 12, 6, alpha(SIDE[1].main, 0.85))

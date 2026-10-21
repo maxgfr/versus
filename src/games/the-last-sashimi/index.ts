@@ -137,7 +137,7 @@ class LastSashimi extends BaseGame<State> {
         if (!tapped[side]) continue
         const p = frame(side, TIP.x, TIP.y)
         ctx.audio.play('error', side === 0 ? 1 : 1.1)
-        ctx.fx.float('TOO SOON!', p.x, p.y + (side === 0 ? 150 : -150), '#ffffff', 60, side)
+        ctx.fx.float('TOO SOON!', p.x, p.y + (side === 0 ? 250 : -250), '#ffffff', 60, side)
         ctx.fx.shake(0.25)
       }
     } else if (w !== 'draw') {

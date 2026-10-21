@@ -1,6 +1,6 @@
 import { outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Side } from '../../core/game.ts'
-import { banner, namePill } from '../../core/hud.ts'
+import { banner, hudY, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
@@ -39,6 +39,9 @@ export interface Look {
 
 const LINE = alpha(C.white, 0.5)
 const NET_DEPTH = 62
+/** HUD row: the score chip sits this far in from each player's left, the name pill as far from the right. */
+const SCORE_X = 150
+const PILL_X = 205
 
 /** A regular polygon's vertices, centred on (cx, cy). */
 function pentagon(cx: number, cy: number, r: number, rot: number): number[] {
@@ -177,10 +180,13 @@ function drawPitch(g: Draw, w: World): void {
   drawNet(g, false, shake.bottom)
 }
 
-/** Each side's goals on a little floodlit scoreboard plate on its own half, with a pip row. */
+/**
+ * Each side's goals on a scoreboard chip in the free corner beside its own goal
+ * mouth (off the pitch, so it never sits under a disc), with a pip row.
+ */
 function pitchScore(g: Draw, side: Side, value: number, target: number, pulse: number): void {
-  const x = side === 0 ? RINK.x1 - 130 : RINK.x0 + 130
-  const y = side === 0 ? MID + 170 : MID - 170
+  const x = side === 0 ? SCORE_X : W - SCORE_X
+  const y = hudY(g, side)
   const col = SIDE[side]
   g.forSide(side, x, y, () => {
     const s = 1 + pulse * 0.25
@@ -189,21 +195,21 @@ function pitchScore(g: Draw, side: Side, value: number, target: number, pulse: n
       0,
       0,
       () => {
-        g.rrect(-74, -84, 148, 168, 30, alpha(C.ink, 0.78))
-        g.rrect(-74, -84, 148, 168, 30, undefined, alpha(col.main, 0.5 + pulse * 0.5), 5)
-        g.text(value, 0, -14, {
-          size: 104,
+        g.rrect(-104, -42, 208, 84, 30, alpha(C.ink, 0.85))
+        g.rrect(-104, -42, 208, 84, 30, undefined, alpha(col.main, 0.5 + pulse * 0.5), 5)
+        g.text(value, -56, 4, {
+          size: 66,
           weight: 700,
           color: pulse > 0.05 ? C.white : col.main,
           drop: alpha('#000000', 0.45),
         })
-        const gap = Math.min(30, 112 / Math.max(1, target - 1))
-        const r = Math.min(10, gap * 0.38)
-        const x0 = -((target - 1) * gap) / 2
+        const gap = Math.min(30, 104 / Math.max(1, target - 1))
+        const r = Math.min(11, gap * 0.4)
+        const x0 = 34 - ((target - 1) * gap) / 2
         for (let i = 0; i < target; i++) {
           const on = i < value
-          g.circle(x0 + i * gap, 56, r, on ? col.main : alpha(C.white, 0.16))
-          if (on) g.circle(x0 + i * gap - r * 0.3, 53, r * 0.35, alpha(C.white, 0.7))
+          g.circle(x0 + i * gap, 0, r, on ? col.main : alpha(C.white, 0.16))
+          if (on) g.circle(x0 + i * gap - r * 0.3, -r * 0.3, r * 0.35, alpha(C.white, 0.7))
         }
       },
       s,
@@ -427,8 +433,6 @@ export function render(g: Draw, w: World, look: Look): void {
   drawPitch(g, w)
   const turnSide = w.turn
   const shooting = w.phase === 'aim' && !look.end
-  for (const side of [0, 1] as Side[])
-    pitchScore(g, side, w.score[side], look.target, look.pulse[side])
   w.discs.forEach((piece, i) => {
     const p = look.discs[i]
     if (!p) return
@@ -449,12 +453,13 @@ export function render(g: Draw, w: World, look: Look): void {
     })
   }
   goalStamp(g, w)
-  // HUD: names beside the goal mouths (never on top of the goal).
+  // HUD: score and name beside the goal mouths (never on top of the goal or the pitch).
   for (const side of [0, 1] as Side[]) {
+    pitchScore(g, side, w.score[side], look.target, look.pulse[side])
     namePill(g, side, look.names[side], {
       active: shooting && turnSide === side,
       text: look.status[side],
-      x: side === 0 ? W - 190 : 190,
+      x: side === 0 ? W - PILL_X : PILL_X,
     })
   }
   if (look.end) ending(g, look.end, look.names[look.end.side])

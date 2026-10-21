@@ -318,8 +318,23 @@ function scaled(g: Draw, x: number, y: number, sx: number, sy: number, fn: () =>
     )
 }
 
+/** A soft pool of team-coloured light under the play area: the floodlit table. */
+function floodlight(g: Draw, side: Side, x: number, y: number, r: number): void {
+  g.circle(
+    x,
+    y,
+    r,
+    g.rad(x, y, 0, r, [
+      [0, alpha(SIDE[side].main, 0.2)],
+      [0.55, alpha(SIDE[side].main, 0.07)],
+      [1, alpha(SIDE[side].main, 0)],
+    ]),
+  )
+}
+
 export function drawPanel(g: Draw, h: number, v: PanelView): void {
   const d = v.deal
+  floodlight(g, v.side, 500, TOP_Y + (h - TOP_Y) * 0.42, 680)
   const fl = v.fly && v.now - v.fly.at < FLY ? v.fly : null
   const flying = (key: number): boolean => {
     if (!fl) return false
@@ -358,16 +373,17 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
   // Home counter in the gap of the top row.
   const n = home(d)
   const hx = colX(2) + CARD_W / 2
-  g.text(n, hx, TOP_Y + CARD_H / 2 - 18, {
+  g.text(n, hx, TOP_Y + CARD_H / 2 - 22, {
     size: 64,
     weight: 700,
     color: n > 0 ? C.white : alpha(C.white, 0.4),
     drop: alpha('#000000', 0.35),
   })
-  g.text('/52 home', hx, TOP_Y + CARD_H / 2 + 34, {
-    size: 26,
+  g.text('/52 home', hx, TOP_Y + CARD_H / 2 + 36, {
+    size: 34,
     weight: 600,
-    color: alpha(C.white, 0.55),
+    color: alpha(C.white, 0.6),
+    maxWidth: CARD_W + GAP,
   })
 
   // Foundations.
@@ -469,7 +485,8 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
 
   if (v.hint) {
     g.text('Tap a card to move it · tap the deck to draw', 500, h - 40, {
-      size: 32,
+      size: 36,
+      maxWidth: 940,
       weight: 600,
       color: alpha(C.white, 0.85),
     })

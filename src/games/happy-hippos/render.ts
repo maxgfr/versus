@@ -87,8 +87,18 @@ function drawPond(g: Draw, w: World): void {
   )
   g.clip(x - r, y - r, r * 2, r * 2, r, () => {
     // Inner shadow from the rim, team tint on each side's half.
-    g.rect(x - r, y - r, r * 2, r, alpha(SIDE[1].main, 0.08))
-    g.rect(x - r, y, r * 2, r, alpha(SIDE[0].main, 0.08))
+    g.rect(
+      x - r,
+      y - r,
+      r * 2,
+      r * 2,
+      g.lin(0, y - r, 0, y + r, [
+        [0, alpha(SIDE[1].main, 0.16)],
+        [0.5, alpha(SIDE[1].main, 0)],
+        [0.5, alpha(SIDE[0].main, 0)],
+        [1, alpha(SIDE[0].main, 0.16)],
+      ]),
+    )
     g.fillView(
       g.rad(x - 150, y - 190, 20, 420, [
         [0, alpha('#ffffff', 0.16)],
@@ -322,8 +332,10 @@ function drawTray(g: Draw, side: Side, h: Hippo, pulse: number): void {
     g.rrect(x0, ty + 8, tw, th, 30, alpha('#000000', 0.35))
     g.rrect(x0, ty, tw, th, 30, alpha(shade(SIDE[side].main, -0.6), 0.9))
     g.rrect(x0, ty, tw, th, 30, undefined, alpha(SIDE[side].light, 0.35), 4)
-    // Empty slots along the bottom row show it is a tray for marbles.
-    for (let i = 0; i < 8; i++) g.circle(x0 + 26 + i * 31, ty + th - 26, 13, alpha('#000000', 0.25))
+    // Empty slots, three rows of eight, show it is a tray for marbles.
+    for (let row = 0; row < 3; row++)
+      for (let i = 0; i < 8; i++)
+        g.circle(x0 + 26 + i * 31, ty + th - 26 - row * 38, 13, alpha('#000000', 0.25))
     // Marbles in rows of eight, newest last; older ones pack under.
     const per = 8
     const show = h.ate.slice(-24)

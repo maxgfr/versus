@@ -10,36 +10,52 @@ import {
   drawTrajectory,
   drawWind,
 } from '../../engines/aim/index.ts'
-import { cannonOf, type State, WIND_MAX } from './rules.ts'
+import { cannonOf, coreOf, type State, WIND_MAX } from './rules.ts'
 
 /** Top-down meadow: mowed stripes, a dirt track across the middle, each end tinted by its team. */
 export function drawField(g: Draw): void {
-  g.fillView(C.grassDark)
+  // A meadow at night: dark mowed stripes, each fort floodlit, each end owned by its team.
+  g.fillView(shade(C.grassDark, -0.62))
   const v = g.stage.view
   for (let y = Math.floor(v.y / 120) * 120; y < v.y + v.h; y += 120) {
-    if ((y / 120) % 2 === 0) g.rect(v.x - 2, y, v.w + 4, 120, shade(C.grass, -0.08))
+    if ((y / 120) % 2 === 0) g.rect(v.x - 2, y, v.w + 4, 120, alpha(shade(C.grass, -0.45), 0.55))
   }
   g.fillView(
     g.lin(0, 0, 0, H, [
-      [0, alpha(SIDE[1].dark, 0.35)],
-      [0.25, alpha(SIDE[1].dark, 0)],
-      [0.75, alpha(SIDE[0].dark, 0)],
-      [1, alpha(SIDE[0].dark, 0.35)],
+      [0, alpha(SIDE[1].dark, 0.62)],
+      [0.3, alpha(SIDE[1].dark, 0)],
+      [0.7, alpha(SIDE[0].dark, 0)],
+      [1, alpha(SIDE[0].dark, 0.62)],
     ]),
   )
-  // Dirt track along the midline, wobbly edges baked from a fixed sine.
-  g.path(
-    (c) => {
-      c.moveTo(v.x - 10, MID - 70)
-      for (let x = v.x; x <= v.x + v.w + 20; x += 40)
-        c.lineTo(x, MID - 70 + Math.sin(x * 0.013) * 12)
-      for (let x = v.x + v.w + 20; x >= v.x - 20; x -= 40)
-        c.lineTo(x, MID + 70 + Math.sin(x * 0.011 + 2) * 12)
-      c.closePath()
-    },
-    shade(C.sand, -0.25),
-  )
-  g.vignette(0.22)
+  // Floodlight pools on both forts.
+  for (const side of [0, 1] as Side[]) {
+    const k = coreOf(side)
+    g.fillView(
+      g.rad(k.x, k.y, 60, 560, [
+        [0, alpha('#fff4d8', 0.16)],
+        [1, alpha('#fff4d8', 0)],
+      ]),
+    )
+  }
+  // Dirt track along the midline, wobbly edges baked from a fixed sine, with a lip and pebbles.
+  const edge = (c: CanvasRenderingContext2D, dy: number) => {
+    c.moveTo(v.x - 10, MID - 70 + dy)
+    for (let x = v.x; x <= v.x + v.w + 20; x += 40)
+      c.lineTo(x, MID - 70 + dy + Math.sin(x * 0.013) * 12)
+    for (let x = v.x + v.w + 20; x >= v.x - 20; x -= 40)
+      c.lineTo(x, MID + 70 + dy + Math.sin(x * 0.011 + 2) * 12)
+    c.closePath()
+  }
+  g.path((c) => edge(c, 8), alpha('#000000', 0.3))
+  g.path((c) => edge(c, 0), shade(C.sand, -0.58))
+  g.path((c) => edge(c, 0), undefined, alpha(shade(C.sand, -0.3), 0.6), 4)
+  for (let i = 0; i < 14; i++) {
+    const x = (i * 173 + 61) % 1000
+    const y = MID + Math.sin(i * 2.7) * 44
+    g.ellipse(x, y, 9 + (i % 3) * 4, 6 + (i % 2) * 2, alpha(shade(C.sand, -0.2), 0.45))
+  }
+  g.vignette(0.36)
 }
 
 /** The keep: a round tower in the team colour with a flag that flutters in the wind. */
@@ -171,7 +187,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
     drawCannon(g, side, dir, look.recoil[side], s.turn === side && look.aim ? look.aim.power : 0)
   }
   if (look.aim && s.phase === 'aim') drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
-  if (s.shell) drawShell(g, s.shell, C.ink2, 22)
+  if (s.shell) drawShell(g, s.shell, C.ink4, 22)
   for (const side of [0, 1] as Side[]) {
     if (!look.hint[side]) continue
     const y = side === 0 ? MID + 330 : MID - 330

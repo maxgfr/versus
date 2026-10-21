@@ -1,7 +1,7 @@
 import type { Side } from '../../core/game.ts'
 import { frame, inFrame, textAngle } from '../../core/frame.ts'
 import { inQuad, outBack, outCubic, prog } from '../../core/fx/ease.ts'
-import { banner, namePill, pips } from '../../core/hud.ts'
+import { banner, hudY, namePill, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
@@ -21,7 +21,7 @@ export const TIP = { x: W / 2 + 30, y: MID + 128 }
 /** The tips once they have closed on the piece. */
 const GRAB_Y = MID + 10
 /** Where the chopsticks run off their owner's edge. */
-const EDGE = { x: W / 2 + 250, y: H + 160 }
+const EDGE = { x: W / 2 + 215, y: H + 160 }
 /** The bell that rings for real (gold) and for the decoys (purple). */
 export const BELL = { x: 880, y: MID }
 
@@ -269,6 +269,33 @@ function roundBanner(g: Draw, r: Rounds, now: number, over: boolean): void {
   }
 }
 
+/**
+ * Round wins at a side's HUD row: pips while they fit beside the pill, a
+ * compact "wins/target" tally for long matches (up to 9 pips would run off the edge).
+ */
+function tally(g: Draw, side: Side, wins: number, target: number, x: number, fit: number): void {
+  if (target <= fit) {
+    pips(g, side, wins, target, { x })
+    return
+  }
+  g.forSide(side, x, hudY(g, side), () => {
+    const a = String(wins)
+    const b = `/${target}`
+    const wa = g.measure(a, 44, 700)
+    const wb = g.measure(b, 34, 700)
+    const w = 70 + wa + wb
+    g.rrect(-w / 2, -34, w, 68, 34, alpha(C.ink, 0.7))
+    g.sideMark(side, -w / 2 + 34, 0, 13, wins > 0 ? SIDE[side].main : alpha(C.white, 0.3))
+    g.text(a, -w / 2 + 58, 3, { size: 44, weight: 700, color: SIDE[side].light, align: 'left' })
+    g.text(b, -w / 2 + 60 + wa, 6, {
+      size: 34,
+      weight: 700,
+      color: alpha(C.white, 0.55),
+      align: 'left',
+    })
+  })
+}
+
 export function renderSashimi(
   g: Draw,
   s: State,
@@ -362,7 +389,7 @@ export function renderSashimi(
     const readers: Side[] = g.flipTop ? [0, 1] : [g.stage.rot ? 1 : 0]
     for (const side of readers) {
       if (waiting) {
-        say(g, side, 'Wait for the bell…', W / 2 - 160, MID + 340, {
+        say(g, side, 'Wait for the bell…', W / 2 - 195, MID + 340, {
           size: 44,
           color: alpha(C.white, 0.85),
         })
@@ -378,7 +405,7 @@ export function renderSashimi(
 
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, o.names[side], { active: live, x: side === 0 ? 330 : W - 330 })
-    pips(g, side, r.wins[side], r.target, { x: side === 0 ? W - 170 : 170 })
+    tally(g, side, r.wins[side], r.target, side === 0 ? W - 135 : 135, 3)
   }
   roundBanner(g, r, now, o.over)
 }

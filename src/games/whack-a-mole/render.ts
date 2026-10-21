@@ -3,7 +3,7 @@ import { inQuad, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import { frame, inFrame, textAngle } from '../../core/frame.ts'
 import { banner, clock, hudY, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
-import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
+import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { Cell, State } from './index.ts'
 import { HOLES, holeXY } from './rules.ts'
@@ -17,39 +17,45 @@ const SOIL = '#2a1a0e'
 const DIRT = '#6b4a2b'
 const LAWN = '#173d24'
 const FUR = '#9a6638'
+/** The lawn bed holding a player's nine holes, in red's frame: x, y, w, h, radius. */
+const BED = [92, 1036, 816, 628, 56] as const
 
 function field(g: Draw, glow: [number, number]): void {
   const v = g.stage.view
-  g.fillView(LAWN)
-  // Mown bands.
-  const band = 110
-  for (let y = Math.floor(v.y / band) * band; y < v.y + v.h; y += band * 2) {
-    g.rect(v.x - 2, y, v.w + 4, band, shade(LAWN, -0.12))
-  }
-  // Each half is tinted with its player's colour.
-  g.rect(v.x - 2, v.y - 2, v.w + 4, MID - v.y + 2, alpha(SIDE[1].main, 0.14))
-  g.rect(v.x - 2, MID, v.w + 4, v.y + v.h - MID + 2, alpha(SIDE[0].main, 0.14))
+  // Each half belongs to its player: a dark team-coloured table...
+  g.halves(shade(C.red, -0.74), shade(C.blue, -0.74))
   for (const side of [0, 1] as Side[]) {
     if (glow[side] > 0) {
       const y0 = side === 0 ? MID : v.y - 2
       const y1 = side === 0 ? v.y + v.h + 2 : MID
-      g.alpha(glow[side] * 0.25, () => g.rect(v.x - 2, y0, v.w + 4, y1 - y0, SIDE[side].main))
+      g.alpha(glow[side] * 0.3, () => g.rect(v.x - 2, y0, v.w + 4, y1 - y0, SIDE[side].main))
     }
-    // A floodlight pool on each grid.
-    const p = frame(side, W / 2, 1350)
-    g.ellipse(
-      p.x,
-      p.y,
-      560,
-      420,
-      g.rad(p.x, p.y, 0, 560, [
-        [0, alpha('#fff6d8', 0.16)],
-        [1, alpha('#fff6d8', 0)],
-      ]),
-    )
+    // ...with a mown lawn bed for the nine holes, framed in the team colour.
+    inFrame(g, side, () => {
+      const [x, y, w, h, r] = BED
+      g.rrect(x - 14, y - 6, w + 28, h + 28, r + 12, alpha('#000000', 0.35))
+      g.rrect(x - 14, y - 14, w + 28, h + 28, r + 12, shade(SIDE[side].main, -0.35))
+      g.rrect(x - 6, y - 6, w + 12, h + 12, r + 6, shade(SIDE[side].main, -0.6))
+      g.clip(x, y, w, h, r, () => {
+        g.rect(x, y, w, h, mix(LAWN, SIDE[side].main, 0.1))
+        for (let k = 0; k < h; k += 140) g.rect(x, y + k, w, 70, alpha('#000000', 0.1))
+        // A floodlight pool on each bed.
+        g.ellipse(
+          W / 2,
+          1350,
+          520,
+          380,
+          g.rad(W / 2, 1350, 0, 520, [
+            [0, alpha('#fff6d8', 0.16)],
+            [1, alpha('#fff6d8', 0)],
+          ]),
+        )
+        g.rect(x, y, w, 26, alpha('#000000', 0.18))
+      })
+    })
   }
-  // The middle strip between the two lawns.
-  g.rect(v.x - 2, MID - 7, v.w + 4, 14, alpha(C.white, 0.18))
+  // The middle strip between the two halves.
+  g.rect(v.x - 2, MID - 5, v.w + 4, 10, alpha(C.white, 0.16))
   g.vignette(0.45)
 }
 

@@ -114,37 +114,44 @@ export function drawBow(g: Draw, side: Side, angle: number, pull: number, nocked
   const b = BOW[side]
   const h = 118
   // Grip forward (+x, toward the aim), tips swept back, the string straight across the tips at rest.
+  // The draw stays short enough that a full pull never runs under the name pill at the edge.
   const tipX = -26 - pull * 16
-  const nock = tipX - pull * 118
-  g.shadow(b.x + 8, b.y + 24, 70, 18, 0.35)
-  g.at(b.x, b.y, angle, () => {
-    // String first, under the limbs.
-    g.path(
-      (c) => {
+  const nock = tipX - pull * 84
+  g.shadow(b.x + 8, b.y + 24, 62, 16, 0.35)
+  g.at(
+    b.x,
+    b.y,
+    angle,
+    () => {
+      // String first, under the limbs.
+      g.path(
+        (c) => {
+          c.moveTo(tipX, -h)
+          c.lineTo(nock, 0)
+          c.lineTo(tipX, h)
+        },
+        undefined,
+        C.cream,
+        4,
+      )
+      if (nocked) g.at(nock + 150, 0, 0, () => arrowShape(g, side, 150))
+      const limb = (c: CanvasRenderingContext2D) => {
         c.moveTo(tipX, -h)
-        c.lineTo(nock, 0)
-        c.lineTo(tipX, h)
-      },
-      undefined,
-      C.cream,
-      4,
-    )
-    if (nocked) g.at(nock + 150, 0, 0, () => arrowShape(g, side, 150))
-    const limb = (c: CanvasRenderingContext2D) => {
-      c.moveTo(tipX, -h)
-      c.quadraticCurveTo(26, -h * 0.75, 22, 0)
-      c.quadraticCurveTo(26, h * 0.75, tipX, h)
-    }
-    g.path(limb, undefined, shade(C.woodDark, -0.25), 20)
-    g.path(limb, undefined, C.wood, 13)
-    g.path(limb, undefined, alpha(C.white, 0.3), 4)
-    // Recurve tips in the team colour.
-    g.circle(tipX, -h, 9, SIDE[side].main)
-    g.circle(tipX, h, 9, SIDE[side].main)
-    // Grip.
-    g.rrect(8, -26, 26, 52, 12, shade(C.woodDark, -0.35))
-    g.rrect(12, -22, 18, 16, 8, alpha(C.white, 0.15))
-  })
+        c.quadraticCurveTo(26, -h * 0.75, 22, 0)
+        c.quadraticCurveTo(26, h * 0.75, tipX, h)
+      }
+      g.path(limb, undefined, shade(C.woodDark, -0.25), 20)
+      g.path(limb, undefined, C.wood, 13)
+      g.path(limb, undefined, alpha(C.white, 0.3), 4)
+      // Recurve tips in the team colour.
+      g.circle(tipX, -h, 9, SIDE[side].main)
+      g.circle(tipX, h, 9, SIDE[side].main)
+      // Grip.
+      g.rrect(8, -26, 26, 52, 12, shade(C.woodDark, -0.35))
+      g.rrect(12, -22, 18, 16, 8, alpha(C.white, 0.15))
+    },
+    0.86,
+  )
 }
 
 /** An arrow stuck in the target, foreshortened toward its archer, quivering after the strike. */

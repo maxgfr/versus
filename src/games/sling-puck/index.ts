@@ -66,7 +66,11 @@ class SlingPuck extends BaseGame<State> {
       fx.stop(6)
       audio.buzz(40)
     }
-    this.finish(won, { score: [owned(t, 0), owned(t, 1)], delay: 2 })
+    this.finish(won, {
+      score: [owned(t, 0), owned(t, 1)],
+      note: 'Pucks left on each side',
+      delay: 2,
+    })
   }
 
   /** What a side's hand (or the computer) asks for this step. */

@@ -1,7 +1,7 @@
 import type { Side } from '../../core/game.ts'
 import { frame, inFrame, textAngle } from '../../core/frame.ts'
 import { outBack, outCubic, prog } from '../../core/fx/ease.ts'
-import { banner, namePill, pips } from '../../core/hud.ts'
+import { banner, hudY, namePill, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -350,6 +350,33 @@ function roundBanner(g: Draw, r: Rounds, now: number, over: boolean): void {
   }
 }
 
+/**
+ * Round wins at a side's HUD row: pips while they fit beside the pill, a
+ * compact "wins/target" tally for long matches (up to 9 pips would run off the edge).
+ */
+function tally(g: Draw, side: Side, wins: number, target: number, x: number, fit: number): void {
+  if (target <= fit) {
+    pips(g, side, wins, target, { x })
+    return
+  }
+  g.forSide(side, x, hudY(g, side), () => {
+    const a = String(wins)
+    const b = `/${target}`
+    const wa = g.measure(a, 44, 700)
+    const wb = g.measure(b, 34, 700)
+    const w = 70 + wa + wb
+    g.rrect(-w / 2, -34, w, 68, 34, alpha(C.ink, 0.7))
+    g.sideMark(side, -w / 2 + 34, 0, 13, wins > 0 ? SIDE[side].main : alpha(C.white, 0.3))
+    g.text(a, -w / 2 + 58, 3, { size: 44, weight: 700, color: SIDE[side].light, align: 'left' })
+    g.text(b, -w / 2 + 60 + wa, 6, {
+      size: 34,
+      weight: 700,
+      color: alpha(C.white, 0.55),
+      align: 'left',
+    })
+  })
+}
+
 export function renderPotato(
   g: Draw,
   s: State,
@@ -393,7 +420,7 @@ export function renderPotato(
   }
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, o.names[side], { active: ready(side), x: side === 0 ? 270 : W - 270 })
-    pips(g, side, s.rounds.wins[side], s.rounds.target, { x: side === 0 ? W - 170 : 170 })
+    tally(g, side, s.rounds.wins[side], s.rounds.target, side === 0 ? W - 170 : 170, 5)
   }
   roundBanner(g, s.rounds, now, o.over)
 }

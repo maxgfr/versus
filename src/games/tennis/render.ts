@@ -281,8 +281,11 @@ function scoreboard(g: Draw, w: World, side: Side, look: Look): void {
     const n = Math.min(look.target, 11)
     const gap = Math.min(34, 290 / Math.max(1, n - 1))
     const x0 = -((n - 1) * gap) / 2
+    // Past 11 points each pip stands for a share of the target, so the row
+    // fills at the end of the match instead of halfway through.
+    const lit = Math.floor((score * n) / look.target)
     for (let i = 0; i < n; i++) {
-      const on = i < score
+      const on = i < lit
       g.circle(x0 + i * gap, 0, 11, on ? col.main : alpha(C.white, 0.14))
       if (on) g.circle(x0 + i * gap - 3, -3, 4, alpha(C.white, 0.6))
     }

@@ -90,27 +90,42 @@ function shells(g: Draw, s: State): void {
   }
 }
 
-/** Status row just outside the arena, upright for its player: name, lives left, round pips. */
+/**
+ * Status column just outside the arena, upright for its player: name, lives
+ * left, round pips, stacked in the gap between the stick and the fire button
+ * so the stick's knob never covers the name.
+ */
 function status(g: Draw, s: State, side: Side, name: string, grid: Grid): void {
-  const y = side === 0 ? grid.y0 + grid.rows * grid.cell + 44 : grid.y0 - 44
+  const y = side === 0 ? grid.y0 + grid.rows * grid.cell + 40 : grid.y0 - 40
   const lives = s.w.tanks.filter((t) => t.side === side).reduce((n, t) => n + Math.max(0, t.hp), 0)
   const col = SIDE[side]
+  const r = s.rounds
+  // 2 vs 2 puts a fire button and a second stick in that gap: the name goes
+  // to the far left instead, above the first stick.
+  const teams = s.ctl.filter((c) => c.side === side).length > 1
   g.forSide(side, W / 2, y, () => {
-    g.text(name, -360, 2, { size: 34, weight: 700, color: col.light, align: 'left', maxWidth: 260 })
-    g.text(`${lives} ${lives === 1 ? 'life' : 'lives'}`, 0, 2, {
-      size: 30,
+    if (teams)
+      g.text(name, -360, 2, {
+        size: 34,
+        weight: 700,
+        color: col.light,
+        align: 'left',
+        maxWidth: 260,
+      })
+    else g.text(name, 0, 2, { size: 36, weight: 700, color: col.light, maxWidth: 240 })
+    const ly = teams ? 2 : 46
+    g.text(`${lives} ${lives === 1 ? 'life' : 'lives'}`, 0, ly, {
+      size: 34,
       weight: 600,
       color: alpha(C.white, 0.75),
     })
+    for (let i = 0; i < r.target; i++) {
+      const x = (i - (r.target - 1) / 2) * 36
+      const on = i < r.wins[side]
+      g.circle(x, ly + 44, 13, on ? col.main : alpha('#ffffff', 0.16))
+      if (on) g.circle(x - 4, ly + 40, 4, alpha(C.white, 0.6))
+    }
   })
-  // Round pips sit just beyond the lives count, away from the arena: they stay
-  // clear of the arena frame, the stick and the fire button.
-  const r = s.rounds
-  const dy = side === 0 ? 38 : -38
-  for (let i = 0; i < r.target; i++) {
-    const x = W / 2 + (i - (r.target - 1) / 2) * 30
-    g.circle(x, y + dy, 11, i < r.wins[side] ? col.main : alpha('#ffffff', 0.16))
-  }
 }
 
 export function renderTanks(
@@ -121,6 +136,14 @@ export function renderTanks(
   names: [string, string],
   over: boolean,
 ): void {
+  // The arena does not span the whole view: paint the side gutters too, or
+  // they keep stale pixels from the ready screen.
+  g.fillView(
+    g.lin(0, grid.y0, 0, grid.y0 + grid.rows * grid.cell, [
+      [0, shade(C.blue, -0.82)],
+      [1, shade(C.red, -0.82)],
+    ]),
+  )
   drawStrip(g, grid.y0, grid.y0 + grid.rows * grid.cell)
   drawFloor(g, grid)
   for (const t of s.w.tanks) if (!t.alive) tank(g, t, s.w.t)

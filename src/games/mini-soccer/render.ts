@@ -57,8 +57,9 @@ function arena(g: Draw): void {
       v.w + 4,
       y1 - y0,
       g.lin(0, y0, 0, y1, [
-        [0, shade(col, side === 1 ? -0.52 : -0.7)],
-        [1, shade(col, side === 1 ? -0.7 : -0.52)],
+        // Lighter than the name pill (shade -0.62) so the pill reads as a chip on the band.
+        [0, shade(col, side === 1 ? -0.36 : -0.5)],
+        [1, shade(col, side === 1 ? -0.5 : -0.36)],
       ]),
     )
     g.rect(v.x - 2, side === 1 ? BAND_T - 5 : BAND_B, v.w + 4, 5, alpha(col, 0.6))

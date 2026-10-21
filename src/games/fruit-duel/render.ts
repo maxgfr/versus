@@ -109,25 +109,34 @@ function splat(g: Draw, sp: Splat, now: number): void {
   const col = bomb
     ? '#07050b'
     : mix((FRUITS[sp.kind] as (typeof FRUITS)[number]).juice, C.ink2, 0.2)
-  g.alpha(bomb ? a * 1.6 : a, () => {
-    // An irregular puddle of overlapping drops...
-    const n = bomb ? 7 : 5
-    for (let i = 0; i < n; i++) {
-      const h = hash(sp.born * 3 + i, sp.y)
-      const ang = h * Math.PI * 2
-      const d = (bomb ? 34 : 22) * hash(i, sp.x) * grow
-      const r = ((bomb ? 34 : 20) + h * (bomb ? 22 : 16)) * grow
-      g.circle(sp.x + Math.cos(ang) * d, sp.y + Math.sin(ang) * d, r, col)
+  // One path for the whole stain, so overlapping drops read as a single wet
+  // puddle (separate translucent circles stack into blurry rings).
+  const drops: [number, number, number][] = []
+  const n = bomb ? 7 : 5
+  for (let i = 0; i < n; i++) {
+    const h = hash(sp.born * 3 + i, sp.y)
+    const ang = h * Math.PI * 2
+    const d = (bomb ? 34 : 22) * hash(i, sp.x) * grow
+    const r = ((bomb ? 34 : 20) + h * (bomb ? 22 : 16)) * grow
+    drops.push([sp.x + Math.cos(ang) * d, sp.y + Math.sin(ang) * d, r])
+  }
+  // ...and droplets flung out across the cut.
+  for (let i = 0; i < 7; i++) {
+    const h = hash(sp.born + i, sp.x)
+    const dir = i % 2 === 0 ? 1 : -1
+    const d = (48 + h * 100) * grow
+    const ang = sp.rot + dir * (Math.PI / 2) * (0.35 + hash(i, sp.y) * 0.65)
+    drops.push([sp.x + Math.cos(ang) * d, sp.y + Math.sin(ang) * d, 4 + (1 - h) * 9])
+  }
+  const blob = (c: CanvasRenderingContext2D, k: number, dy: number) => {
+    for (const [x, y, r] of drops) {
+      c.moveTo(x + r * k, y + dy)
+      c.arc(x, y + dy, r * k, 0, Math.PI * 2)
     }
-    // ...and droplets flung out across the cut.
-    for (let i = 0; i < 7; i++) {
-      const h = hash(sp.born + i, sp.x)
-      const dir = i % 2 === 0 ? 1 : -1
-      const d = (48 + h * 100) * grow
-      const ang = sp.rot + dir * (Math.PI / 2) * (0.35 + hash(i, sp.y) * 0.65)
-      g.circle(sp.x + Math.cos(ang) * d, sp.y + Math.sin(ang) * d, 4 + (1 - h) * 9, col)
-    }
-  })
+  }
+  g.alpha(bomb ? a * 1.6 : a * 1.5, () => g.path((c) => blob(c, 1, 0), col))
+  // A wet sheen on the main pool.
+  if (!bomb) g.alpha(a, () => g.path((c) => blob(c, 0.45, -6), alpha('#ffffff', 0.35)))
 }
 
 function hint(g: Draw, side: Side, now: number): void {

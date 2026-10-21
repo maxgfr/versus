@@ -160,7 +160,15 @@ function drawTopping(
   })
 }
 
-/** Order ticket: "Order 3/8", readable from each edge (two copies in local 2P). */
+/** Where each player's order ticket sits in local 2P (red frame): right of the pizza, above the strip. */
+const TICKET = { x: 862, y: 1092 }
+
+/**
+ * Order ticket: "Order 3/8". In local 2P each player gets a copy pinned to
+ * their own right of the pizza, in their half (red's frame, mirrored for blue),
+ * so the two never sit side by side reading as one doubled ticket. Blue's lands
+ * top-left, above the pause button.
+ */
 function drawTicket(g: Draw, s: State, total: number): void {
   const label = `${s.round + 1}/${total}`
   const one = (x: number, y: number, angle: number) =>
@@ -172,8 +180,8 @@ function drawTicket(g: Draw, s: State, total: number): void {
       g.text(label, 0, 14, { size: 48, weight: 700, color: C.ink })
     })
   if (g.flipTop) {
-    one(860, MID + 130, -0.06)
-    one(860, MID - 130, Math.PI - 0.06)
+    for (const side of [0, 1] as Side[])
+      inFrame(g, side, () => one(TICKET.x, TICKET.y, textAngle(g, side) - 0.06))
   } else one(860, MID, g.orient() - 0.06)
 }
 

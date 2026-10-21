@@ -14,7 +14,7 @@ import {
   think,
   TurnGame,
 } from '../../engines/board/index.ts'
-import { renderChess, SLIDE } from './render.ts'
+import { renderChess, SLIDE, trayY } from './render.ts'
 import {
   boardOf,
   colorOf,
@@ -73,6 +73,16 @@ const ROUND_TIME = SLIDE + 3.4
 
 // Kept off the pause button's column at the left edge.
 const GEO = geom(8, 8, 760, 760, MID)
+
+/**
+ * A banner both players can read, laid over each player's captures tray so the
+ * final position stays in view (one copy per half in local 2P, else red's).
+ */
+function shout(g: Draw, text: string, size: number, a: number): void {
+  const gap = trayY(GEO, 0) - MID
+  if (g.flipTop) banner(g, undefined, text, MID, { size, alpha: a, gap })
+  else banner(g, 0, text, MID + gap, { size, alpha: a })
+}
 
 const centre = (sq: string) => {
   const { c, r } = coordsOf(sq)
@@ -335,10 +345,10 @@ class Chess extends TurnGame<State> {
       // A round that decides nothing yet: the ending, then who took the round.
       if (s.roundText && t >= SLIDE + 1.9) {
         const a = prog(t, SLIDE + 1.9, SLIDE + 2.2)
-        if (a > 0) banner(g, undefined, s.roundText, MID, { size: 58, alpha: a })
+        if (a > 0) shout(g, s.roundText, 58, a)
       } else if (s.endText) {
         const a = prog(t, SLIDE + 0.5, SLIDE + 0.8)
-        if (a > 0) banner(g, undefined, s.endText, MID, { size: 64, alpha: a })
+        if (a > 0) shout(g, s.endText, 64, a)
       }
     }
   }

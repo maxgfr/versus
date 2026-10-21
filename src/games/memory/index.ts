@@ -1,4 +1,5 @@
 import { other, type MatchSpec, type Side } from '../../core/game.ts'
+import { outBack, prog } from '../../core/fx/ease.ts'
 import { banner, bigScore, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -165,9 +166,18 @@ class MemoryGame extends TurnGame<State> {
     const decided = matchWinner(s.wins, this.target)
     // A single-table match that ends level is a draw, as it always was.
     if (decided !== null || (won === 'draw' && this.target === 1)) {
+      // The last word stays on the table a moment before the result screen.
+      s.roundAt = this.time
+      s.roundText = decided === null ? 'Draw!' : `${this.ctx.names[decided]} wins!`
+      const fx = this.ctx.fx
+      if (decided !== null) {
+        fx.confetti(decided)
+        fx.flash(SIDE[decided].light, 0.3)
+      } else fx.confetti()
+      fx.shake(0.3)
       this.finish(decided ?? 'draw', {
         score: this.target > 1 ? [s.wins[0], s.wins[1]] : [r, bl],
-        delay: 1.4,
+        delay: 2,
       })
       return
     }
@@ -185,7 +195,8 @@ class MemoryGame extends TurnGame<State> {
     const s = this.s
     tableBackdrop(g)
     backdropGlow(g)
-    renderCards(g, s, this.time)
+    const live = !this.over && s.resolveAt < 0 && s.roundAt < 0
+    renderCards(g, s, this.time, live ? s.turn : null)
     this.drawTurns(g, undefined, s.resolveAt < 0 && s.roundAt < 0)
     bigScore(g, 0, pairsOf(s.table, 0))
     bigScore(g, 1, pairsOf(s.table, 1))
@@ -194,7 +205,10 @@ class MemoryGame extends TurnGame<State> {
       pips(g, 0, s.wins[0], this.target, { x: W - 150 })
       pips(g, 1, s.wins[1], this.target, { x: W - 150 })
     }
-    if (s.roundAt >= 0 && !this.over) banner(g, undefined, s.roundText, MID, { size: 58 })
+    if (s.roundAt >= 0) {
+      const k = outBack(prog(this.time - s.roundAt, 0.15, 0.5))
+      if (k > 0) banner(g, undefined, s.roundText, MID, { size: 58 * k, alpha: Math.min(1, k) })
+    }
   }
 }
 

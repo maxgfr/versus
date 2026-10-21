@@ -141,17 +141,17 @@ export function drawBoard(g: Draw): void {
   for (const f of [BULL, OUTER_BULL, TREBLE_IN, TREBLE_OUT, DOUBLE_IN, 1])
     g.ring(cx, cy, f * R, wire, 2.5)
 
-  // Numbers around the outside, each reading outward and upright for the side nearest it.
+  // Numbers around the outside, upright like a real board's: in local 2P the top
+  // half reads for blue and the bottom half (and the sides) for red.
   for (let i = 0; i < SEGMENTS.length; i++) {
     const a = ang(i)
     const top = Math.sin(a) < -0.01
-    const base = g.flipTop ? (top ? Math.PI : 0) : g.stage.rot
     const r = R * 1.065
     g.text(String(SEGMENTS[i]), cx + Math.cos(a) * r, cy + Math.sin(a) * r, {
       size: 38,
       weight: 700,
       color: C.white,
-      angle: a + Math.PI / 2 + base,
+      angle: g.flipTop ? (top ? Math.PI : 0) : g.stage.rot,
     })
   }
 }

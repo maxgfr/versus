@@ -290,6 +290,9 @@ function scorePlate(g: Draw, side: Side, value: number, target: number, pulse: n
   })
 }
 
+/** Stamps sit between the net and the blob's home spot, so they never cover the player. */
+const STAMP_DY = 200
+
 /** The point stamp: who won it and why, on the winner's half. */
 function pointStamp(g: Draw, w: World): void {
   if (w.phase !== 'point') return
@@ -300,7 +303,7 @@ function pointStamp(g: Draw, w: World): void {
   const why = w.why === 'net' ? 'Into the net!' : w.why === 'touches' ? 'Too many touches!' : 'In!'
   const loser: Side = side === 0 ? 1 : 0
   g.alpha(a, () => {
-    g.forSide(side, W / 2, side === 0 ? MID + 330 : MID - 330, () =>
+    g.forSide(side, W / 2, side === 0 ? MID + STAMP_DY : MID - STAMP_DY, () =>
       g.at(0, 0, -0.06, () => {
         g.text('POINT!', 0, 0, {
           size: 130 * s,
@@ -313,7 +316,7 @@ function pointStamp(g: Draw, w: World): void {
       }),
     )
     if (w.why !== 'land')
-      g.forSide(loser, W / 2, loser === 0 ? MID + 330 : MID - 330, () =>
+      g.forSide(loser, W / 2, loser === 0 ? MID + STAMP_DY : MID - STAMP_DY, () =>
         g.text(why, 0, 0, { size: 56 * s, weight: 700, color: C.white, stroke: alpha(C.ink, 0.8) }),
       )
   })

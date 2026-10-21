@@ -224,6 +224,7 @@ class SpinWar extends BaseGame<State> {
       end: this.s.end,
       time: this.time,
       flash: w.tops.map((_, i) => Math.max(0, Math.min(1, this.flashFor(i).value / 8))),
+      human: [!this.isBot(0), !this.isBot(1)],
     }
     render(g, w, look)
   }
