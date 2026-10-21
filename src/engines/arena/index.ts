@@ -369,7 +369,9 @@ export function sideControls(
   // Red's layout in world space; blue's is the same rotated 180° about the centre.
   const y0 = arenaBottom + 10
   const y1 = Math.max(stage.edge(0), arenaBottom + 220)
-  const cy = Math.min((y0 + y1) / 2, y1 - 120)
+  const rad = teams ? 86 : 104
+  // Keep the knob on screen at full deflection (travel `rad` plus its own radius).
+  const cy = Math.min((y0 + y1) / 2, y1 - 120, stage.edge(0) - rad - 50)
   const left = v.x
   const red: {
     lane: 0 | 1
@@ -397,7 +399,6 @@ export function sideControls(
           br: 92,
         },
       ]
-  const rad = teams ? 86 : 104
   return red.map((l) => {
     if (side === 0) {
       return {

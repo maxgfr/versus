@@ -65,6 +65,9 @@ const PER = {
   'penalty-kicks': { frame: 'wide', wait: 2600 },
   bowling: { frame: 'half', wait: 3600 },
   'water-game': { frame: 'half', wait: 4000 },
+  'road-dodge': { frame: 'half', wait: 5000 },
+  'spike-attacks': { frame: 'wide', wait: 6000 },
+  stampede: { frame: 'wide', wait: 5200 },
 }
 
 const browser = await webkit.launch()
