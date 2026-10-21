@@ -5,7 +5,7 @@ import { ui } from './state.ts'
 
 /** Rolling scoreboard figures: each digit is a reel that spins to its new value. */
 export function digits(value: number, from = value): HTMLElement {
-  const el = h('span.digits', { 'aria-label': String(value) })
+  const el = h('span.digits', { role: 'img', 'aria-label': String(value) })
   const len = Math.max(String(value).length, String(from).length)
   const target = String(value).padStart(len, ' ')
   const start = String(from).padStart(len, ' ')

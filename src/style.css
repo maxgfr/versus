@@ -329,12 +329,12 @@ input {
 }
 
 .chip .n {
-  color: var(--ink-5);
+  color: var(--ink-6);
   font-variant-numeric: tabular-nums;
 }
 
 .chip[aria-pressed='true'] .n {
-  color: var(--ink-6);
+  color: var(--ink-7);
 }
 
 .scroller {
@@ -453,20 +453,20 @@ input {
 
 .card-art .glyph {
   position: absolute;
-  left: 8px;
-  bottom: 8px;
+  left: 7px;
+  bottom: 7px;
   z-index: 1;
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: var(--fam);
-  font-size: 22px;
+  font-size: 16px;
   line-height: 1;
   box-shadow:
-    0 3px 0 rgba(0, 0, 0, 0.35),
-    0 0 0 3px var(--ink-2);
+    0 2px 0 rgba(0, 0, 0, 0.35),
+    0 0 0 2.5px var(--ink-2);
 }
 
 .card-name {
@@ -559,10 +559,12 @@ input {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  opacity: 0.85;
+  /* Deep team ink on the team colour: 4.5:1 at this size, unlike white. */
+  color: var(--red-deep);
 }
 
 .sb-team.blue .sb-name {
+  color: var(--blue-deep);
   align-items: flex-end;
 }
 

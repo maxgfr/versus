@@ -40,10 +40,11 @@ export function home(root: HTMLElement): () => void {
     { root: scroller, rootMargin: '400px 0px' },
   )
 
-  const card = (g: GameMeta): HTMLElement => {
+  const card = (g: GameMeta, i = 0): HTMLElement => {
     const shot = capture(g.id)
     const img = shot
-      ? h('img', { alt: '', src: shot, loading: 'lazy', decoding: 'async' })
+      ? // The first row is above the fold: load it at once (it is the largest paint).
+        h('img', { alt: '', src: shot, loading: i < 4 ? 'eager' : 'lazy', decoding: 'async' })
       : h('img', { alt: '', 'data-id': g.id, decoding: 'async' })
     if (!shot) art.observe(img)
     const fav = store.favorites.includes(g.id)
