@@ -112,11 +112,14 @@ export class Audio {
   private noise: AudioBuffer | null = null
   enabled = true
   haptics = true
+  /** Silent in dev and under automation (tests, agents): only real players hear the game. */
+  readonly muted = import.meta.env.DEV || navigator.webdriver === true
   /** Sounds played this step; the online host forwards them to the guest. */
   outbox: [string, number][] | null = null
 
   /** Must be called from a user gesture at least once. */
   unlock(): void {
+    if (this.muted) return
     if (!this.ac) {
       const Ctor =
         window.AudioContext ??
@@ -137,7 +140,7 @@ export class Audio {
   /** `pitch` multiplies every frequency (1 = as designed); a little variation keeps repeats alive. */
   play(name: SoundName | (string & {}), pitch = 1): void {
     this.outbox?.push([name, pitch])
-    if (!this.enabled) return
+    if (!this.enabled || this.muted) return
     const voices = S[name]
     const ac = this.ac
     if (!voices || !ac || !this.master || ac.state !== 'running') return
@@ -189,7 +192,7 @@ export class Audio {
 
   /** Haptic tick where supported (Android). iOS Safari ignores it silently. */
   buzz(ms = 12): void {
-    if (!this.haptics) return
+    if (!this.haptics || this.muted) return
     try {
       navigator.vibrate?.(ms)
     } catch {
