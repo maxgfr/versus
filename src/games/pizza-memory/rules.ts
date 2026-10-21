@@ -59,16 +59,18 @@ export function rightPick(
 
 /**
  * Who has won once a round is resolved, or null while the game goes on. A
- * round where exactly one player rebuilt the order decides it; after
- * MAX_ORDERS rounds the higher score wins (equal scores draw).
+ * round where exactly one player rebuilt the order decides it; after `total`
+ * rounds (the match length the players chose) the higher score wins (equal
+ * scores draw).
  */
 export function decide(
   right: [boolean, boolean],
   scores: [number, number],
   rounds: number,
+  total = MAX_ORDERS,
 ): Side | 'draw' | null {
   if (right[0] !== right[1]) return right[0] ? 0 : 1
-  if (rounds < MAX_ORDERS) return null
+  if (rounds < total) return null
   return scores[0] === scores[1] ? 'draw' : scores[0] > scores[1] ? 0 : 1
 }
 

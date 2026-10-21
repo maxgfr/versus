@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { hash01, RunnerGame, toWorld } from '../../engines/runner/index.ts'
@@ -31,7 +31,14 @@ export interface State {
 const WAIT = 1.1
 const END = 1.9
 
+/** Round wins needed to take the match (best of three by default). */
+export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 9 }
+
 class HappyBirds extends RunnerGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     return {
       birds: [newBird(), newBird()],
@@ -141,7 +148,7 @@ class HappyBirds extends RunnerGame<State> {
     if (w !== 'draw') {
       s.wins[w]++
       this.ctx.audio.play('score')
-      if (s.wins[w] >= TARGET) this.finish(w, { score: s.wins, delay: END })
+      if (s.wins[w] >= this.target) this.finish(w, { score: s.wins, delay: END })
     } else this.ctx.audio.play('draw')
   }
 
@@ -176,6 +183,7 @@ class HappyBirds extends RunnerGame<State> {
       name: this.ctx.names[side],
       bot: this.isBot(side),
       matchOver: this.over,
+      target: this.target,
     })
   }
 }

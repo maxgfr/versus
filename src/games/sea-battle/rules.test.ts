@@ -327,4 +327,19 @@ describe('sea battle game', () => {
       expect(game.result).not.toBeNull()
     }
   })
+
+  it('a match to two round wins ends only when one side has two, scored in rounds', () => {
+    const c = { ...ctxFor(9, '2p', [true, true]), target: 2 }
+    const game = makeGame()
+    game.init(c)
+    for (let f = 0; f < 60 * 60 * 900 && !game.result; f++) {
+      game.update(1 / 60)
+      c.input.endStep()
+    }
+    const [red, blue] = game.s.wins
+    expect(game.result).not.toBeNull()
+    expect(Math.max(red, blue)).toBe(2)
+    expect(game.result?.winner).toBe(red === 2 ? 0 : 1)
+    expect(game.result?.score).toEqual([red, blue])
+  })
 })

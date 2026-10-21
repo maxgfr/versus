@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
@@ -25,6 +25,7 @@ import {
   jokerOn,
   legalRows,
   MAX_ROLLS,
+  NROWS,
   ROWS,
   type Sheet,
   scoreRow,
@@ -35,6 +36,9 @@ import {
   YAZY_BONUS,
   YAZY_ROW,
 } from './rules.ts'
+
+/** A match is a number of turns each; every turn scores one row of the sheet. */
+export const match: MatchSpec = { unit: 'rounds', default: NROWS, min: 1, max: NROWS }
 
 export interface State extends DiceState {
   turn: Side
@@ -49,6 +53,10 @@ export interface State extends DiceState {
 
 class YazyClassic extends TurnGame<State> {
   private wasRolling = false
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     return {
@@ -199,7 +207,7 @@ class YazyClassic extends TurnGame<State> {
       fx.burst(u.x, u.y, C.yellow, { count: 22, speed: 480, size: 14 })
       this.ctx.audio.play('powerup', 1.3)
     }
-    if (full(s.sheets[0]) && full(s.sheets[1])) {
+    if (full(s.sheets[0], this.target) && full(s.sheets[1], this.target)) {
       const a = total(s.sheets[0])
       const b = total(s.sheets[1])
       const winner = a === b ? 'draw' : a > b ? 0 : 1
@@ -219,7 +227,7 @@ class YazyClassic extends TurnGame<State> {
 
   render(g: Draw): void {
     tableBackdrop(g)
-    renderClassic(g, this.s, this.time, this.over, (side) => this.isBot(side))
+    renderClassic(g, this.s, this.time, this.over, (side) => this.isBot(side), this.target)
     this.drawTurns(g)
   }
 }

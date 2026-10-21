@@ -1,6 +1,6 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
-import { bigScore } from '../../core/hud.ts'
+import { bigScore, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -13,6 +13,7 @@ import {
   BURST,
   CELLS,
   cellsOf,
+  emptyPosition,
   legalCells,
   type Position,
   SIZE,
@@ -42,9 +43,17 @@ export interface State {
   burstCells: number[]
   burstSides: number[]
   burstAt: number
-  /** Game time the game was decided, -1 while playing. */
+  /** Game time the round was decided, -1 while playing. */
   endedAt: number
   winner: Side | 'draw' | null
+  /** Rounds won so far by each side. */
+  wins: [number, number]
+  /** Who opened the current round. The other player opens the next one. */
+  starter: Side
+  /** Rounds started, counting the current one. */
+  round: number
+  /** Game time the current round began. */
+  roundAt: number
 }
 
 const GEO = geom(SIZE, SIZE, 780, 780, MID)
@@ -54,14 +63,27 @@ const WAVE = 0.15
 const FIRST = 0.22
 /** Guard against endless stalemates: past this many moves the cells decide. */
 const TURN_CAP = 300
+/** Seconds a decided round stays on the board before the next one is set out. */
+const ROUND_PAUSE = 2.6
+
+/**
+ * One round is one board. The match is first to `target` round wins; the
+ * default of one round is a single game, exactly as before.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 const centre = (i: number) => cellCenter(GEO, i % SIZE, Math.floor(i / SIZE))
 
 class ColorWars extends TurnGame<State> {
+  /** Round wins that decide the match, as chosen on the ready screen. */
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
-    const turn: Side = this.ctx.rng.chance(0.5) ? 0 : 1
+    const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn,
+      turn: starter,
       owner: Array<Side | null>(CELLS).fill(null),
       dots: Array<number>(CELLS).fill(0),
       moved: [false, false],
@@ -77,6 +99,10 @@ class ColorWars extends TurnGame<State> {
       burstAt: -10,
       endedAt: -1,
       winner: null,
+      wins: [0, 0],
+      starter,
+      round: 1,
+      roundAt: 0,
     }
   }
 
@@ -95,7 +121,10 @@ class ColorWars extends TurnGame<State> {
 
   /** A chain reaction plays out one wave at a time before anyone may tap. */
   protected override step(dt: number): void {
-    if (this.s.endedAt >= 0) return
+    if (this.s.endedAt >= 0) {
+      if (!this.over && this.time - this.s.endedAt >= ROUND_PAUSE) this.nextRound()
+      return
+    }
     if (this.s.pending.length > 0) {
       if (this.time >= this.s.waveAt) this.wave()
       return
@@ -210,6 +239,33 @@ class ColorWars extends TurnGame<State> {
     if (s.turns >= TURN_CAP) this.end(this.byCells())
   }
 
+  /** A clean board for the next round; the player who did not open the last one starts. */
+  private nextRound(): void {
+    const s = this.s
+    const starter = other(s.starter)
+    const p = emptyPosition(starter)
+    s.starter = starter
+    s.turn = starter
+    s.owner = p.owner
+    s.dots = p.dots
+    s.moved = p.moved
+    s.pending = []
+    s.waveAt = 0
+    s.chain = 0
+    s.turns = 0
+    s.stampAt = Array<number>(CELLS).fill(-10)
+    s.flipAt = Array<number>(CELLS).fill(-10)
+    s.flipFrom = Array<number>(CELLS).fill(-1)
+    s.burstCells = []
+    s.burstSides = []
+    s.burstAt = -10
+    s.endedAt = -1
+    s.winner = null
+    s.round++
+    s.roundAt = this.time
+    this.ctx.audio.play('go')
+  }
+
   /** Who holds more cells: used by the stalemate guard. */
   private byCells(): Side | 'draw' {
     const a = cellsOf(this.pos(), 0)
@@ -223,8 +279,8 @@ class ColorWars extends TurnGame<State> {
     s.pending = []
     s.endedAt = this.time
     s.winner = w
-    const score: [number, number] = [cellsOf(this.pos(), 0), cellsOf(this.pos(), 1)]
     if (w !== 'draw') {
+      s.wins[w]++
       this.ctx.audio.play('explode', 0.9)
       fx.flash(SIDE[w].main, 0.35)
       fx.shake(0.45)
@@ -235,6 +291,11 @@ class ColorWars extends TurnGame<State> {
         fx.burst(c.x, c.y, SIDE[w].light, { count: 6, speed: 380, size: 10, life: 0.7 })
       }
     }
+    // Stalemates score nothing. A round that does not decide the match is shown, then the next one starts.
+    if (w === 'draw' || s.wins[w] < this.target) return
+    // A single round keeps the cell count on the result screen; a match shows its round wins.
+    const score: [number, number] =
+      this.target > 1 ? s.wins : [cellsOf(this.pos(), 0), cellsOf(this.pos(), 1)]
     this.finish(w, { score, delay: 2 })
   }
 
@@ -246,6 +307,12 @@ class ColorWars extends TurnGame<State> {
     this.drawTurns(g, undefined, s.endedAt < 0 && s.pending.length === 0)
     bigScore(g, 0, cellsOf(this.pos(), 0), { x: 130 })
     bigScore(g, 1, cellsOf(this.pos(), 1), { x: 870 })
+    // Round wins sit in the same corner as the cell count; a single round shows none.
+    if (this.target > 1) {
+      for (const side of [0, 1] as Side[]) {
+        pips(g, side, s.wins[side], this.target, { x: side === 0 ? 130 : 870, inset: 170 })
+      }
+    }
     if (live && !s.moved[s.turn]) {
       hint(g, s.turn, 'Tap any cell to claim it', 0.6 + 0.4 * Math.sin(this.time * 4))
     }
@@ -259,6 +326,11 @@ class ColorWars extends TurnGame<State> {
             ? `${this.ctx.names[loser]} wiped out!`
             : 'Most cells!'
       notice(g, text, a)
+    }
+    const since = this.time - s.roundAt
+    if (s.round > 1 && since < 1.3 && s.endedAt < 0) {
+      const a = Math.min(1, since * 6, (1.3 - since) * 4)
+      notice(g, `Round ${s.round} · ${this.ctx.names[s.starter]} starts`, a)
     }
   }
 }

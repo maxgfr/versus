@@ -11,8 +11,10 @@ import {
   FALL_LINE,
   hoverY,
   ISLAND,
+  matchWinner,
   PIECES,
   pieceAt,
+  roundSeed,
   towerTop,
 } from './rules.ts'
 import { simulateDrop } from './sim.ts'
@@ -34,6 +36,20 @@ describe('animal stack rules', () => {
     expect(hoverY(b, 0)).toBeLessThan(towerTop(b))
     expect(cameraFor(1000)).toBe(0)
     expect(cameraFor(-200)).toBeGreaterThan(0)
+  })
+
+  it('deals each round its own pieces', () => {
+    expect(roundSeed(7, 0)).toBe(7)
+    const first = Array.from({ length: 20 }, (_, i) => pieceAt(7, i))
+    const second = Array.from({ length: 20 }, (_, i) => pieceAt(roundSeed(7, 1), i))
+    expect(second).not.toEqual(first)
+  })
+
+  it('takes the match at the chosen number of round wins', () => {
+    expect(matchWinner([0, 0], 1)).toBeNull()
+    expect(matchWinner([1, 0], 1)).toBe(0)
+    expect(matchWinner([2, 1], 3)).toBeNull()
+    expect(matchWinner([2, 3], 3)).toBe(1)
   })
 
   it('knows a fallen block', () => {

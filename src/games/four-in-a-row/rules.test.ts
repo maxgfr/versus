@@ -114,10 +114,14 @@ describe('four in a row rules', () => {
     expect(addRound([1, 0], null)).toEqual([1, 0])
   })
 
-  it('a match is decided at two round wins', () => {
-    expect(matchOver([1, 1])).toBeNull()
-    expect(matchOver([2, 0])).toBe(0)
-    expect(matchOver([1, 2])).toBe(1)
+  it('a match is decided at the chosen number of round wins', () => {
+    expect(matchOver([1, 1], 2)).toBeNull()
+    expect(matchOver([2, 0], 2)).toBe(0)
+    expect(matchOver([1, 2], 2)).toBe(1)
+    // A longer match (first to 3) is not over at two round wins.
+    expect(matchOver([2, 0], 3)).toBeNull()
+    expect(matchOver([3, 1], 3)).toBe(0)
+    expect(matchOver([1, 3], 3)).toBe(1)
   })
 })
 
@@ -149,17 +153,17 @@ describe('four in a row bot', () => {
   })
 
   it('finishes whole matches computer against computer within bounded moves', () => {
-    for (const [seed, difficulty] of [
-      [5, 'normal'],
-      [6, 'easy'],
-      [7, 'normal'],
-      [8, 'hard'],
+    for (const [seed, difficulty, target] of [
+      [5, 'normal', 2],
+      [6, 'easy', 2],
+      [7, 'normal', 3],
+      [8, 'hard', 3],
     ] as const) {
       const rng = new Rng(seed)
       let wins: [number, number] = [0, 0]
       let starter: Side = seed % 2 === 0 ? 0 : 1
       let rounds = 0
-      while (matchOver(wins) === null) {
+      while (matchOver(wins, target) === null) {
         // A round is at most one disc per cell; draws do not count, so bound the rounds too.
         expect(rounds).toBeLessThan(20)
         let cells = emptyBoard()
@@ -178,7 +182,7 @@ describe('four in a row bot', () => {
         starter = nextStarter(starter)
         rounds++
       }
-      expect(matchOver(wins)).not.toBeNull()
+      expect(matchOver(wins, target)).not.toBeNull()
     }
   })
 })

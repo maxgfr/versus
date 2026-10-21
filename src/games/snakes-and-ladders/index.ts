@@ -1,7 +1,9 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import { MID } from '../../core/stage.ts'
 import { tableBackdrop, TurnGame, type TurnState } from '../../engines/board/index.ts'
 import { buttonHit, type ButtonLayout, frame } from '../../engines/dice/index.ts'
 import { decide } from './bot.ts'
@@ -22,6 +24,12 @@ import {
 /** The one board every game plays on (see rules.ts). */
 const BOARD = makeBoard()
 
+/** A match is first to N round wins; each round is one race to square 100. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** Seconds a finished round stays on screen before the pawns go back to start. */
+const ROUND_PAUSE = 2.4
+
 /** A roll in progress on screen: the token hops, then climbs or slides. */
 export interface Move extends Anim {
   face: number
@@ -36,6 +44,14 @@ export interface Move extends Anim {
 }
 
 export interface State extends TurnState {
+  /** Who opens the current round; the other player opens the next one. */
+  starter: Side
+  /** Round wins per side. */
+  wins: [number, number]
+  /** A round that ended without deciding the match: its winner, and when it ended. */
+  round: { winner: Side; at: number } | null
+  /** Game time the next round is set up, or -1 while this round is live. */
+  nextAt: number
   /** Square of each side's token: 0 = still off the board, 100 = home. */
   pos: [number, number]
   /** Last face each side rolled. */
@@ -52,9 +68,18 @@ export interface State extends TurnState {
 const DIE_HIT: ButtonLayout = { x: DIE.x, y: DIE.y, w: DIE.hit, h: DIE.hit }
 
 class SnakesAndLadders extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
+    const turn: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn: this.ctx.rng.chance(0.5) ? 0 : 1,
+      turn,
+      starter: turn,
+      wins: [0, 0],
+      round: null,
+      nextAt: -1,
       pos: [0, 0],
       dice: [1, 1],
       rolledAt: [-10, -10],
@@ -65,12 +90,17 @@ class SnakesAndLadders extends TurnGame<State> {
   }
 
   protected override busy(): boolean {
-    return this.s.anim !== null
+    return this.s.anim !== null || this.s.nextAt >= 0
   }
 
   /** Plays the hop, landing and link effects as the move's clock passes them, then ends the move. */
   protected override animate(): void {
-    const a = this.s.anim
+    const s = this.s
+    if (s.nextAt >= 0 && this.time >= s.nextAt) {
+      this.nextRound()
+      return
+    }
+    const a = s.anim
     if (!a) return
     const fx = this.ctx.fx
     const t0 = a.start + ROLL_T
@@ -172,18 +202,45 @@ class SnakesAndLadders extends TurnGame<State> {
     const s = this.s
     s.anim = null
     if (finished(s.pos[a.side])) {
-      s.end = { winner: a.side, at: this.time }
       const p = spot(a.side, GOAL)
       const fx = this.ctx.fx
       fx.confetti(a.side)
       fx.flash(SIDE[a.side].main, 0.25)
       fx.sparks(p.x, p.y, C.yellow, 30)
       fx.ring(p.x, p.y, C.yellow, 160)
-      this.finish(a.side, { note: `Home in ${s.rolls[a.side]} rolls`, delay: 2.2 })
+      if (this.roundWon(a.side)) {
+        s.end = { winner: a.side, at: this.time }
+        this.finish(a.side, { note: `Home in ${s.rolls[a.side]} rolls`, delay: 2.2 })
+      } else this.pauseRound(a.side)
       return
     }
     // A six rolls again; anything else passes the turn.
     if (a.face !== 6) s.turn = other(a.side)
+  }
+
+  /** Count a round win; true when it was the round that wins the match. */
+  private roundWon(side: Side): boolean {
+    const s = this.s
+    s.wins[side]++
+    return s.wins[side] >= this.target
+  }
+
+  /** The round is over but not the match: show who got home, then send the pawns back to start. */
+  private pauseRound(side: Side): void {
+    this.s.round = { winner: side, at: this.time }
+    this.s.nextAt = this.time + ROUND_PAUSE
+  }
+
+  /** Back to the start for a new round; the player who did not open the last one starts. */
+  private nextRound(): void {
+    const s = this.s
+    s.starter = other(s.starter)
+    s.turn = s.starter
+    s.pos = [0, 0]
+    s.rolls = [0, 0]
+    s.anim = null
+    s.round = null
+    s.nextAt = -1
   }
 
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
@@ -229,8 +286,19 @@ class SnakesAndLadders extends TurnGame<State> {
     const s = this.s
     tableBackdrop(g)
     renderSnakes(g, s, BOARD, this.time, this.over, (side) => this.isBot(side))
-    this.drawTurns(g)
+    this.drawTurns(g, undefined, s.nextAt < 0)
+    if (this.target > 1) {
+      pips(g, 0, s.wins[0], this.target)
+      pips(g, 1, s.wins[1], this.target)
+    }
     if (s.end) endBanner(g, 'Square 100!', s.end.winner, s.end.at, this.time)
+    else if (s.round) {
+      const text = `${this.ctx.names[s.round.winner]} takes the round`
+      banner(g, undefined, text, MID, {
+        size: 58,
+        alpha: Math.min(1, (this.time - s.round.at) * 4),
+      })
+    }
   }
 }
 

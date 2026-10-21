@@ -3,7 +3,7 @@ import { outBack, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { laneHud, LANE_H, LANE_W, repeatX } from '../../engines/runner/index.ts'
-import { BIRD_R, BIRD_X, type Bird, GROUND, pipe, PIPE_W, SPACING, FIRST, TARGET } from './rules.ts'
+import { BIRD_R, BIRD_X, type Bird, GROUND, pipe, PIPE_W, SPACING, FIRST } from './rules.ts'
 
 export interface LaneView {
   bird: Bird
@@ -18,6 +18,8 @@ export interface LaneView {
   name: string
   bot: boolean
   matchOver: boolean
+  /** Round wins needed to take the match. */
+  target: number
 }
 
 type View = { x0: number; y0: number; x1: number; y1: number }
@@ -156,14 +158,32 @@ function drawBird(g: Draw, side: Side, b: Bird, time: number, phase: LaneView['p
   })
 }
 
-/** Round pips beside the counter. The lane's outer-left corner near the midline is the pause button's. */
-function winPips(g: Draw, side: Side, wins: number): void {
-  for (let i = 0; i < TARGET; i++) {
-    const x = LANE_W - 230 + i * 52
+/**
+ * Round pips beside the counter. The lane's outer-left corner near the midline is the pause button's.
+ * Long matches shrink the pips and anchor the row to the lane's right edge, so they stay on screen.
+ */
+function winPips(g: Draw, side: Side, wins: number, target: number): void {
+  const long = target > 4
+  const r = long ? 11 : 19
+  const gap = long ? 30 : 52
+  const x0 = long ? LANE_W - 50 - (target - 1) * gap : LANE_W - 230
+  // A dark plate behind the row, so the pips read over the pipes.
+  const pad = 16
+  const span = (target - 1) * gap
+  g.rrect(
+    x0 - r - pad,
+    70 - r - pad,
+    span + 2 * (r + pad),
+    2 * (r + pad),
+    r + pad,
+    alpha(C.ink, 0.5),
+  )
+  for (let i = 0; i < target; i++) {
+    const x = x0 + i * gap
     const on = i < wins
-    g.circle(x, 70, 19, on ? SIDE[side].main : alpha(C.ink, 0.35))
-    if (on) g.circle(x - 5, 65, 6, alpha('#ffffff', 0.65))
-    else g.ring(x, 70, 19, alpha('#ffffff', 0.55), 4)
+    g.circle(x, 70, r, on ? SIDE[side].main : alpha(C.ink, 0.35))
+    if (on) g.circle(x - r * 0.26, 70 - r * 0.26, r * 0.32, alpha('#ffffff', 0.65))
+    else g.ring(x, 70, r, alpha('#ffffff', 0.55), 4)
   }
 }
 
@@ -200,7 +220,7 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   drawBird(g, side, b, o.time, o.phase)
 
   laneHud(g, side, b.pipes, o.bot ? 'Computer' : o.name, LANE_W / 2 - 40, 70)
-  winPips(g, side, o.wins)
+  winPips(g, side, o.wins, o.target)
 
   if (o.phase === 'wait') {
     const label = o.round > 1 ? `Round ${o.round}` : o.bot ? 'Ready…' : 'Tap to flap!'

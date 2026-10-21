@@ -39,5 +39,5 @@ export function ropeWinner(r: Rope): Side | null {
   return null
 }
 
-/** Rounds are best of three. */
+/** Round wins to take the match by default (best of three). */
 export const TARGET = 2

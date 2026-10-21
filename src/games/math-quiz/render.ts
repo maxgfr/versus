@@ -320,15 +320,17 @@ export function racePips(
 ): void {
   const y = hudY(g, side)
   const x = side === 0 ? 812 : 188
-  const gap = 34
+  // The dots keep to a 306-wide row: a long match packs them closer together.
+  const gap = Math.min(34, 306 / Math.max(1, target - 1))
+  const dot = Math.min(12, gap * 0.45)
   g.forSide(side, x, y, () => {
     const x0 = -((target - 1) * gap) / 2
     for (let i = 0; i < target; i++) {
       const on = i < n
       const fresh = on && i === n - 1 ? outCubic(prog(now - at, 0, 0.35)) : 1
-      const r = 12 * (on ? 1 + 0.5 * (1 - fresh) : 1)
+      const r = dot * (on ? 1 + 0.5 * (1 - fresh) : 1)
       if (on) g.ball(x0 + i * gap, 0, r, SIDE[side].main, 0.8)
-      else g.circle(x0 + i * gap, 0, 10, alpha(C.white, 0.13))
+      else g.circle(x0 + i * gap, 0, dot * (10 / 12), alpha(C.white, 0.13))
     }
   })
 }

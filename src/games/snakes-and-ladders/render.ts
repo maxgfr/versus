@@ -87,8 +87,13 @@ function drawBoardBase(g: Draw): void {
   }
 }
 
-/** Square numbers, each upright for the player whose half it sits in; a trophy on 100. */
+/**
+ * Square numbers in each square's top-left corner, upright for the player whose
+ * half it sits in, so ladder rails and snake bodies cross the middle, not the
+ * numbers. A trophy on 100.
+ */
 function drawNumbers(g: Draw): void {
+  const off = BOARD.cell * 0.3
   for (let n = 1; n <= GOAL; n++) {
     const p = squareAt(n)
     const side: Side = rowOf(n) < 5 ? 0 : 1
@@ -97,7 +102,7 @@ function drawNumbers(g: Draw): void {
       continue
     }
     g.at(p.x, p.y, g.orient(side), () =>
-      g.text(n, 0, 1, { size: 34, weight: 700, color: alpha(C.ink, 0.42) }),
+      g.text(n, -off, -off + 2, { size: 26, weight: 800, color: alpha(C.ink, 0.6) }),
     )
   }
 }
@@ -421,12 +426,12 @@ export function renderSnakes(
 ): void {
   const cell = BOARD.cell
   drawBoardBase(g)
-  drawNumbers(g)
-  // Ladders and snakes sit between the board and the tokens.
+  // Ladders and snakes sit between the board and the tokens; the numbers go over them.
   for (const l of board.ladders) drawLadder(g, l, cell)
   board.snakes.forEach((sn, i) =>
     drawSnake(g, sn, SNAKE_COLORS[i % SNAKE_COLORS.length] ?? C.green, cell, now, i),
   )
+  drawNumbers(g)
   for (const side of [0, 1] as Side[]) drawPad(g, side, s.pos[side] > 0)
   // The side to move gets a soft spotlight under its token.
   const live = !over && !s.anim

@@ -54,12 +54,13 @@ function botMatch(
   b: Difficulty,
   seed: number,
   teams = false,
+  target = TARGET,
 ): { w: World; steps: number } {
   const rng = new Rng(seed)
   const w = newWorld(teams, 0)
   const mem = [newMemory(), newMemory()]
   let steps = 0
-  while (winner(w) === null && steps < 60 * 60 * 8) {
+  while (winner(w, target) === null && steps < 60 * 60 * 8) {
     const t0 = decide(w, 0, a, rng, mem[0] as ReturnType<typeof newMemory>, STEP)
     const t1 = decide(w, 1, b, rng, mem[1] as ReturnType<typeof newMemory>, STEP)
     const targets = w.mallets.map((m, i) => (m.side === 0 ? t0[i] : t1[i]) ?? null)
@@ -75,6 +76,14 @@ describe('air hockey', () => {
     const { w } = botMatch('hard', 'normal', 3)
     expect(winner(w)).not.toBeNull()
     expect(Math.max(...w.score)).toBe(TARGET)
+  })
+
+  it('ends the match at the chosen goal count, not the default', () => {
+    const { w } = botMatch('hard', 'normal', 3, false, 3)
+    expect(winner(w, 3)).not.toBeNull()
+    expect(Math.max(...w.score)).toBe(3)
+    expect(winner({ ...w, score: [TARGET - 1, 0] }, TARGET)).toBeNull()
+    expect(winner({ ...w, score: [3, 0] }, 3)).toBe(0)
   })
 
   it('the harder bot usually wins', () => {

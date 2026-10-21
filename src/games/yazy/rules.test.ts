@@ -10,6 +10,7 @@ import {
   openRows,
   score,
   total,
+  turnsPlayed,
   type Sheet,
 } from './rules.ts'
 
@@ -46,6 +47,17 @@ describe('yazy scoring', () => {
     s[0] = 10
     s[3] = 5
     expect(total(s)).toBe(15)
+    expect(full(s)).toBe(false)
+  })
+
+  it('ends a shorter match after its turns, not after the whole sheet', () => {
+    const s = emptySheet()
+    s[0] = 10
+    s[4] = 0
+    s[8] = 20
+    expect(turnsPlayed(s)).toBe(3)
+    expect(full(s, 3)).toBe(true)
+    expect(full(s, 4)).toBe(false)
     expect(full(s)).toBe(false)
   })
 })

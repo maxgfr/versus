@@ -1,5 +1,6 @@
 import { frame } from '../../core/frame.ts'
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -21,8 +22,20 @@ import {
 } from './render.ts'
 import { ALL_OPEN, canShut, countOf, diceCount, sumOf, TILES, tileBit } from './rules.ts'
 
+/** A match is first to N round wins. Each round is one box per player, lowest score wins. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** Seconds a decided round stays on screen before the next one is dealt. */
+const ROUND_PAUSE = 3
+
 export interface State {
   turn: Side
+  /** Who opens the current round; the other player opens the next one. */
+  starter: Side
+  /** Round wins per side. */
+  wins: [number, number]
+  /** Game time the next round is dealt, or -1 while this round is live. */
+  nextAt: number
   /** Open tiles per side: bit i is tile i + 1. */
   open: [number, number]
   /** Final score per side once that side has played its turn. */
@@ -58,9 +71,16 @@ class ShutTheBox extends TurnGame<State> {
   private landedAt = -10
   private flapsDone = 0
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     return {
       turn: 0,
+      starter: 0,
+      wins: [0, 0],
+      nextAt: -1,
       open: [ALL_OPEN, ALL_OPEN],
       scores: [null, null],
       doneAt: [-10, -10],
@@ -80,13 +100,19 @@ class ShutTheBox extends TurnGame<State> {
   }
 
   protected override busy(): boolean {
-    return this.time - this.s.rolledAt < ROLL_TIME || this.time < this.s.holdUntil
+    const s = this.s
+    return this.time - s.rolledAt < ROLL_TIME || this.time < s.holdUntil || s.nextAt >= 0
   }
 
   /** Lands dice and flaps with their sounds, and ends a turn whose roll had no move. */
   protected override animate(_dt: number): void {
+    const s = this.s
     this.effects()
-    if (this.s.stuck && this.time >= this.s.holdUntil) this.endTurn()
+    if (s.nextAt >= 0 && this.time >= s.nextAt) {
+      this.nextRound()
+      return
+    }
+    if (s.stuck && this.time >= s.holdUntil) this.endTurn()
   }
 
   protected override afterEnd(_dt: number): void {
@@ -244,7 +270,7 @@ class ShutTheBox extends TurnGame<State> {
     if (after === 0) this.shutAll(side)
   }
 
-  /** Every tile is down: an instant win. */
+  /** Every tile is down: an instant round win. */
   private shutAll(side: Side): void {
     const s = this.s
     const o = other(side)
@@ -252,7 +278,6 @@ class ShutTheBox extends TurnGame<State> {
     s.doneAt[side] = this.time + 0.5
     const rest = s.scores[o] ?? sumOf(s.open[o])
     const score: [number, number] = side === 0 ? [0, rest] : [rest, 0]
-    s.end = { at: this.time, winner: side }
     const fx = this.ctx.fx
     fx.confetti(side)
     fx.flash(C.yellow, 0.45)
@@ -263,10 +288,10 @@ class ShutTheBox extends TurnGame<State> {
     fx.burst(c.x, c.y, C.yellow, { count: 40, speed: 900, size: 14, kind: 'square' })
     fx.float('Shut the box!', W / 2, side === 0 ? MID + 150 : MID - 150, C.yellow, 76, side)
     this.ctx.audio.play('powerup')
-    this.finish(side, { score, note: 'Shut the box!', delay: 3 })
+    this.decide(side, { score, note: 'Shut the box!', delay: 3 })
   }
 
-  /** The turn is over: score the open tiles; blue's end decides the game. */
+  /** The turn is over: score the open tiles; the second player's end decides the round. */
   private endTurn(): void {
     const s = this.s
     const side = s.turn
@@ -281,30 +306,76 @@ class ShutTheBox extends TurnGame<State> {
     fx.puff(c.x, c.y, 'rgba(255,255,255,0.35)', 8)
     fx.shake(0.25)
     this.ctx.audio.play('thud')
-    if (side === 0) {
-      s.turn = 1
+    if (side === s.starter) {
+      s.turn = other(side)
       s.turnAt = this.time + 0.5
       s.holdUntil = this.time + 0.9
       this.ctx.audio.play('whoosh')
       return
     }
     const a = s.scores[0] ?? 0
-    const b = pts
+    const b = s.scores[1] ?? 0
     const winner = a === b ? 'draw' : a < b ? 0 : 1
-    s.end = { at: this.time, winner }
     if (winner !== 'draw') {
       fx.confetti(winner)
       const w = boxCentre(winner)
       fx.burst(w.x, w.y, C.yellow, { count: 26, speed: 700, size: 12, kind: 'square' })
       fx.ring(w.x, w.y, SIDE[winner].light, 360)
     }
-    this.finish(winner, { score: [a, b], delay: 2.8 })
+    this.decide(winner, { score: [a, b], delay: 2.8 })
+  }
+
+  /**
+   * The round is decided. A win counts; the match ends when someone reaches the
+   * target, otherwise the stamps stay up for a moment and the next round is dealt.
+   */
+  private decide(
+    winner: Side | 'draw',
+    o: { score?: [number, number]; note?: string; delay?: number },
+  ): void {
+    const s = this.s
+    s.end = { at: this.time, winner }
+    if (winner !== 'draw') s.wins[winner]++
+    if (winner !== 'draw' && s.wins[winner] >= this.target) {
+      this.finish(winner, o)
+      return
+    }
+    s.nextAt = this.time + ROUND_PAUSE
+  }
+
+  /** Clear the boxes for a new round; the player who did not open the last one starts. */
+  private nextRound(): void {
+    const s = this.s
+    s.starter = other(s.starter)
+    s.turn = s.starter
+    s.open = [ALL_OPEN, ALL_OPEN]
+    s.scores = [null, null]
+    s.doneAt = [-10, -10]
+    s.roll = 0
+    s.sel = 0
+    s.selAt = Array<number>(TILES).fill(-10)
+    s.flipMask = 0
+    s.stuck = false
+    s.holdUntil = this.time
+    s.turnAt = this.time
+    s.nextAt = -1
+    s.end = null
   }
 
   render(g: Draw): void {
+    const s = this.s
     tableBackdrop(g)
-    renderShut(g, this.s, this.time, this.over)
-    this.drawTurns(g)
+    renderShut(g, s, this.time, this.over)
+    this.drawTurns(g, undefined, s.nextAt < 0)
+    if (this.target > 1) {
+      pips(g, 0, s.wins[0], this.target)
+      pips(g, 1, s.wins[1], this.target)
+    }
+    if (s.end && s.nextAt >= 0) {
+      const text =
+        s.end.winner === 'draw' ? 'Draw round' : `${this.ctx.names[s.end.winner]} takes the round`
+      banner(g, undefined, text, MID, { size: 58 })
+    }
   }
 }
 

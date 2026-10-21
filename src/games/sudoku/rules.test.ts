@@ -8,8 +8,10 @@ import {
   generate,
   GIVENS,
   isSolved,
+  matchWinner,
   PEERS,
   progress,
+  roundSeed,
 } from './rules.ts'
 
 function valid(grid: number[]): boolean {
@@ -57,6 +59,23 @@ describe('sudoku helpers', () => {
     expect(isSolved(solution, solution)).toBe(true)
     expect(digitCounts(solution).slice(1)).toEqual([9, 9, 9, 9, 9, 9, 9, 9, 9])
     expect(completedUnits(solution, 0)).toHaveLength(3)
+  })
+
+  it('gives every round of a match its own puzzle, round 0 the game seed', () => {
+    expect(roundSeed(42, 0)).toBe(42)
+    const first = generate(roundSeed(42, 0), GIVENS.normal).solution
+    const second = generate(roundSeed(42, 1), GIVENS.normal).solution
+    expect(second).not.toEqual(first)
+    expect(generate(roundSeed(42, 1), GIVENS.normal)).toEqual(
+      generate(roundSeed(42, 1), GIVENS.normal),
+    )
+  })
+
+  it('ends the match at the chosen number of round wins', () => {
+    expect(matchWinner([0, 0], 1)).toBeNull()
+    expect(matchWinner([1, 0], 1)).toBe(0)
+    expect(matchWinner([2, 1], 3)).toBeNull()
+    expect(matchWinner([2, 3], 3)).toBe(1)
   })
 
   it('a bot solving move by move reaches the solution', () => {

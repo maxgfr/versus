@@ -6,7 +6,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import type { State } from './index.ts'
-import { LEAD, MAX_ORDERS, SHOW, TOPPINGS, watchLength } from './rules.ts'
+import { LEAD, SHOW, TOPPINGS, watchLength } from './rules.ts'
 
 /** The shared pizza, pizza-centred spots are relative to this. */
 export const PIZZA = { x: 500, y: MID, r: 228 }
@@ -161,8 +161,8 @@ function drawTopping(
 }
 
 /** Order ticket: "Order 3/8", readable from each edge (two copies in local 2P). */
-function drawTicket(g: Draw, s: State): void {
-  const label = `${s.round + 1}/${MAX_ORDERS}`
+function drawTicket(g: Draw, s: State, total: number): void {
+  const label = `${s.round + 1}/${total}`
   const one = (x: number, y: number, angle: number) =>
     g.at(x, y, angle, () => {
       g.rrect(-74, -64, 148, 128, 18, alpha('#000000', 0.3))
@@ -344,6 +344,7 @@ export function renderPizza(
   now: number,
   names: [string, string],
   pill: (side: Side) => { text?: string; active: boolean },
+  total: number,
 ): void {
   const watchT = now - s.phaseAt
   const glow = s.phase === 'watch' ? 0.5 + 0.3 * Math.sin(g.t * 6) : 0
@@ -427,7 +428,7 @@ export function renderPizza(
         )
     }
   }
-  drawTicket(g, s)
+  drawTicket(g, s, total)
   for (const side of [0, 1] as Side[]) drawSide(g, s, side, now)
   drawVerdicts(g, s, now)
   drawEnd(g, s, now)

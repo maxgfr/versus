@@ -13,7 +13,7 @@ import {
   trayLayout,
 } from '../../engines/dice/index.ts'
 import type { State } from './index.ts'
-import { CATS, MAX_ROLLS, score, total } from './rules.ts'
+import { CATS, MAX_ROLLS, score, total, turnsPlayed } from './rules.ts'
 
 /** Layout, written in red's frame (bottom half); blue's is the same turned 180°. */
 export const TRAY = trayLayout(5, 900, 122)
@@ -28,10 +28,13 @@ export function renderYazy(
   now: number,
   over: boolean,
   isBot: (side: Side) => boolean,
+  rounds: number,
 ): void {
   for (const side of [0, 1] as Side[]) {
     const mine = s.turn === side && !over
     const canScore = mine && s.rolls > 0 && !rolling(s, now)
+    const turns = turnsPlayed(s.sheets[side])
+    const sub = turns >= rounds ? 'Finished' : `Turn ${turns + 1} of ${rounds}`
     drawSheet(
       g,
       side,
@@ -53,6 +56,7 @@ export function renderYazy(
     drawRollButton(g, side, ROLL, label, {
       enabled: mine && (s.rolls < MAX_ROLLS || isBot(side)),
       pulse: canRoll && s.rolls === 0,
+      sub,
     })
     g.alpha(mine ? 1 : 0.45, () => drawRollsLeft(g, side, LEFT_X, ROLL.y, left))
     drawTotal(g, side, TOTAL_X, ROLL.y, total(s.sheets[side]))

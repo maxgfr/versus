@@ -1,7 +1,7 @@
-import { other, type Side } from '../../core/game.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
-import { banner } from '../../core/hud.ts'
+import { banner, pips } from '../../core/hud.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import { TurnGame } from '../../engines/board/index.ts'
@@ -45,11 +45,48 @@ export interface State {
   doneAt: number
   /** Game time the last bubble went, or -1. Then the whole board springs back up. */
   endAt: number
+  /** Rounds won so far by each side. */
+  wins: [number, number]
+  /** Who opened the current round. The other player opens the next one. */
+  starter: Side
+  /** Rounds started, counting the current one. */
+  round: number
+  /** Game time the current round began. */
+  roundAt: number
+}
+
+/** Seconds from the last pop until the next round's board is set out (the refill wave and the banner are done by then). */
+const ROUND_PAUSE = 3
+
+/**
+ * One round is one board: whoever pops the last bubble loses it. The match is
+ * first to `target` round wins; the default of one round is a single game.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/**
+ * Where the bubble-count chips sit, either side of the midline (their slot is
+ * taken by a banner while a round is announced, so the tray stays clear).
+ */
+const CHIP_GAP = 508
+
+/** A banner both players can read, in the chip slot above or below the tray (one copy each in local 2P). */
+function shout(g: Draw, text: string, alpha: number, color?: string): void {
+  // A long name (up to 12 letters, some of them wide) shrinks the line so it fits the table.
+  const size = Math.min(54, (54 * 860) / g.measure(text, 54, 700))
+  const o = { size, alpha, color }
+  if (g.flipTop) banner(g, undefined, text, MID, { ...o, gap: CHIP_GAP })
+  else banner(g, 0, text, MID + CHIP_GAP, o)
 }
 
 class PopIt extends TurnGame<State> {
   /** The computer's plan for its turn (host only; never part of the shared state). */
   private plan: { row: number; left: number } | null = null
+
+  /** Round wins that decide the match, as chosen on the ready screen. */
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     // On the shared tray a touch belongs to whoever's turn it is, whichever half it came from.
@@ -57,8 +94,9 @@ class PopIt extends TurnGame<State> {
       if (inRect(x, y, TRAY)) return this.s.turn
       return y >= MID ? 0 : 1
     }
+    const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn: this.ctx.rng.chance(0.5) ? 0 : 1,
+      turn: starter,
       popped: Array<boolean>(BUBBLES).fill(false),
       poppedAt: Array<number>(BUBBLES).fill(-10),
       lock: -1,
@@ -66,6 +104,10 @@ class PopIt extends TurnGame<State> {
       turnAt: 0,
       doneAt: -10,
       endAt: -1,
+      wins: [0, 0],
+      starter,
+      round: 1,
+      roundAt: 0,
     }
   }
 
@@ -136,9 +178,10 @@ class PopIt extends TurnGame<State> {
     // Each row has its own note, and each pop in a turn climbs a little higher.
     this.ctx.audio.play('pop', 0.8 + (ROWS - 1 - rowOf(i)) * 0.07 + s.pops * 0.03)
     if (bubblesLeft(s.popped) > 0) return
-    // The last bubble: whoever pops it loses. Make the moment land, then the board springs back.
+    // The last bubble: whoever pops it loses the round. Make the moment land, then the board springs back.
     const winner = other(side)
     s.endAt = this.time
+    s.wins[winner]++
     fx.shake(0.8)
     fx.stop(8)
     fx.ring(x, y, C.white, 260)
@@ -146,15 +189,19 @@ class PopIt extends TurnGame<State> {
     fx.flash(SIDE[winner].main, 0.3)
     fx.confetti(winner)
     this.ctx.audio.play('thud')
-    this.finish(winner, {
-      note: `${this.ctx.names[side]} popped the last bubble`,
-      delay: 3,
-    })
+    if (s.wins[winner] < this.target) return
+    // A single round keeps the plain result; a match shows its round wins.
+    const note = `${this.ctx.names[side]} popped the last bubble`
+    this.finish(winner, this.target > 1 ? { note, delay: 3, score: s.wins } : { note, delay: 3 })
   }
 
-  /** The refill wave after the end: a pop and a puff as each row springs back up (host-side sound). */
+  /** The refill wave after the last bubble: a pop and a puff as each row springs back up (host-side sound). */
   private refilled = 0
   protected override afterEnd(_dt: number): void {
+    this.refillSounds()
+  }
+
+  private refillSounds(): void {
     const s = this.s
     if (s.endAt < 0) return
     while (this.refilled < ROWS) {
@@ -172,6 +219,37 @@ class PopIt extends TurnGame<State> {
       })
       this.ctx.audio.play('boing', 0.9 + (ROWS - 1 - row) * 0.08)
     }
+  }
+
+  /** Between rounds: the board springs back, then a fresh one is set out for the other player to open. */
+  protected override step(dt: number): void {
+    const s = this.s
+    if (s.endAt >= 0) {
+      if (this.over) return
+      this.refillSounds()
+      if (this.time - s.endAt >= ROUND_PAUSE) this.nextRound()
+      return
+    }
+    super.step(dt)
+  }
+
+  private nextRound(): void {
+    const s = this.s
+    const starter = other(s.starter)
+    s.starter = starter
+    s.turn = starter
+    s.popped = Array<boolean>(BUBBLES).fill(false)
+    s.poppedAt = Array<number>(BUBBLES).fill(-10)
+    s.lock = -1
+    s.pops = 0
+    s.turnAt = this.time
+    s.doneAt = -10
+    s.endAt = -1
+    s.round++
+    s.roundAt = this.time
+    this.plan = null
+    this.refilled = 0
+    this.ctx.audio.play('go')
   }
 
   /** Done: the turn passes to the other player with a fresh row choice. */
@@ -192,34 +270,38 @@ class PopIt extends TurnGame<State> {
   render(g: Draw): void {
     const s = this.s
     const now = this.time
+    // Between rounds the tray is still and nobody can press Done or pop.
+    const live = !this.over && s.endAt < 0
     backdrop(g)
     drawTray(g, s, now)
     const left = bubblesLeft(s.popped)
-    if (!this.over) {
+    if (live) {
       const side = s.turn
       // The Done key of the player who just finished stays a moment, pressed in.
       const prev = other(side)
       if (now - s.doneAt < 0.3) doneButton(g, prev, { pops: 1, now, turnAt: -10, doneAt: s.doneAt })
       doneButton(g, side, { pops: s.pops, now, turnAt: s.turnAt, doneAt: -10 })
     }
-    this.drawTurns(g, undefined, !this.over)
-    if (this.ctx.mode === '2p') {
-      countChip(g, left, now, 0)
-      countChip(g, left, now, 1)
-    } else countChip(g, left, now, this.ctx.mode === 'online' ? this.ctx.local : undefined)
+    this.drawTurns(g, undefined, live)
+    const since = now - s.roundAt
+    // While a round is announced, its banner takes the chips' slot.
+    const announcing = s.endAt >= 0 || (s.round > 1 && since < 1.3)
+    if (!announcing) {
+      if (this.ctx.mode === '2p') {
+        countChip(g, left, now, 0)
+        countChip(g, left, now, 1)
+      } else countChip(g, left, now, this.ctx.mode === 'online' ? this.ctx.local : undefined)
+    }
+    if (this.target > 1) {
+      for (const side of [0, 1] as Side[]) pips(g, side, s.wins[side], this.target, { inset: 170 })
+    }
     if (s.endAt >= 0) {
       const a =
         Math.min(1, (now - s.endAt) * 4) * (1 - Math.max(0, Math.min(1, (now - s.endAt - 2.2) * 3)))
-      const who = this.ctx.names[s.turn]
-      const text = `${who} popped the last one!`
-      // A long name (up to 12 letters, some of them wide) shrinks the line so it fits the table.
-      const size = Math.min(54, (54 * 860) / g.measure(text, 54, 700))
-      banner(g, undefined, text, MID, {
-        size,
-        alpha: a,
-        color: C.yellow,
-        gap: 120,
-      })
+      shout(g, `${this.ctx.names[s.turn]} popped the last one!`, a, C.yellow)
+    } else if (s.round > 1 && since < 1.3) {
+      const a = Math.min(1, since * 6, (1.3 - since) * 4)
+      shout(g, `Round ${s.round} · ${this.ctx.names[s.starter]} starts`, a)
     }
   }
 }

@@ -293,25 +293,38 @@ export function drawWinner(g: Draw, s: State, now: number, names: readonly strin
   } else one(g.orient(), MID)
 }
 
-/** Points so far as a row of pips beside the name pill, to each player's right. */
+/**
+ * Points so far as a segmented meter beside the name pill, one segment per point
+ * (`goal` in all), so any match length fits. The newest segment pops in.
+ */
 export function racePips(
   g: Draw,
   side: Side,
   n: number,
-  target: number,
+  goal: number,
   now: number,
   at: number,
 ): void {
   const y = hudY(g, side)
   const x = side === 0 ? 812 : 188
-  const gap = 34
+  const { seg, gap, w } = meterSize(goal)
   g.forSide(side, x, y, () => {
-    const x0 = -((target - 1) * gap) / 2
-    for (let i = 0; i < target; i++) {
-      const on = i < n
-      const fresh = on && i === n - 1 ? outCubic(prog(now - at, 0, 0.35)) : 1
-      if (on) g.ball(x0 + i * gap, 0, 12 * (1 + 0.5 * (1 - fresh)), SIDE[side].main, 0.8)
-      else g.circle(x0 + i * gap, 0, 10, alpha(C.white, 0.13))
+    for (let i = 0; i < goal; i++) {
+      const cx = -w / 2 + i * (seg + gap) + seg / 2
+      if (i >= n) {
+        g.rrect(cx - seg / 2, -9, seg, 18, 9, alpha(C.white, 0.14))
+        continue
+      }
+      const fresh = i === n - 1 ? outCubic(prog(now - at, 0, 0.35)) : 1
+      const k = 1 + 0.35 * (1 - fresh)
+      g.at(cx, 0, 0, () => g.rrect(-seg / 2, -9, seg, 18, 9, SIDE[side].main), k, k)
     }
   })
+}
+
+/** Segment width, gap and total width of the meter: at most 300 world units, however many points. */
+function meterSize(goal: number): { seg: number; gap: number; w: number } {
+  const gap = 4
+  const seg = Math.min(40, (300 - gap * (goal - 1)) / goal)
+  return { seg, gap, w: seg * goal + gap * (goal - 1) }
 }

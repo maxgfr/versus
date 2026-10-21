@@ -1,12 +1,15 @@
 import { frame, toLocal } from '../../core/frame.ts'
-import { BaseGame, other, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { tableBackdrop } from '../../engines/board/index.ts'
 import { type CardRect, cardAt } from '../../engines/cards/index.ts'
 import { pickTriple, spotDelay } from './bot.ts'
 import { renderTriple, tableGrid } from './render.ts'
-import { type Board, DECK_SIZE, newBoard, tapSlot, winner } from './rules.ts'
+import { type Board, DECK_SIZE, newBoard, TARGET, tapSlot, winner } from './rules.ts'
+
+/** Match length: first to N points. */
+export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 15 }
 
 export interface State extends Board {
   /** Game time each slot's card lands (it flips in from then), for the deal animation. */
@@ -39,6 +42,10 @@ class Triple extends BaseGame<State> {
   /** Computer: seconds until it next acts (-1 = not searching). */
   private clock: [number, number] = [-1, -1]
   private dealt = 0
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     const deck = this.ctx.rng.shuffle(Array.from({ length: DECK_SIZE }, (_, i) => i))
@@ -142,7 +149,7 @@ class Triple extends BaseGame<State> {
           }
           this.ctx.audio.play('slide', 1.1)
         }
-        const w = winner(s)
+        const w = winner(s, this.target)
         if (w === null) fx.float('Triple!', c.x, c.y, SIDE[side].light, 80, side)
         if (w !== null) {
           s.endAt = this.time
@@ -214,7 +221,7 @@ class Triple extends BaseGame<State> {
 
   render(g: Draw): void {
     tableBackdrop(g)
-    renderTriple(g, this.s, this.time, this.ctx.names, (side) => this.label(side))
+    renderTriple(g, this.s, this.time, this.ctx.names, (side) => this.label(side), this.target)
   }
 }
 

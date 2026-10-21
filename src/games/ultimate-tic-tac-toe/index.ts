@@ -1,9 +1,9 @@
 import { floatFor } from '../../core/fx/fx.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { hudY, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
-import { hudY } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
-import type { Side } from '../../core/game.ts'
 import { MID } from '../../core/stage.ts'
 import { cellAt, geom, tableBackdrop, TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
@@ -32,13 +32,30 @@ export interface State {
   wonAt: number[]
   /** Last move played, -1 before the first. */
   last: number
-  /** Big-board line that won the game, or null. */
+  /** Big-board line that won the round, or null. */
   line: number[] | null
-  /** Game time the game was decided, or -1 while playing. */
+  /** Game time the round was decided, or -1 while playing. */
   endedAt: number
-  /** What decided the game, shown before the result screen. */
+  /** What decided the round, shown before the next one or the result screen. */
   endText: string
+  /** Rounds won so far by each side. */
+  wins: [number, number]
+  /** Who opened the current round. The other player opens the next one. */
+  starter: Side
+  /** Rounds started, counting the current one. */
+  round: number
+  /** Game time the current round began. */
+  roundAt: number
 }
+
+/** Seconds a finished round stays on the board before the next one is set out. */
+const ROUND_PAUSE = 2.4
+
+/**
+ * One round is one big board. The match is first to `target` round wins; the
+ * default of one round is a single game, exactly as before.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 /**
  * The whole big board: nine small boards, 9 × 9 cells, centred on the table and
@@ -47,11 +64,16 @@ export interface State {
 const GEO = geom(9, 9, 780, 780, MID)
 
 class UltimateTicTacToe extends TurnGame<State> {
+  /** Round wins that decide the match, as chosen on the ready screen. */
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
-    const turn: Side = this.ctx.rng.chance(0.5) ? 0 : 1
-    const p = emptyPosition(turn)
+    const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
+    const p = emptyPosition(starter)
     return {
-      turn,
+      turn: starter,
       cells: p.cells,
       won: p.won,
       active: p.active,
@@ -61,6 +83,10 @@ class UltimateTicTacToe extends TurnGame<State> {
       line: null,
       endedAt: -1,
       endText: '',
+      wins: [0, 0],
+      starter,
+      round: 1,
+      roundAt: 0,
     }
   }
 
@@ -70,7 +96,31 @@ class UltimateTicTacToe extends TurnGame<State> {
   }
 
   protected override busy(): boolean {
-    return this.s.endedAt >= 0
+    const s = this.s
+    if (s.endedAt < 0) return false
+    if (this.over) return true
+    // Round over: show how it ended, then set out a fresh board for the other player to open.
+    if (this.time - s.endedAt > ROUND_PAUSE) this.nextRound()
+    return true
+  }
+
+  private nextRound(): void {
+    const s = this.s
+    const p = emptyPosition(other(s.starter))
+    s.starter = p.turn
+    s.turn = p.turn
+    s.cells = p.cells
+    s.won = p.won
+    s.active = p.active
+    s.placedAt = Array<number>(81).fill(0)
+    s.wonAt = Array<number>(9).fill(-1)
+    s.last = -1
+    s.line = null
+    s.endedAt = -1
+    s.endText = ''
+    s.round++
+    s.roundAt = this.time
+    this.ctx.audio.play('go')
   }
 
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
@@ -154,6 +204,7 @@ class UltimateTicTacToe extends TurnGame<State> {
         : `Most boards, ${Math.max(a, b)} to ${Math.min(a, b)}`
     s.endText = v.line ? 'Three in a row!' : v.winner === 'draw' ? 'Boards level' : 'Most boards!'
     if (v.winner !== 'draw') {
+      s.wins[v.winner]++
       fx.flash(SIDE[v.winner].main, 0.35)
       fx.shake(0.4)
       fx.stop(8)
@@ -162,7 +213,14 @@ class UltimateTicTacToe extends TurnGame<State> {
         fx.burst(c.x, c.y, C.yellow, { count: 18, speed: 560, size: 12, life: 0.8 })
       }
     }
-    this.finish(v.winner, { score: [a, b], note, delay: 2.2 })
+    if (v.winner === 'draw' || s.wins[v.winner] < this.target) {
+      // Not the match yet: the round is shown, then the next board is set out. Draws score nothing.
+      if (v.winner !== 'draw') s.endText = `${this.ctx.names[v.winner]} takes the round`
+      return
+    }
+    // A single round keeps the board count on the result screen; a match shows its round wins.
+    const score: [number, number] = this.target > 1 ? s.wins : [a, b]
+    this.finish(v.winner, { score, note, delay: 2.2 })
   }
 
   render(g: Draw): void {
@@ -179,10 +237,19 @@ class UltimateTicTacToe extends TurnGame<State> {
         last = Math.max(last, s.wonAt[b] ?? -10)
       })
       boardTally(g, side, n, side === 0 ? 120 : 880, hudY(g, side), this.time - last)
+      // Round wins sit in the same corner as the side's board count (a single round shows none).
+      if (this.target > 1) {
+        pips(g, side, s.wins[side], this.target, { x: side === 0 ? 120 : 880, inset: 170 })
+      }
     }
     if (s.endText) {
       const a = Math.min(1, (this.time - s.endedAt) * 4)
       notice(g, s.endText, a)
+    }
+    const since = this.time - s.roundAt
+    if (s.round > 1 && since < 1.3 && s.endedAt < 0) {
+      const a = Math.min(1, since * 6, (1.3 - since) * 4)
+      notice(g, `Round ${s.round} · ${this.ctx.names[s.starter]} starts`, a)
     }
   }
 }

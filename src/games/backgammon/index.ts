@@ -1,4 +1,5 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
+import { banner, pips as roundPips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -40,8 +41,21 @@ import {
 /** Turns after which the game is decided on pip count (a safety cap for computer-vs-computer). */
 export const PLY_CAP = 400
 const FLIGHT = 0.34
+/** Seconds a finished round stays on screen before the board is set up again. */
+const ROUND_PAUSE = 2.4
+
+/** A match is first to N round wins; each round is one whole game. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 export interface State extends TurnState {
+  /** Who opens the current round; the other player opens the next one. */
+  starter: Side
+  /** Round wins per side. */
+  wins: [number, number]
+  /** A round that ended without deciding the match: its winner, and when it began. */
+  round: { winner: Side | 'draw'; at: number } | null
+  /** Game time the next round is set up, or -1 while this round is live. */
+  nextAt: number
   pos: Pos
   /** The dice of this turn (two, or four for doubles); empty before the roll. */
   roll: number[]
@@ -89,9 +103,18 @@ class Backgammon extends TurnGame<State> {
   private plan: Step[] = []
   private wasRolling = false
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
+    const turn: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn: this.ctx.rng.chance(0.5) ? 0 : 1,
+      turn,
+      starter: turn,
+      wins: [0, 0],
+      round: null,
+      nextAt: -1,
       pos: start(),
       roll: [],
       origin: null,
@@ -113,12 +136,16 @@ class Backgammon extends TurnGame<State> {
     const rolling = this.time - s.rolledAt[s.turn] < ROLL_T
     if (this.wasRolling && !rolling) this.ctx.audio.play('place', 0.9)
     this.wasRolling = rolling
-    return s.flight !== null || this.time < s.wait || rolling
+    return s.flight !== null || this.time < s.wait || rolling || s.nextAt >= 0
   }
 
   /** Landing effects when a checker touches down; the turn goes on or passes when the flight ends. */
   protected override animate(): void {
     const s = this.s
+    if (s.nextAt >= 0 && this.time >= s.nextAt) {
+      this.nextRound()
+      return
+    }
     const fl = s.flight
     if (!fl) return
     if (!fl.landed && this.time >= fl.start + fl.dur) {
@@ -130,18 +157,20 @@ class Backgammon extends TurnGame<State> {
     const r = result(s.pos)
     if (r) {
       const text = r.points === 3 ? 'Backgammon!' : r.points === 2 ? 'Gammon!' : 'All off!'
-      s.end = { winner: r.winner, at: this.time, text }
       const fx = this.ctx.fx
       fx.confetti(r.winner)
       fx.flash(SIDE[r.winner].main, 0.25)
       fx.shake(0.35)
       const t = TRAY[r.winner]
       fx.sparks(t.x + t.w / 2, t.y + t.h / 2, C.yellow, 24)
-      this.finish(r.winner, {
-        score: [s.pos.off[0], s.pos.off[1]],
-        ...(r.points > 1 ? { note: text } : {}),
-        delay: 2.2,
-      })
+      if (this.roundWon(r.winner)) {
+        s.end = { winner: r.winner, at: this.time, text }
+        this.finish(r.winner, {
+          score: [s.pos.off[0], s.pos.off[1]],
+          ...(r.points > 1 ? { note: text } : {}),
+          delay: 2.2,
+        })
+      } else this.pauseRound(r.winner)
       return
     }
     if (!s.more) this.endTurn()
@@ -343,11 +372,44 @@ class Backgammon extends TurnGame<State> {
     if (s.ply >= PLY_CAP && !this.over) {
       const a = pips(s.pos, 0)
       const b = pips(s.pos, 1)
-      this.finish(a === b ? 'draw' : a < b ? 0 : 1, {
-        note: 'Turn limit: lower pip count wins',
-        delay: 1,
-      })
+      const winner = a === b ? 'draw' : a < b ? 0 : 1
+      if (this.roundWon(winner)) {
+        this.finish(winner, { note: 'Turn limit: lower pip count wins', delay: 1 })
+      } else this.pauseRound(winner)
     }
+  }
+
+  /** Count a round win; true when it was the round that wins the match. */
+  private roundWon(winner: Side | 'draw'): boolean {
+    if (winner === 'draw') return false
+    const s = this.s
+    s.wins[winner]++
+    return s.wins[winner] >= this.target
+  }
+
+  /** The round is over but not the match: show who took it, then set up the board again. */
+  private pauseRound(winner: Side | 'draw'): void {
+    this.s.round = { winner, at: this.time }
+    this.s.nextAt = this.time + ROUND_PAUSE
+  }
+
+  /** Set the board up for the next round; the player who did not open the last one starts. */
+  private nextRound(): void {
+    const s = this.s
+    s.starter = other(s.starter)
+    s.turn = s.starter
+    s.pos = start()
+    s.roll = []
+    s.origin = null
+    s.used = []
+    s.moves = []
+    s.sel = null
+    s.shown = [[], []]
+    s.more = false
+    s.ply = 0
+    s.round = null
+    s.nextAt = -1
+    this.plan = []
   }
 
   render(g: Draw): void {
@@ -380,8 +442,17 @@ class Backgammon extends TurnGame<State> {
       this.over,
       (side) => this.isBot(side),
     )
-    this.drawTurns(g)
+    this.drawTurns(g, undefined, s.nextAt < 0)
+    if (this.target > 1) {
+      roundPips(g, 0, s.wins[0], this.target)
+      roundPips(g, 1, s.wins[1], this.target)
+    }
     if (s.end) endBanner(g, s.end.text, s.end.winner, s.end.at, this.time)
+    else if (s.round) {
+      const { winner, at } = s.round
+      const text = winner === 'draw' ? 'Draw round' : `${this.ctx.names[winner]} takes the round`
+      banner(g, undefined, text, MID, { size: 58, alpha: Math.min(1, (this.time - at) * 4) })
+    }
   }
 }
 

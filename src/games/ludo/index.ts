@@ -1,7 +1,9 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import { MID } from '../../core/stage.ts'
 import { tableBackdrop, TurnGame, type TurnState } from '../../engines/board/index.ts'
 import { buttonHit, type ButtonLayout, frame, ROLL_TIME } from '../../engines/dice/index.ts'
 import { choose } from './bot.ts'
@@ -19,7 +21,21 @@ import {
   tokenWorld,
 } from './render.ts'
 
+/** A match is first to N round wins; each round is one whole race home. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** Seconds a finished round stays on screen before the pawns go back to base. */
+const ROUND_PAUSE = 2.4
+
 export interface State extends TurnState {
+  /** Who opens the current round; the other player opens the next one. */
+  starter: Side
+  /** Round wins per side. */
+  wins: [number, number]
+  /** A round that ended without deciding the match: its winner, and when it ended. */
+  round: { winner: Side; at: number } | null
+  /** Game time the next round is set up, or -1 while this round is live. */
+  nextAt: number
   /** Progress of every token of both sides (see rules.ts). */
   tok: Tokens
   /** Face rolled this turn and not yet used; 0 = the side to move still has to roll. */
@@ -41,9 +57,18 @@ const DIE_HIT: ButtonLayout = { x: DIE.x, y: DIE.y, w: DIE.hit, h: DIE.hit }
 class Ludo extends TurnGame<State> {
   private wasRolling = false
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
+    const turn: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn: this.ctx.rng.chance(0.5) ? 0 : 1,
+      turn,
+      starter: turn,
+      wins: [0, 0],
+      round: null,
+      nextAt: -1,
       tok: [Array(TOKENS).fill(BASE), Array(TOKENS).fill(BASE)],
       face: 0,
       dice: [1, 1],
@@ -59,7 +84,7 @@ class Ludo extends TurnGame<State> {
     const rolling = this.time - s.rolledAt[s.turn] < ROLL_TIME
     if (this.wasRolling && !rolling) this.settled()
     this.wasRolling = rolling
-    return s.move !== null || rolling || this.time < s.wait
+    return s.move !== null || rolling || this.time < s.wait || s.nextAt >= 0
   }
 
   /** The die comes to rest: a thunk, and a cheer for a six. */
@@ -76,7 +101,12 @@ class Ludo extends TurnGame<State> {
 
   /** Plays hop and landing effects as the token's clock passes them, then ends the move. */
   protected override animate(): void {
-    const m = this.s.move
+    const s = this.s
+    if (s.nextAt >= 0 && this.time >= s.nextAt) {
+      this.nextRound()
+      return
+    }
+    const m = s.move
     if (!m) return
     const n = m.path.length
     const fx = this.ctx.fx
@@ -133,15 +163,42 @@ class Ludo extends TurnGame<State> {
     const s = this.s
     s.move = null
     if (won(s.tok, m.side)) {
-      s.end = { winner: m.side, at: this.time }
       this.ctx.fx.confetti(m.side)
       this.ctx.fx.flash(SIDE[m.side].main, 0.25)
-      this.finish(m.side, { note: 'All four pawns home', delay: 2.2 })
+      if (this.roundWon(m.side)) {
+        s.end = { winner: m.side, at: this.time }
+        this.finish(m.side, { note: 'All four pawns home', delay: 2.2 })
+      } else this.pauseRound(m.side)
       return
     }
     // A six rolls again; anything else hands the turn over.
     s.face = 0
     if (m.face !== 6) s.turn = other(m.side)
+  }
+
+  /** Count a round win; true when it was the round that wins the match. */
+  private roundWon(side: Side): boolean {
+    const s = this.s
+    s.wins[side]++
+    return s.wins[side] >= this.target
+  }
+
+  /** The round is over but not the match: show who took it, then send the pawns home again. */
+  private pauseRound(side: Side): void {
+    this.s.round = { winner: side, at: this.time }
+    this.s.nextAt = this.time + ROUND_PAUSE
+  }
+
+  /** Back to base for a new round; the player who did not open the last one starts. */
+  private nextRound(): void {
+    const s = this.s
+    s.starter = other(s.starter)
+    s.turn = s.starter
+    s.tok = [Array(TOKENS).fill(BASE), Array(TOKENS).fill(BASE)]
+    s.face = 0
+    s.move = null
+    s.round = null
+    s.nextAt = -1
   }
 
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
@@ -259,8 +316,19 @@ class Ludo extends TurnGame<State> {
     const s = this.s
     tableBackdrop(g)
     renderLudo(g, s, this.time, this.over, (side) => this.isBot(side))
-    this.drawTurns(g)
+    this.drawTurns(g, undefined, s.nextAt < 0)
+    if (this.target > 1) {
+      pips(g, 0, s.wins[0], this.target)
+      pips(g, 1, s.wins[1], this.target)
+    }
     if (s.end) endBanner(g, 'All home!', s.end.winner, s.end.at, this.time)
+    else if (s.round) {
+      const text = `${this.ctx.names[s.round.winner]} takes the round`
+      banner(g, undefined, text, MID, {
+        size: 58,
+        alpha: Math.min(1, (this.time - s.round.at) * 4),
+      })
+    }
   }
 }
 

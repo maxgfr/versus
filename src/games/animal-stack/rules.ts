@@ -1,3 +1,4 @@
+import type { Side } from '../../core/game.ts'
 import type { BodySnap, Shape } from '../../engines/ragdoll/index.ts'
 import { extent, reach } from '../../engines/ragdoll/index.ts'
 import { hash01 } from '../../engines/runner/index.ts'
@@ -36,6 +37,16 @@ export const HOVER_GAP = 150
 export const FALL_LINE = ISLAND.top + 60
 /** Where the stage keeps the hovering piece (scene → screen, before camera). */
 export const HOVER_SCREEN_Y = 360
+
+/** Seed of round `r` of a match: round 0 is the game seed, later rounds deal their own pieces. */
+export const roundSeed = (seed: number, r: number): number => seed + r * 7919
+
+/** The side that has won `goal` rounds, if any (wins red first). */
+export function matchWinner(wins: readonly number[], goal: number): Side | null {
+  if ((wins[0] ?? 0) >= goal) return 0
+  if ((wins[1] ?? 0) >= goal) return 1
+  return null
+}
 
 /** Deterministic piece sequence from the game seed: same for both phones. */
 export function pieceAt(seed: number, n: number): number {

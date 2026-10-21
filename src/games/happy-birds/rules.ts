@@ -12,6 +12,7 @@ export const MAX_FALL = 1350
 export const PIPE_W = 136
 export const SPACING = 440
 export const FIRST = 980
+/** Round wins to take the match by default (best of three). */
 export const TARGET = 2
 /** A round that lasts this long is called a draw: nobody fell. */
 export const ROUND_CAP = 90

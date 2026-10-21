@@ -1,15 +1,17 @@
-import type { Side } from '../../core/game.ts'
-import { banner, hudY } from '../../core/hud.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { prog } from '../../core/fx/ease.ts'
+import { banner, hudY, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
-import { MID } from '../../core/stage.ts'
+import { MID, W } from '../../core/stage.ts'
 import { cellAt, cellCenter, geom, tableBackdrop, TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
 import { discCount, FLIP, renderBoard, shareBar, shown } from './render.ts'
 import { type Cell, ending, flipsAt, legalMoves, N, nextTurn, play, startBoard } from './rules.ts'
 
 export interface State {
+  /** Side to move in the current round. */
   turn: Side
   cells: Cell[]
   /** Game time each disc was placed, per square, or -1. */
@@ -32,7 +34,24 @@ export interface State {
   winner: number
   /** Side that last had to pass, or -1. */
   passer: number
+  /** Round wins, red first. */
+  wins: [number, number]
+  /** The side that opened the current round. Alternates every round. */
+  starter: Side
+  /** Between rounds: "Blue takes the round" or "Draw round", shown after the count. */
+  roundText: string
+  /** Game time the next round starts, or -1. */
+  resetAt: number
 }
+
+/**
+ * How long a match lasts: first to N round wins (one game is one round). The
+ * default is a single game, the classic match.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** Seconds from the judged board to the next round, once a round is decided and the match goes on. */
+const ROUND_TIME = 3.2
 
 /**
  * A notice both players can read: in local 2P one copy sits near each edge,
@@ -48,6 +67,10 @@ function notice(g: Draw, text: string, alpha: number, color?: string): void {
 const GEO = geom(N, N, 780, 780, MID)
 
 class Reversi extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     return {
       turn: 0,
@@ -62,11 +85,35 @@ class Reversi extends TurnGame<State> {
       doneAt: -1,
       winner: -1,
       passer: -1,
+      wins: [0, 0],
+      starter: 0,
+      roundText: '',
+      resetAt: -1,
     }
   }
 
   protected override busy(): boolean {
     return this.time < this.s.readyAt || this.s.endedAt >= 0
+  }
+
+  /** The next round: a fresh board, and the other side opens it. */
+  private nextRound(): void {
+    const s = this.s
+    s.starter = other(s.starter)
+    s.turn = s.starter
+    s.cells = startBoard()
+    s.placedAt = Array<number>(N * N).fill(-1)
+    s.flipAt = Array<number>(N * N).fill(-1)
+    s.queue = []
+    s.last = -1
+    s.readyAt = this.time + 0.4
+    s.passAt = -1
+    s.endedAt = -1
+    s.doneAt = -1
+    s.winner = -1
+    s.passer = -1
+    s.roundText = ''
+    s.resetAt = -1
   }
 
   protected override step(dt: number): void {
@@ -79,7 +126,8 @@ class Reversi extends TurnGame<State> {
       this.ctx.audio.play('flip', col === 0 ? 1 : 1.12)
       this.ctx.fx.sparks(x, y, SIDE[col].light, 6)
     }
-    if (s.endedAt >= 0 && !this.over && this.time >= s.readyAt) this.conclude()
+    if (s.endedAt >= 0 && s.doneAt < 0 && this.time >= s.readyAt) this.conclude()
+    if (s.resetAt >= 0 && this.time >= s.resetAt) this.nextRound()
     super.step(dt)
   }
 
@@ -88,16 +136,27 @@ class Reversi extends TurnGame<State> {
     const s = this.s
     const e = ending(s.cells)
     if (!e) return
+    const win = e.winner
     s.doneAt = this.time
-    s.winner = e.winner === 'draw' ? -1 : e.winner
+    s.winner = win === 'draw' ? -1 : win
     this.ctx.fx.shake(0.3)
     this.ctx.fx.stop(6)
-    if (e.winner !== 'draw') {
-      this.ctx.fx.flash(SIDE[e.winner].main, 0.3)
-      this.ctx.fx.confetti(e.winner)
+    if (win !== 'draw') {
+      s.wins[win]++
+      this.ctx.fx.flash(SIDE[win].main, 0.3)
+      this.ctx.fx.confetti(win)
       this.ctx.fx.ring(GEO.x + GEO.w / 2, GEO.y + GEO.h / 2, C.yellow, 520)
     }
-    this.finish(e.winner, { score: e.counts, delay: 2.6 })
+    // A single game ends the match as it always did, draws included.
+    const decided = win === 'draw' ? this.target <= 1 : s.wins[win] >= this.target
+    if (decided) {
+      const score: [number, number] = this.target > 1 ? [s.wins[0], s.wins[1]] : e.counts
+      this.finish(win, { score, delay: 2.6 })
+      return
+    }
+    // Draws never count: the round is simply played again.
+    s.roundText = win === 'draw' ? 'Draw round' : `${this.ctx.names[win]} takes the round`
+    s.resetAt = this.time + ROUND_TIME
   }
 
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
@@ -219,16 +278,27 @@ class Reversi extends TurnGame<State> {
       if (g.flipTop || side === this.ctx.local)
         shareBar(g, side, n[side], theirs, hudY(g, side, 200))
     }
+    if (this.target > 1) {
+      // Right-hand corner for both players: the disc counts already sit on the left.
+      for (const side of [0, 1] as Side[]) {
+        pips(g, side, s.wins[side], this.target, { x: W - 150 })
+      }
+    }
     if (passing) {
       const a = Math.min(1, (this.time - s.passAt) * 5, (1.5 - (this.time - s.passAt)) * 4)
       notice(g, 'No move — pass', a)
     }
     if (s.doneAt >= 0) {
-      const text =
-        s.winner < 0
-          ? `Dead even ${n[0]}–${n[1]}`
-          : `${this.ctx.names[s.winner as Side]} wins ${Math.max(...n)}–${Math.min(...n)}`
-      notice(g, text, Math.min(1, (this.time - s.doneAt - 0.3) * 4), C.yellow)
+      const since = this.time - s.doneAt
+      // The count first, then who took the round, when the match goes on.
+      if (s.roundText && since >= 1.9) notice(g, s.roundText, prog(since, 1.9, 2.2), C.yellow)
+      else {
+        const text =
+          s.winner < 0
+            ? `Dead even ${n[0]}–${n[1]}`
+            : `${this.ctx.names[s.winner as Side]} wins ${Math.max(...n)}–${Math.min(...n)}`
+        notice(g, text, Math.min(1, (since - 0.3) * 4), C.yellow)
+      }
     }
   }
 }

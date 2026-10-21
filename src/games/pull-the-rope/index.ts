@@ -1,4 +1,4 @@
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { SIDE } from '../../core/render/palette.ts'
 import {
@@ -28,8 +28,15 @@ export interface State {
   wobble: number
 }
 
+/** Round wins needed to take the match (best of three by default). */
+export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 9 }
+
 class PullTheRope extends BaseGame<State> {
   private bots: [RopeBot | null, RopeBot | null] = [null, null]
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     const { ctx } = this
@@ -39,7 +46,7 @@ class PullTheRope extends BaseGame<State> {
     return {
       rope: ropeNew(),
       mash: [mashNew(), mashNew()],
-      rounds: roundsNew(TARGET),
+      rounds: roundsNew(this.target),
       roundT: 0,
       wobble: 0,
     }

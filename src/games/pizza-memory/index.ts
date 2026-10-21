@@ -1,5 +1,5 @@
 import { frame, toLocal } from '../../core/frame.ts'
-import { BaseGame, other, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -9,6 +9,7 @@ import { PIZZA, renderPizza, STRIP_Y, slotX, tileAt, tileXY } from './render.ts'
 import {
   decide,
   LEAD,
+  MAX_ORDERS,
   makeOrder,
   nextLength,
   placeSpots,
@@ -22,6 +23,9 @@ import {
 
 /** Seconds the finished attempts stay on screen before the next order (or the result). */
 const AFTER = 2.4
+
+/** Match length: a number of rounds (orders), the score deciding if no round is clean. */
+export const match: MatchSpec = { unit: 'rounds', default: MAX_ORDERS, min: 1, max: 10 }
 
 export interface State {
   /** Rounds finished so far. The current order is round + 1. */
@@ -69,6 +73,10 @@ class PizzaMemory extends BaseGame<State> {
   private botAt = -1
   /** Toppings already shown on the pizza this round (sound pacing). */
   private shown = 0
+
+  private get total(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     const rng = this.ctx.rng
@@ -244,7 +252,7 @@ class PizzaMemory extends BaseGame<State> {
       floatFor(this.ctx.fx, side, '+1', side === 0 ? 130 : 870, side === 0 ? 1600 : 200)
     }
     const rounds = s.round + 1
-    const w = decide(right, s.scores, rounds)
+    const w = decide(right, s.scores, rounds, this.total)
     if (w !== null) {
       // The ticket keeps showing the order just played (round + 1 while on).
       s.endAt = this.time
@@ -283,7 +291,7 @@ class PizzaMemory extends BaseGame<State> {
 
   render(g: Draw): void {
     tableBackdrop(g)
-    renderPizza(g, this.s, this.time, this.ctx.names, (side) => this.pill(side))
+    renderPizza(g, this.s, this.time, this.ctx.names, (side) => this.pill(side), this.total)
   }
 }
 

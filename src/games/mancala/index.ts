@@ -1,13 +1,12 @@
-import type { Side } from '../../core/game.ts'
-import { other } from '../../core/game.ts'
-import { bigScore } from '../../core/hud.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import { TurnGame, tableBackdrop } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
-import { FLY, HOP, notice, pitAt, pitCentre, renderMancala, storeCount } from './render.ts'
+import { FLY, HOP, notice, pitAt, pitCentre, renderMancala } from './render.ts'
 import {
   isStore,
   opposite,
@@ -58,17 +57,38 @@ export interface State {
   /** Game time the board emptied, -1 while playing. */
   endedAt: number
   winner: Side | 'draw' | null
-  /** Game time the result is declared, once the last seeds are home. */
+  /** Game time the round is counted, once the last seeds are home. */
   finishAt: number
+  /** Round wins, red first. */
+  wins: [number, number]
+  /** The side that opened the current round. Alternates every round. */
+  starter: Side
+  /** Between rounds: "Red takes the round" or "Draw round", shown once the seeds are home. */
+  roundText: string
+  /** Game time the next round starts, or -1. */
+  resetAt: number
 }
 
 /** Seconds the seeds hover before the first drop. */
 const LIFT = 0.16
 
+/** Seconds from the seeds being home to the next round, once a round is decided and the match goes on. */
+const ROUND_TIME = 2.6
+
+/**
+ * How long a match lasts: first to N round wins (one game is one round). The
+ * default is a single game, the classic match.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
 /** A spot on the mover's own half, between the board and their edge, for a floating message. */
 const halfY = (side: Side): number => (side === 0 ? MID + 530 : MID - 530)
 
 class Mancala extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     const p = startPosition(this.ctx.rng.chance(0.5) ? 0 : 1)
     return {
@@ -87,6 +107,10 @@ class Mancala extends TurnGame<State> {
       endedAt: -1,
       winner: null,
       finishAt: -1,
+      wins: [0, 0],
+      starter: p.turn,
+      roundText: '',
+      resetAt: -1,
     }
   }
 
@@ -99,10 +123,8 @@ class Mancala extends TurnGame<State> {
     this.land()
     const s = this.s
     if (s.endedAt >= 0) {
-      if (this.time >= s.finishAt && s.winner !== null) {
-        const score: [number, number] = [s.pits[STORE[0]] ?? 0, s.pits[STORE[1]] ?? 0]
-        this.finish(s.winner, { score, delay: 1.6 })
-      }
+      if (s.resetAt < 0 && this.time >= s.finishAt && s.winner !== null) this.roundOver()
+      else if (s.resetAt >= 0 && this.time >= s.resetAt) this.nextRound()
       return
     }
     if (s.queue.length > 0) {
@@ -115,6 +137,49 @@ class Mancala extends TurnGame<State> {
 
   protected override afterEnd(): void {
     this.land()
+  }
+
+  /** The round's seeds are all home: count it, then finish the match or set up the next round. */
+  private roundOver(): void {
+    const s = this.s
+    const win = s.winner
+    if (win === null) return
+    if (win !== 'draw') s.wins[win]++
+    // A single game ends the match as it always did, draws included.
+    const decided = win === 'draw' ? this.target <= 1 : s.wins[win] >= this.target
+    if (decided) {
+      const score: [number, number] =
+        this.target > 1 ? [s.wins[0], s.wins[1]] : [s.pits[STORE[0]] ?? 0, s.pits[STORE[1]] ?? 0]
+      this.finish(win, { score, delay: 1.6 })
+      return
+    }
+    // Draws never count: the round is simply played again.
+    s.roundText = win === 'draw' ? 'Draw round' : `${this.ctx.names[win]} takes the round`
+    s.resetAt = this.time + ROUND_TIME
+  }
+
+  /** The next round: the pits are filled again and the other side opens. */
+  private nextRound(): void {
+    const s = this.s
+    const p = startPosition(other(s.starter))
+    s.starter = p.turn
+    s.turn = p.turn
+    s.pits = p.pits
+    s.queue = []
+    s.from = -1
+    s.mover = p.turn
+    s.liftAt = -10
+    s.hopAt = 0
+    s.dropAt = -10
+    s.lastFrom = -1
+    s.lastTo = -1
+    s.flights = []
+    s.storeAt = [-10, -10]
+    s.endedAt = -1
+    s.winner = null
+    s.finishAt = -1
+    s.roundText = ''
+    s.resetAt = -1
   }
 
   /** Flights that reach their store this step: a burst and a coin per pile. */
@@ -249,11 +314,14 @@ class Mancala extends TurnGame<State> {
       !this.isBot(s.turn)
     renderMancala(g, s, this.time, live)
     this.drawTurns(g, undefined, s.endedAt < 0)
-    bigScore(g, 0, storeCount(s, this.time, 0), { x: 130 })
-    bigScore(g, 1, storeCount(s, this.time, 1), { x: 870 })
+    if (this.target > 1) {
+      pips(g, 0, s.wins[0], this.target)
+      pips(g, 1, s.wins[1], this.target)
+    }
     if (s.endedAt >= 0) {
-      const a = Math.min(1, (this.time - s.endedAt) * 4)
-      notice(g, 'Board cleared!', a)
+      // The seeds go home, then who took the round.
+      if (s.roundText) notice(g, s.roundText, Math.min(1, (this.time - s.finishAt) * 4))
+      else notice(g, 'Board cleared!', Math.min(1, (this.time - s.endedAt) * 4))
     }
   }
 }

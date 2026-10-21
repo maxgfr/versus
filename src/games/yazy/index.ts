@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -16,7 +16,10 @@ import {
 } from '../../engines/dice/index.ts'
 import { decide } from './bot.ts'
 import { renderYazy, ROLL, SHEET, TRAY } from './render.ts'
-import { CATS, emptySheet, full, MAX_ROLLS, score, type Sheet, total } from './rules.ts'
+import { CATS, emptySheet, full, MAX_ROLLS, NCATS, score, type Sheet, total } from './rules.ts'
+
+/** A match is a number of turns each; every turn scores one row of the sheet. */
+export const match: MatchSpec = { unit: 'rounds', default: NCATS, min: 1, max: NCATS }
 
 export interface State extends DiceState {
   turn: Side
@@ -27,6 +30,10 @@ export interface State extends DiceState {
 
 class Yazy extends TurnGame<State> {
   private wasRolling = false
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     return {
@@ -120,7 +127,7 @@ class Yazy extends TurnGame<State> {
       fx.confetti(side)
       fx.shake(0.4)
     }
-    if (full(s.sheets[0]) && full(s.sheets[1])) {
+    if (full(s.sheets[0], this.target) && full(s.sheets[1], this.target)) {
       const a = total(s.sheets[0])
       const b = total(s.sheets[1])
       this.finish(a === b ? 'draw' : a > b ? 0 : 1, { score: [a, b], delay: 1.6 })
@@ -132,7 +139,7 @@ class Yazy extends TurnGame<State> {
 
   render(g: Draw): void {
     tableBackdrop(g)
-    renderYazy(g, this.s, this.time, this.over, (side) => this.isBot(side))
+    renderYazy(g, this.s, this.time, this.over, (side) => this.isBot(side), this.target)
     this.drawTurns(g)
   }
 }

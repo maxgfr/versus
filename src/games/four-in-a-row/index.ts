@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -77,7 +77,14 @@ function columnAt(x: number, y: number): number | null {
 /** Seconds the winning four shows before the board is let go. */
 const SHOW = 1.5
 
+export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 9 }
+
 class FourInARow extends TurnGame<State> {
+  /** Round wins that decide the match, as chosen on the ready screen. */
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
@@ -213,8 +220,8 @@ class FourInARow extends TurnGame<State> {
     }
     s.line = o.line
     s.wins = addRound(s.wins, o)
-    const match = matchOver(s.wins)
-    s.roundText = match === null ? `${this.ctx.names[o.winner]} takes the round` : ''
+    const decided = matchOver(s.wins, this.target)
+    s.roundText = decided === null ? `${this.ctx.names[o.winner]} takes the round` : ''
     this.ctx.audio.play('score')
     this.ctx.fx.stop(7)
     this.ctx.fx.shake(0.3)
@@ -236,9 +243,9 @@ class FourInARow extends TurnGame<State> {
       Math.floor((o.line[1] as number) / COLS),
     )
     this.ctx.fx.ring(mid.x, mid.y, C.yellow, 360)
-    if (match !== null) {
-      this.ctx.fx.confetti(match)
-      this.finish(match, { score: s.wins, delay: 2.4 })
+    if (decided !== null) {
+      this.ctx.fx.confetti(decided)
+      this.finish(decided, { score: s.wins, delay: 2.4 })
     }
   }
 
@@ -257,8 +264,10 @@ class FourInARow extends TurnGame<State> {
         : null,
     )
     this.drawTurns(g, undefined, live)
-    pips(g, 0, s.wins[0], TARGET, { inset: 170 })
-    pips(g, 1, s.wins[1], TARGET, { inset: 170 })
+    if (this.target > 1) {
+      pips(g, 0, s.wins[0], this.target, { inset: 170 })
+      pips(g, 1, s.wins[1], this.target, { inset: 170 })
+    }
     if (s.roundText && s.endedAt >= 0) {
       const a = Math.min(1, (this.time - s.endedAt - 0.15) * 4)
       notice(g, s.roundText, a)

@@ -1,6 +1,6 @@
-import { other, type Side } from '../../core/game.ts'
+import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import { prog } from '../../core/fx/ease.ts'
-import { banner } from '../../core/hud.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -49,9 +49,27 @@ export interface State {
   winner: Side | 'draw' | null
   /** How it ended, shown as a banner before the result screen. */
   endText: string
+  /** Round wins, red first. */
+  wins: [number, number]
+  /** The side that opened the current round. Alternates every round. */
+  starter: Side
+  /** Between rounds: "Blue takes the round" or "Draw round", shown after the ending. */
+  roundText: string
+  /** Game time the next round starts, or -1. */
+  resetAt: number
 }
 
-const GEO = geom(8, 8, 800, 800, MID)
+/**
+ * How long a match lasts: first to N round wins (one game is one round). The
+ * default is a single game, the classic match.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** Seconds from the last landing to the next round, once a round is decided and the match goes on. */
+const ROUND_TIME = 3.2
+
+// Kept off the pause button's column at the left edge.
+const GEO = geom(8, 8, 760, 760, MID)
 const centre = (sq: number) => cellCenter(GEO, colOf(sq), rowOf(sq))
 
 const COMBO = ['', '', 'Double jump!', 'Triple jump!', 'Quadruple!', 'Unstoppable!']
@@ -60,6 +78,10 @@ class Checkers extends TurnGame<State> {
   private queue: { at: number; run: () => void }[] = []
   private routeMemo: { key: string; routes: Route[] } | null = null
   private forcedMemo: { ply: number; squares: number[] } | null = null
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     return {
@@ -73,16 +95,41 @@ class Checkers extends TurnGame<State> {
       endedAt: -1,
       winner: null,
       endText: '',
+      wins: [0, 0],
+      starter: 0,
+      roundText: '',
+      resetAt: -1,
     }
   }
 
-  /** Blocks taps and the computer while the last move plays out. */
+  /** Blocks taps and the computer while the last move plays out, and between rounds. */
   protected override busy(): boolean {
-    return this.time < this.s.movedAt + moveTime(this.s.last)
+    return this.s.resetAt >= 0 || this.time < this.s.movedAt + moveTime(this.s.last)
   }
 
   protected override animate(): void {
     this.flush()
+    if (this.s.resetAt >= 0 && this.time >= this.s.resetAt) this.nextRound()
+  }
+
+  /** The next round: a fresh board, and the other side opens it. */
+  private nextRound(): void {
+    const s = this.s
+    s.starter = other(s.starter)
+    s.turn = s.starter
+    s.board = start()
+    s.ply = 0
+    s.sel = null
+    s.via = []
+    s.last = null
+    s.movedAt = -10
+    s.endedAt = -1
+    s.winner = null
+    s.endText = ''
+    s.roundText = ''
+    s.resetAt = -1
+    this.routeMemo = null
+    this.forcedMemo = null
   }
 
   protected override afterEnd(): void {
@@ -283,18 +330,29 @@ class Checkers extends TurnGame<State> {
             ? 'Level at the limit'
             : 'Move limit'
     const arrive = moveTime(s.last)
-    if (v.winner === 'draw') {
+    const win = v.winner
+    // A single game ends the match as it always did, draws included.
+    if (win === 'draw' && this.target <= 1) {
       this.finish('draw', { note: v.note, delay: arrive + 2 })
       return
     }
-    const win = v.winner
-    this.later(arrive + 0.1, () => {
-      audio.play('score')
-      fx.flash(SIDE[win].main, 0.3)
-      fx.shake(0.35)
-      fx.confetti(win)
-    })
-    this.finish(win, { note: v.note, delay: arrive + 2.6 })
+    if (win !== 'draw') {
+      s.wins[win]++
+      this.later(arrive + 0.1, () => {
+        audio.play('score')
+        fx.flash(SIDE[win].main, 0.3)
+        fx.shake(0.35)
+        fx.confetti(win)
+      })
+    }
+    // Draws never count: the round is simply played again.
+    if (win === 'draw' || s.wins[win] < this.target) {
+      s.roundText = win === 'draw' ? 'Draw round' : `${this.ctx.names[win]} takes the round`
+      s.resetAt = this.time + arrive + ROUND_TIME
+      return
+    }
+    const score: [number, number] | undefined = this.target > 1 ? [s.wins[0], s.wins[1]] : undefined
+    this.finish(win, { note: v.note, score, delay: arrive + 2.6 })
   }
 
   protected botPlay(): Promise<void> {
@@ -321,9 +379,21 @@ class Checkers extends TurnGame<State> {
       label = s.turn === 0 ? ['You must jump!', undefined] : [undefined, 'You must jump!']
     }
     this.drawTurns(g, label, live)
-    if (!live && s.endText) {
-      const a = prog(this.time - s.endedAt, moveTime(s.last) + 0.2, moveTime(s.last) + 0.5)
-      if (a > 0) banner(g, undefined, s.endText, MID, { size: 64, alpha: a })
+    if (this.target > 1) {
+      pips(g, 0, s.wins[0], this.target)
+      pips(g, 1, s.wins[1], this.target)
+    }
+    if (!live) {
+      const since = this.time - s.endedAt
+      const arrive = moveTime(s.last)
+      // A round that decides nothing yet: the ending, then who took the round.
+      if (s.roundText && since >= arrive + 1.2) {
+        const a = prog(since, arrive + 1.2, arrive + 1.5)
+        if (a > 0) banner(g, undefined, s.roundText, MID, { size: 58, alpha: a })
+      } else if (s.endText) {
+        const a = prog(since, arrive + 0.2, arrive + 0.5)
+        if (a > 0) banner(g, undefined, s.endText, MID, { size: 64, alpha: a })
+      }
     }
   }
 }

@@ -14,8 +14,10 @@ export const FILES = 'abcdefgh'
 /** Everything the rules need: the position and how it was reached (for repetition). */
 export interface Pos {
   fen: string
-  /** Moves so far in SAN, from the standard start. */
+  /** Moves so far in SAN, from `start`. */
   history: string[]
+  /** The position the history starts from. Default: the standard start. */
+  start?: string
 }
 
 export type Status = 'playing' | 'check' | 'mate' | 'draw' | 'limit'
@@ -63,6 +65,11 @@ export function sideOf(color: Color): Side {
 
 export function colorOf(side: Side): Color {
   return side === 0 ? 'w' : 'b'
+}
+
+/** The standard start with `side` to move: a round can open with either side. */
+export function startFen(side: Side): string {
+  return side === 0 ? START_FEN : START_FEN.replace(' w ', ' b ')
 }
 
 /** Square name for board coordinates: column 0..7 (a..h), row 0..7 from the top (rank 8). */
@@ -123,9 +130,9 @@ export function targetsFrom(fen: string, from: string): Step[] {
     .map((m) => ({ from: m.from, to: m.to, promotion: m.promotion === 'q' ? 'q' : undefined }))
 }
 
-/** Rebuild a position from the standard start by replaying its SAN history. */
-export function replay(history: readonly string[]): Chess {
-  const c = new Chess()
+/** Rebuild a position from its start (the standard one by default) by replaying its SAN history. */
+export function replay(history: readonly string[], start: string = START_FEN): Chess {
+  const c = new Chess(start)
   for (const san of history) c.move(san)
   return c
 }
@@ -140,7 +147,7 @@ export function play(pos: Pos, from: string, to: string): Played {
   let capturedAt: string | null = null
   if (captured) capturedAt = m.isEnPassant() ? `${to[0]}${from[1]}` : to
   return {
-    pos: { fen: c.fen(), history: [...pos.history, m.san] },
+    pos: { ...pos, fen: c.fen(), history: [...pos.history, m.san] },
     san: m.san,
     from,
     to: m.to,
@@ -162,7 +169,7 @@ export function verdict(pos: Pos): Verdict {
   if (c.isInsufficientMaterial())
     return { status: 'draw', winner: 'draw', note: 'Not enough material' }
   if (pos.history.length >= 8) {
-    const r = replay(pos.history)
+    const r = replay(pos.history, pos.start)
     if (r.fen() === pos.fen && r.isThreefoldRepetition())
       return { status: 'draw', winner: 'draw', note: 'Threefold repetition' }
   }

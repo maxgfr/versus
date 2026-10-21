@@ -1,5 +1,5 @@
 import { inFrame, textAngle } from '../../core/frame.ts'
-import { bigScore, namePill, pips } from '../../core/hud.ts'
+import { bigScore, hudY, namePill } from '../../core/hud.ts'
 import { other, type Side } from '../../core/game.ts'
 import { inCubic, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -7,7 +7,7 @@ import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import { type CardRect, cardGrid, drawCard, flipAmount } from '../../engines/cards/index.ts'
 import type { State } from './index.ts'
-import { TARGET, traits } from './rules.ts'
+import { traits } from './rules.ts'
 
 /**
  * Each player gets their own copy of the shared table in their half (red's
@@ -343,6 +343,7 @@ export function renderTriple(
   now: number,
   names: [string, string],
   label: (side: Side) => string | undefined,
+  target: number,
 ): void {
   g.alpha(0.5, () => g.midline())
   for (const f of [0, 1] as Side[]) renderHalf(g, s, now, f)
@@ -356,8 +357,26 @@ export function renderTriple(
     })
     const bump = 1 + 0.35 * Math.sin(Math.PI * prog(now - (s.scoredAt[side] ?? -10), 0, 0.4))
     bigScore(g, side, s.score[side], { size: 76 * bump, x: side === 0 ? 130 : 870 })
-    pips(g, side, Math.max(0, Math.min(TARGET, s.score[side])), TARGET, {
-      x: side === 0 ? 840 : 160,
-    })
+    points(g, side, Math.max(0, Math.min(target, s.score[side])), target, side === 0 ? 840 : 160)
   }
+}
+
+/**
+ * Points as dots, like the shared `pips`, but spaced to fit: a long match (up
+ * to 15 points) would run off the edge at the shared spacing. Same look at the
+ * default 6 points.
+ */
+function points(g: Draw, side: Side, n: number, target: number, x: number): void {
+  const gap = Math.min(46, 300 / Math.max(1, target - 1))
+  const r = Math.min(15, gap / 3.05)
+  const k = r / 15
+  const y = hudY(g, side, 70)
+  g.forSide(side, x, y, () => {
+    const x0 = -((target - 1) * gap) / 2
+    for (let i = 0; i < target; i++) {
+      const on = i < n
+      g.circle(x0 + i * gap, 0, r, on ? SIDE[side].main : alpha(C.white, 0.14))
+      if (on) g.circle(x0 + i * gap - 4 * k, -4 * k, 5 * k, alpha(C.white, 0.6))
+    }
+  })
 }

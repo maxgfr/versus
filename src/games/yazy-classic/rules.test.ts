@@ -15,6 +15,7 @@ import {
   type Sheet,
   scoreRow,
   total,
+  turnsPlayed,
   upperBonus,
   upperSum,
   YAZY_ROW,
@@ -95,6 +96,17 @@ describe('classic scoring', () => {
     expect(full(s)).toBe(false)
     s.rows = s.rows.map(() => 1)
     expect(full(s)).toBe(true)
+  })
+
+  it('ends a shorter match after its turns', () => {
+    const s = emptySheet()
+    s.rows[0] = 4
+    s.rows[7] = 0
+    s.rows[12] = 22
+    expect(turnsPlayed(s)).toBe(3)
+    expect(full(s, 3)).toBe(true)
+    expect(full(s, 4)).toBe(false)
+    expect(full(s)).toBe(false)
   })
 })
 

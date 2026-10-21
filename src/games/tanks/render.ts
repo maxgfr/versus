@@ -102,12 +102,15 @@ function status(g: Draw, s: State, side: Side, name: string, grid: Grid): void {
       weight: 600,
       color: alpha(C.white, 0.75),
     })
-    const r = s.rounds
-    for (let i = 0; i < r.target; i++) {
-      const x = 330 + (i - (r.target - 1) / 2) * 40
-      g.circle(x, 0, 13, i < r.wins[side] ? col.main : alpha('#ffffff', 0.16))
-    }
   })
+  // Round pips sit just beyond the lives count, away from the arena: they stay
+  // clear of the arena frame, the stick and the fire button.
+  const r = s.rounds
+  const dy = side === 0 ? 38 : -38
+  for (let i = 0; i < r.target; i++) {
+    const x = W / 2 + (i - (r.target - 1) / 2) * 30
+    g.circle(x, y + dy, 11, i < r.wins[side] ? col.main : alpha('#ffffff', 0.16))
+  }
 }
 
 export function renderTanks(

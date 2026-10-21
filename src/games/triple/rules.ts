@@ -137,10 +137,13 @@ export function tapSlot(b: Board, side: Side, slot: number, now: number): Tap {
   return { kind: 'valid', slots, added: topUp(b) }
 }
 
-/** The game's result once decided: a side at the target, or the table dried up. */
-export function winner(b: Board): Side | 'draw' | null {
+/**
+ * The game's result once decided: a side at `target` points (the match length
+ * the players chose), or the table dried up.
+ */
+export function winner(b: Board, target = TARGET): Side | 'draw' | null {
   const [r, bl] = b.score
-  const done = r >= TARGET || bl >= TARGET || (b.deck.length === 0 && !hasSet(b.table))
+  const done = r >= target || bl >= target || (b.deck.length === 0 && !hasSet(b.table))
   if (!done) return null
   return r === bl ? 'draw' : r > bl ? 0 : 1
 }

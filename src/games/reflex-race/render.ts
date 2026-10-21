@@ -1,6 +1,7 @@
 import { frame, inFrame, textAngle } from '../../core/frame.ts'
 import type { Side } from '../../core/game.ts'
 import { outBack, prog } from '../../core/fx/ease.ts'
+import { hudY } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { drawCard, flipAmount } from '../../engines/cards/index.ts'
@@ -28,6 +29,25 @@ export function buttonCentre(side: Side): { x: number; y: number } {
 /** World position of `side`'s card copy (the middle card when no one is looking from the other side). */
 export function cardCentre(side: Side, flipTop = true): { x: number; y: number } {
   return flipTop ? frame(side, 500, CARD.y) : { x: 500, y: MID }
+}
+
+/**
+ * Points so far as a segmented meter beside the name pill, one segment per point
+ * (`goal` in all), so any match length fits. `x` is the side's spot in its frame.
+ */
+export function scoreMeter(g: Draw, side: Side, n: number, goal: number, x: number): void {
+  const y = hudY(g, side)
+  const gap = 4
+  const seg = Math.min(40, (300 - gap * (goal - 1)) / goal)
+  const w = seg * goal + gap * (goal - 1)
+  g.forSide(side, x, y, () => {
+    for (let i = 0; i < goal; i++) {
+      const left = -w / 2 + i * (seg + gap)
+      const on = i < n
+      g.rrect(left, -9, seg, 18, 9, on ? SIDE[side].main : alpha(C.white, 0.14))
+      if (on && seg > 14) g.rrect(left + 4, -8, seg - 8, 5, 2.5, alpha(C.white, 0.5))
+    }
+  })
 }
 
 export function drawTable(g: Draw): void {

@@ -158,6 +158,16 @@ describe('reflex race rules', () => {
     tap(s, 0, s.picAt + 0.2)
     expect(champion(s)).toBe(0)
   })
+
+  it('takes the match at the target passed in', () => {
+    const rng = new Rng(4)
+    const s = newRace(rng, 0)
+    s.score = [2, 0]
+    expect(champion(s, 3)).toBeNull()
+    s.score = [3, 0]
+    expect(champion(s, 3)).toBe(0)
+    expect(champion(s)).toBeNull()
+  })
 })
 
 describe('reflex race bot', () => {
@@ -186,34 +196,46 @@ describe('reflex race bot', () => {
     expect(easyFalse / 2000).toBeLessThan(0.12)
   })
 
-  for (const d of ['easy', 'normal', 'hard'] as const) {
-    it(`computer vs computer reaches a champion in bounded steps (${d})`, () => {
-      const rng = new Rng(31)
-      const s = newRace(rng, 0)
-      let now = 0
-      let botAt: [number | null, number | null] = [null, null]
-      let picAt = -1
-      let steps = 0
-      while (champion(s) === null) {
-        if (++steps > 60 * 60 * 5) throw new Error(`no champion (${d})`)
-        now += 1 / 60
-        const ev = advance(s, rng, now)
-        if (ev === 'flip') {
-          picAt = s.picAt
-          botAt = [planReaction(d, rng, s.picMatch), planReaction(d, rng, s.picMatch)]
-        }
-        if (ev === 'card-down') botAt = [null, null]
-        if (s.phase !== 'play') continue
-        for (const side of [0, 1] as const) {
-          const at = botAt[side]
-          if (at === null) continue
-          if (now >= picAt + at) {
-            botAt[side] = null
-            tap(s, side, now)
-          }
+  /** Two bots race until one reaches `target` points; returns the final state. */
+  function botsRaceTo(d: 'easy' | 'normal' | 'hard', seed: number, target: number): RaceState {
+    const rng = new Rng(seed)
+    const s = newRace(rng, 0)
+    let now = 0
+    let botAt: [number | null, number | null] = [null, null]
+    let picAt = -1
+    let steps = 0
+    while (champion(s, target) === null) {
+      if (++steps > 60 * 60 * 5) throw new Error(`no champion (${d}, ${target})`)
+      now += 1 / 60
+      const ev = advance(s, rng, now)
+      if (ev === 'flip') {
+        picAt = s.picAt
+        botAt = [planReaction(d, rng, s.picMatch), planReaction(d, rng, s.picMatch)]
+      }
+      if (ev === 'card-down') botAt = [null, null]
+      if (s.phase !== 'play') continue
+      for (const side of [0, 1] as const) {
+        const at = botAt[side]
+        if (at === null) continue
+        if (now >= picAt + at) {
+          botAt[side] = null
+          tap(s, side, now)
         }
       }
+    }
+    return s
+  }
+
+  for (const d of ['easy', 'normal', 'hard'] as const) {
+    it(`computer vs computer reaches a champion in bounded steps (${d})`, () => {
+      const s = botsRaceTo(d, 31, TARGET)
       expect(Math.max(...s.score)).toBeGreaterThanOrEqual(TARGET)
     })
   }
+
+  it('ends a short match at the chosen target, not the default', () => {
+    const s = botsRaceTo('hard', 17, 3)
+    expect(Math.max(...s.score)).toBeGreaterThanOrEqual(3)
+    expect(Math.max(...s.score)).toBeLessThan(TARGET)
+  })
 })

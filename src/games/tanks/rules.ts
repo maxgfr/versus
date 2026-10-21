@@ -24,7 +24,7 @@ export const MAX_SHELLS = 3
 export const HP = 3
 /** A shell can't hit its own tank until it has flown this long (s). */
 export const SAFE = 0.25
-/** Rounds are best of three. */
+/** Round wins to take the match by default (best of three). */
 export const TARGET = 2
 
 /** Top halves (blue's end); `mirrorMap` completes them point-symmetrically. */

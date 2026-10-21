@@ -70,6 +70,10 @@ export const emptySheet = (): Sheet => Array<number | null>(NCATS).fill(null)
 
 export const total = (s: Sheet): number => s.reduce<number>((a, v) => a + (v ?? 0), 0)
 
-export const full = (s: Sheet): boolean => s.every((v) => v !== null)
+/** Turns taken so far: each turn scores exactly one row. */
+export const turnsPlayed = (s: Sheet): number => s.filter((v) => v !== null).length
+
+/** The sheet is done after `rounds` turns (a match can be shorter than the nine rows). */
+export const full = (s: Sheet, rounds: number = NCATS): boolean => turnsPlayed(s) >= rounds
 
 export const openRows = (s: Sheet): number[] => s.flatMap((v, i) => (v === null ? [i] : []))

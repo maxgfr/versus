@@ -2,9 +2,25 @@ import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
 import { dealPairs } from '../../engines/cards/index.ts'
 import { choose, type Memory, remember } from './bot.ts'
-import { canTurn, cleared, hideMiss, newTable, PAIRS, pairsOf, turnUp } from './rules.ts'
+import {
+  canTurn,
+  cleared,
+  hideMiss,
+  matchWinner,
+  newTable,
+  PAIRS,
+  pairsOf,
+  turnUp,
+} from './rules.ts'
 
 describe('memory rules', () => {
+  it('decides the match at the chosen number of round wins, draws never count', () => {
+    expect(matchWinner([0, 0], 1)).toBeNull()
+    expect(matchWinner([1, 0], 1)).toBe(0)
+    expect(matchWinner([2, 1], 3)).toBeNull()
+    expect(matchWinner([1, 3], 3)).toBe(1)
+  })
+
   it('deals every pair twice', () => {
     const deck = dealPairs(new Rng(3), PAIRS)
     expect(deck).toHaveLength(PAIRS * 2)

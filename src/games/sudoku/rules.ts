@@ -1,9 +1,19 @@
-import type { Difficulty } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 
 /** Pure Sudoku: generation from a seed (unique solution), checks, hints. 0 = empty. */
 
 export const GIVENS: Record<Difficulty, number> = { easy: 38, normal: 32, hard: 27 }
+
+/** Seed of round `r` of a match: round 0 is the game seed, later rounds get their own puzzle. */
+export const roundSeed = (seed: number, r: number): number => seed + r * 7919
+
+/** The side that has won `goal` rounds, if any (wins red first). */
+export function matchWinner(wins: readonly number[], goal: number): Side | null {
+  if ((wins[0] ?? 0) >= goal) return 0
+  if ((wins[1] ?? 0) >= goal) return 1
+  return null
+}
 
 const ROW = (i: number) => Math.floor(i / 9)
 const COL = (i: number) => i % 9

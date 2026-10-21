@@ -1,4 +1,4 @@
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import {
@@ -34,12 +34,19 @@ export interface State {
   ctl: ControlLook[]
 }
 
+/** Round wins needed to take the match (best of three by default). */
+export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 9 }
+
 class Tanks extends BaseGame<State> {
   private grid!: Grid
   private gridFor = -1
   private controls: SideControl[] = []
   private bots: (TankBot | null)[] = []
   private ev: Ev[] = []
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     const { ctx } = this
@@ -53,7 +60,12 @@ class Tanks extends BaseGame<State> {
     this.bots = w.tanks.map((t) =>
       ctx.bots[t.side] ? new TankBot(ctx.rng.fork(), ctx.difficulty) : null,
     )
-    return { map, w, rounds: roundsNew(TARGET), ctl: this.controls.map((c) => snapControl(c, 1)) }
+    return {
+      map,
+      w,
+      rounds: roundsNew(this.target),
+      ctl: this.controls.map((c) => snapControl(c, 1)),
+    }
   }
 
   private gridOf(map: number): Grid {

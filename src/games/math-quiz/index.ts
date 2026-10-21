@@ -1,4 +1,4 @@
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { bigScore, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -19,6 +19,9 @@ import { champion, dealSum, due, nextSum, press, TARGET, type QuizState } from '
 /** Seconds between the winning answer and the result screen. */
 const END_DELAY = 2.3
 
+/** Match length: first to N points. */
+export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 21 }
+
 export interface State extends QuizState {
   /** Game time the computer taps next (-1 none), and which button it hits. */
   botAt: [number, number]
@@ -32,6 +35,10 @@ export interface State extends QuizState {
 }
 
 class MathQuizGame extends BaseGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     const s = dealSum(this.ctx.rng, this.ctx.difficulty, 0, 0)
     const state: State = {
@@ -115,7 +122,7 @@ class MathQuizGame extends BaseGame<State> {
       fx.stop(3)
       audio.play('coin', 1 + Math.max(0, s.score[side]) * 0.03)
       audio.play('score')
-      if (champion(s, TARGET) === side) {
+      if (champion(s, this.target) === side) {
         s.endAt = this.time
         fx.flash(SIDE[side].light, 0.35)
         fx.shake(0.5)
@@ -161,7 +168,7 @@ class MathQuizGame extends BaseGame<State> {
       namePill(g, side, this.ctx.names[side], label ? { active, text: label } : { active })
       bigScore(g, side, s.score[side], { x: side === 0 ? 130 : 870 })
       const at = s.done && s.winner === side ? s.doneAt : -10
-      racePips(g, side, Math.max(0, s.score[side]), TARGET, this.time, at)
+      racePips(g, side, Math.max(0, s.score[side]), this.target, this.time, at)
     }
   }
 }

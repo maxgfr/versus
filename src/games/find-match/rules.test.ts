@@ -157,34 +157,46 @@ describe('find match race', () => {
     expect(FIND_TIME.normal[1]).toBeLessThan(FIND_TIME.easy[0])
   })
 
-  for (const bot of [2, 3, 4] as const) {
-    it(`computer vs computer finds a champion in bounded steps (seed ${bot})`, () => {
-      const rng = new Rng(bot * 101)
-      const s = newFind(rng, 0)
-      const delay: [number, number] = [0, 0]
-      const plan = (side: 0 | 1, now: number) => {
-        delay[side] = now + findDelay('hard', rng)
-      }
-      plan(0, 0)
-      plan(1, 0)
-      let now = 0
-      let steps = 0
-      while (champion(s, TARGET) === null) {
-        if (++steps > 60 * 60 * 10) throw new Error('no champion')
-        now += 1 / 60
-        for (const side of [0, 1] as const) {
-          if (now >= delay[side]) {
-            const before = s.centre.line
-            tap(s, side, target(s, side), now, rng)
-            if (s.centre.line !== before) {
-              plan(0, now)
-              plan(1, now)
-            }
+  /** Two hard bots play until one side reaches `goal` points. */
+  function botsRaceTo(seed: number, goal: number): FindState {
+    const rng = new Rng(seed)
+    const s = newFind(rng, 0)
+    const delay: [number, number] = [0, 0]
+    const plan = (side: 0 | 1, now: number) => {
+      delay[side] = now + findDelay('hard', rng)
+    }
+    plan(0, 0)
+    plan(1, 0)
+    let now = 0
+    let steps = 0
+    while (champion(s, goal) === null) {
+      if (++steps > 60 * 60 * 10) throw new Error('no champion')
+      now += 1 / 60
+      for (const side of [0, 1] as const) {
+        if (now >= delay[side]) {
+          const before = s.centre.line
+          tap(s, side, target(s, side), now, rng)
+          if (s.centre.line !== before) {
+            plan(0, now)
+            plan(1, now)
           }
         }
       }
+    }
+    return s
+  }
+
+  for (const bot of [2, 3, 4] as const) {
+    it(`computer vs computer finds a champion in bounded steps (seed ${bot})`, () => {
+      const s = botsRaceTo(bot * 101, TARGET)
       expect(Math.max(...s.score)).toBe(TARGET)
       expect(s.queue.length).toBeGreaterThan(0)
     })
   }
+
+  it('takes the match at the target passed in', () => {
+    const s = botsRaceTo(7, 3)
+    expect(Math.max(...s.score)).toBe(3)
+    expect(champion(s)).toBeNull()
+  })
 })

@@ -1,10 +1,11 @@
 import { DragAim } from '../../core/controls.ts'
 import { Spring } from '../../core/fx/ease.ts'
 import { floatFor } from '../../core/fx/fx.ts'
-import { type Side } from '../../core/game.ts'
-import { pips } from '../../core/hud.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import { MID } from '../../core/stage.ts'
 import { type ShotParams, trace } from '../../engines/aim/index.ts'
 import { TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
@@ -18,12 +19,19 @@ import {
   type Event,
   fire,
   newState,
+  nextRound,
   type State,
   winner,
   WIND_MAX,
 } from './rules.ts'
 
 const EVERYWHERE = { x: -600, y: -600, w: 2200, h: 3000 }
+
+/** Rounds (fights to the last core) to win the match. One round by default. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** Seconds a decided round stays on screen before the next one is dealt. */
+const ROUND_PAUSE = 1.8
 
 class CannonDuel extends TurnGame<State> {
   private aims: [DragAim, DragAim] = [
@@ -33,6 +41,10 @@ class CannonDuel extends TurnGame<State> {
   private recoil: [Spring, Spring] = [new Spring(0, 260, 12), new Spring(0, 260, 12)]
   /** The computer picks its shot when its turn starts, then swings the barrel to it while "thinking". */
   private botShot: ShotParams | null = null
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     // The player whose turn it is may drag anywhere on the table.
@@ -46,17 +58,42 @@ class CannonDuel extends TurnGame<State> {
   }
 
   protected override busy(): boolean {
-    return this.s.phase !== 'aim'
+    const s = this.s
+    if (s.endedAt >= 0) {
+      // Round decided: let it sink in, then deal the next one.
+      if (this.time - s.endedAt > ROUND_PAUSE) this.startRound()
+      return true
+    }
+    return s.phase !== 'aim'
   }
 
   protected override step(dt: number): void {
     for (const e of advance(this.s, dt, () => this.rollWind())) this.juice(e)
     const w = winner(this.s)
-    if (w !== null) {
-      this.finish(w, { delay: 1.8 })
+    if (w !== null && this.s.endedAt < 0) {
+      this.roundOver(w)
       return
     }
     super.step(dt)
+  }
+
+  private roundOver(w: Side): void {
+    const s = this.s
+    s.wins[w]++
+    s.endedAt = this.time
+    s.roundText = `${this.ctx.names[w]} takes the round`
+    if (s.wins[w] < this.target) return
+    const score: [number, number] = [s.wins[0], s.wins[1]]
+    this.finish(w, this.target > 1 ? { score, delay: ROUND_PAUSE } : { delay: ROUND_PAUSE })
+  }
+
+  /** The other side opens the next round; the computer picks its first shot straight away. */
+  private startRound(): void {
+    const starter = other(this.s.starter)
+    nextRound(this.s, starter, this.rollWind())
+    this.botShot = this.isBot(starter)
+      ? choose(this.s, starter, this.ctx.difficulty, this.ctx.rng)
+      : null
   }
 
   protected stepTurn(): void {
@@ -196,8 +233,13 @@ class CannonDuel extends TurnGame<State> {
     for (const side of [0, 1] as Side[]) {
       this.aims[side].render(g)
       pips(g, side, coreHp(s, side), CORE_HP, { inset: 160 })
+      if (this.target > 1) pips(g, side, s.wins[side], this.target, { inset: 240 })
     }
     this.drawTurns(g, undefined, s.phase === 'aim')
+    if (s.roundText && !this.over) {
+      const a = Math.min(1, (this.time - s.endedAt) * 4)
+      banner(g, undefined, s.roundText, MID, { size: 58, alpha: a })
+    }
   }
 }
 

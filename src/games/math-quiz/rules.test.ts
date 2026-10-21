@@ -152,6 +152,14 @@ describe('math quiz presses', () => {
     press(s, 0, 1, 3)
     expect(champion(s)).toBe(0)
   })
+
+  it('crowns the side that reaches the match length the players chose', () => {
+    const s = fixed(12)
+    s.score = [4, 2]
+    expect(champion(s, 5)).toBeNull()
+    press(s, 0, 1, 3)
+    expect(champion(s, 5)).toBe(0)
+  })
 })
 
 describe('math quiz bot', () => {

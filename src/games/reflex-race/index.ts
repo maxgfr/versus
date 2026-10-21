@@ -1,6 +1,6 @@
 import { Button } from '../../core/controls.ts'
-import { BaseGame, type Side } from '../../core/game.ts'
-import { bigScore, namePill, pips } from '../../core/hud.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { bigScore, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { frame } from '../../core/frame.ts'
@@ -10,6 +10,7 @@ import {
   drawPictureCard,
   drawRule,
   drawTable,
+  scoreMeter,
   buttonCentre,
   cardCentre,
   BUTTON,
@@ -20,6 +21,9 @@ import { advance, champion, INTRO_TIME, newRace, tap, TARGET, type RaceState } f
 /** Seconds between the winning tap and the result screen. */
 const END_DELAY = 2.3
 
+/** Match length: first to N points, chosen before the game. */
+export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 21 }
+
 export interface State extends RaceState {
   /** Game time the computer taps next (-1 none). */
   botAt: [number, number]
@@ -29,6 +33,10 @@ export interface State extends RaceState {
 
 class ReflexRaceGame extends BaseGame<State> {
   private buttons!: [Button, Button]
+  /** Points that take the match. */
+  private get goal(): number {
+    return this.ctx.target || match.default
+  }
   /** Last countdown number announced (sound only, never read by the rules). */
   private counted = -1
 
@@ -110,7 +118,7 @@ class ReflexRaceGame extends BaseGame<State> {
       fx.flash(SIDE[side].light, 0.22)
       audio.play('score')
       audio.play('coin', 1 + Math.max(0, s.score[side]) * 0.05)
-      if (champion(s) === side) {
+      if (champion(s, this.goal) === side) {
         s.endAt = this.time
         fx.confetti(side)
         fx.flash(SIDE[side].light, 0.4)
@@ -147,7 +155,7 @@ class ReflexRaceGame extends BaseGame<State> {
       const frozen = s.frozen[side] >= 0 && this.time < s.frozen[side]
       const active = s.phase === 'point' && s.winner === side
       namePill(g, side, this.ctx.names[side], frozen ? { active, text: 'Wait…' } : { active })
-      pips(g, side, Math.max(0, s.score[side]), TARGET, { x: side === 0 ? 810 : 190 })
+      scoreMeter(g, side, Math.max(0, s.score[side]), this.goal, side === 0 ? 810 : 190)
       bigScore(g, side, s.score[side], { x: side === 0 ? 130 : 870 })
     }
   }

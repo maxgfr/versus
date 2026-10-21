@@ -1,4 +1,4 @@
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { lerp, Spring } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -7,11 +7,23 @@ import { W } from '../../core/stage.ts'
 import { type Disc, fingerTarget } from '../../engines/puck/index.ts'
 import { type BotMemory, decide, newMemory, TUNING } from './bot.ts'
 import { render } from './render.ts'
-import { type Event, newWorld, RINK, step, type Target, winner, type World } from './rules.ts'
+import {
+  type Event,
+  newWorld,
+  RINK,
+  step,
+  type Target,
+  TARGET,
+  winner,
+  type World,
+} from './rules.ts'
 
 interface State {
   w: World
 }
+
+/** Goals to win, chosen by the players before the match. */
+export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 21 }
 
 /** Humans move their mallet as fast as their finger; the rink is the limit. */
 const HUMAN_SPEED = 5200
@@ -24,6 +36,10 @@ class AirHockey extends BaseGame<State> {
   private squash: Spring[] = []
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
   private servedAt = -10
+
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     const server: Side = this.ctx.rng.chance(0.5) ? 0 : 1
@@ -121,7 +137,7 @@ class AirHockey extends BaseGame<State> {
       fx.ring(W / 2, gy, col.light, 360)
       floatFor(fx, side, 'GOAL!')
       this.pulse[side].kick(14)
-      const won = winner(w)
+      const won = winner(w, this.target)
       if (won !== null) this.finish(won, { score: [w.score[0], w.score[1]], delay: 1.6 })
     } else if (e.kind === 'serve') {
       this.servedAt = this.time
@@ -150,6 +166,7 @@ class AirHockey extends BaseGame<State> {
       squash: this.squash.map((s) => s.value),
       pulse: [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)],
       serve: Math.min(1, (this.time - this.servedAt) / 0.35),
+      target: this.target,
     })
   }
 

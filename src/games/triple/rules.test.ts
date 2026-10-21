@@ -201,6 +201,10 @@ describe('triple rules', () => {
     expect(winner(b)).toBe(1)
     b.score = [6, 6]
     expect(winner(b)).toBe('draw')
+    // The players can choose a shorter or longer match.
+    b.score = [3, 2]
+    expect(winner(b, 3)).toBe(0)
+    expect(winner(b)).toBeNull()
     // Empty deck and a set-free table: the points decide.
     const dry = boardOf(setFree(), [])
     dry.score = [2, 1]

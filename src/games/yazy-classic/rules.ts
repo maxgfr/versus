@@ -52,7 +52,11 @@ export const emptySheet = (): Sheet => ({
 
 export const openRows = (s: Sheet): number[] => s.rows.flatMap((v, i) => (v === null ? [i] : []))
 
-export const full = (s: Sheet): boolean => s.rows.every((v) => v !== null)
+/** Turns taken so far: each turn scores exactly one row. */
+export const turnsPlayed = (s: Sheet): number => s.rows.filter((v) => v !== null).length
+
+/** The sheet is done after `rounds` turns (a match can be shorter than the thirteen rows). */
+export const full = (s: Sheet, rounds: number = NROWS): boolean => turnsPlayed(s) >= rounds
 
 /** Sum of the six upper rows. */
 export function upperSum(s: Sheet): number {

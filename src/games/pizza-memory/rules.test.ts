@@ -71,6 +71,12 @@ describe('pizza memory rules', () => {
     expect(decide([false, false], [4, 4], MAX_ORDERS)).toBe('draw')
   })
 
+  it('uses the match length the players chose', () => {
+    // Three rounds: the score decides after the third, not before.
+    expect(decide([true, true], [2, 1], 2, 3)).toBeNull()
+    expect(decide([true, true], [2, 1], 3, 3)).toBe(0)
+  })
+
   it('times a watch: appear one by one, then hold', () => {
     expect(watchLength(3)).toBeCloseTo(LEAD + 3 * SHOW + 1.0, 6)
     expect(watchLength(4)).toBeGreaterThan(watchLength(3))

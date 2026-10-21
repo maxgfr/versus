@@ -3,7 +3,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import { drawPaddle, drawPuck, drawRink, rinkScore, type Disc } from '../../engines/puck/index.ts'
-import { RINK, TARGET, type World } from './rules.ts'
+import { RINK, type World } from './rules.ts'
 
 export interface Look {
   /** Interpolated positions for this frame. */
@@ -14,13 +14,15 @@ export interface Look {
   pulse: [number, number]
   /** 0..1 fade-in of a freshly served puck. */
   serve: number
+  /** Goals needed to win the match. */
+  target: number
 }
 
 export function render(g: Draw, w: World, look: Look): void {
   drawRink(g, RINK)
   // Match point glow on the side that is one goal away.
   for (const side of [0, 1] as Side[]) {
-    if (w.score[side] === TARGET - 1) {
+    if (w.score[side] === look.target - 1) {
       const y = side === 0 ? RINK.y1 : RINK.y0
       g.alpha(0.25 + 0.15 * Math.sin(g.t * 5), () =>
         g.ellipse(W / 2, y, RINK.goal * 0.75, 120, alpha(SIDE[side === 0 ? 1 : 0].main, 0.6)),

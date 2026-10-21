@@ -1,9 +1,9 @@
 import { other, type Side } from '../../core/game.ts'
-import { namePill } from '../../core/hud.ts'
+import { banner, namePill, pips } from '../../core/hud.ts'
 import type { Draw, Mood } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { drawRounds, mashPulse } from '../../engines/reflex/index.ts'
+import { mashPulse } from '../../engines/reflex/index.ts'
 import type { State } from './index.ts'
 
 /** World distance from the centre to each team's line. */
@@ -187,5 +187,23 @@ export function renderRope(
 
   for (const side of [0, 1] as Side[])
     namePill(g, side, o.names[side], { x: 300, active: mashPulse(s.mash[side], now, 0.2) > 0 })
-  drawRounds(g, s.rounds, now, { over: o.over })
+  rounds(g, s, now, o.over)
+}
+
+/**
+ * Round pips at each edge, then the round banners. The pips sit on the right so
+ * they never sit under the name pills, and a long row grows leftwards so it
+ * stays on screen.
+ */
+function rounds(g: Draw, s: State, now: number, over: boolean): void {
+  const r = s.rounds
+  const x = Math.min(W - 150, W - 40 - ((r.target - 1) * 46) / 2 - 15)
+  for (const side of [0, 1] as Side[]) pips(g, side, r.wins[side], r.target, { x, inset: 70 })
+  if (over) return
+  if (r.phase === 'between' && r.text) {
+    banner(g, undefined, r.text, MID, { size: 56, alpha: Math.min(1, (now - r.at) * 4) })
+  } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1) {
+    const a = 1 - Math.max(0, (now - r.at - 0.7) / 0.4)
+    banner(g, undefined, `Round ${r.round}`, MID, { size: 64, alpha: a })
+  }
 }

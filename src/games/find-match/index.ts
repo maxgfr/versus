@@ -1,4 +1,4 @@
-import { BaseGame, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { bigScore, namePill } from '../../core/hud.ts'
 import { toLocal } from '../../core/frame.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -31,6 +31,9 @@ import {
 /** Seconds between the winning tap and the result screen. */
 const END_DELAY = 2.4
 
+/** Match length: first to N points, chosen before the game. */
+export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 21 }
+
 export interface State extends FindState {
   /** Game time the computer taps next (-1 none). */
   botAt: [number, number]
@@ -43,6 +46,10 @@ export interface State extends FindState {
 class FindMatchGame extends BaseGame<State> {
   /** The flight whose landing has been celebrated (sound and dust only). */
   private landed = -1
+  /** Points that take the match. */
+  private get goal(): number {
+    return this.ctx.target || match.default
+  }
 
   protected setup(): State {
     const s: State = { ...newFind(this.ctx.rng, 0), botAt: [-1, -1], prev: null, endAt: -1 }
@@ -154,7 +161,7 @@ class FindMatchGame extends BaseGame<State> {
     audio.play('score')
     audio.play('whoosh', 1.2)
     this.planBots()
-    if (champion(s, TARGET) === side) {
+    if (champion(s, this.goal) === side) {
       s.endAt = this.time
       fx.confetti(side)
       fx.flash(SIDE[side].light, 0.4)
@@ -175,7 +182,7 @@ class FindMatchGame extends BaseGame<State> {
       namePill(g, side, this.ctx.names[side], frozen ? { active, text: 'Frozen…' } : { active })
       bigScore(g, side, s.score[side], { x: side === 0 ? 130 : 870 })
       const at = s.flySide === side ? s.flyAt : -10
-      racePips(g, side, s.score[side], TARGET, this.time, at)
+      racePips(g, side, s.score[side], this.goal, this.time, at)
     }
     drawWinner(g, s, this.time, this.ctx.names)
   }

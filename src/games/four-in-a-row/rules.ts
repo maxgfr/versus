@@ -4,7 +4,7 @@ import { other, type Side } from '../../core/game.ts'
 
 export const COLS = 7
 export const ROWS = 6
-/** Rounds are played first to this many wins. */
+/** Default match length: rounds are played first to this many wins. */
 export const TARGET = 2
 
 export type Cell = Side | null
@@ -80,8 +80,9 @@ export function addRound(wins: [number, number], o: Outcome): [number, number] {
   return next
 }
 
-export function matchOver(wins: readonly number[]): Side | null {
-  if ((wins[0] ?? 0) >= TARGET) return 0
-  if ((wins[1] ?? 0) >= TARGET) return 1
+/** The side that has reached `target` round wins, or null while the match goes on. */
+export function matchOver(wins: readonly number[], target: number): Side | null {
+  if ((wins[0] ?? 0) >= target) return 0
+  if ((wins[1] ?? 0) >= target) return 1
   return null
 }

@@ -21,6 +21,7 @@ import {
   MAX_ROLLS,
   ROWS,
   total,
+  turnsPlayed,
   UPPER_BONUS,
   UPPER_TARGET,
   upperSum,
@@ -340,8 +341,8 @@ function drawSheet(
 
 const W2 = SHEET.x + SHEET.w / 2
 
-/** Total plaque left of the Roll button: counts up after each score. */
-function drawTotal(g: Draw, side: Side, s: State, now: number): void {
+/** Total plaque left of the Roll button: counts up after each score, with the turn of the match under it. */
+function drawTotal(g: Draw, side: Side, s: State, now: number, rounds: number): void {
   const ta = textAngle(g, side)
   const col = SIDE[side]
   const value = total(s.sheets[side])
@@ -360,12 +361,24 @@ function drawTotal(g: Draw, side: Side, s: State, now: number): void {
       () => {
         g.tile(-TOTAL.w / 2, -TOTAL.h / 2, TOTAL.w, TOTAL.h, 26, shade(col.main, -0.62), 8)
         g.at(0, -4, ta, () => {
-          g.text('Total', -TOTAL.w / 2 + 20, 0, {
+          g.text('Total', -TOTAL.w / 2 + 20, -12, {
             size: 34,
             weight: 600,
             align: 'left',
             color: alpha(C.white, 0.7),
           })
+          const turns = turnsPlayed(s.sheets[side])
+          g.text(
+            turns >= rounds ? 'Finished' : `Turn ${turns + 1} of ${rounds}`,
+            -TOTAL.w / 2 + 20,
+            24,
+            {
+              size: 24,
+              weight: 600,
+              align: 'left',
+              color: alpha(C.white, 0.6),
+            },
+          )
           g.text(shown, TOTAL.w / 2 - 18, 0, {
             size: 56,
             weight: 700,
@@ -488,6 +501,7 @@ export function renderClassic(
   now: number,
   over: boolean,
   isBot: (side: Side) => boolean,
+  rounds: number,
 ): void {
   for (const side of [0, 1] as Side[]) {
     const mine = s.turn === side && !over
@@ -501,7 +515,7 @@ export function renderClassic(
       pulse: mine && !isBot(side) && s.rolls === 0,
     })
     drawRollsLeft(g, side, left, mine)
-    drawTotal(g, side, s, now)
+    drawTotal(g, side, s, now, rounds)
   }
   drawTray(g, TRAY, over ? null : s.turn)
   drawDice(g, TRAY, s, now, { turn: s.turn, dim: s.rolls === 0 && !over })

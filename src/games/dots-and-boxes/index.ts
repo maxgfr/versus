@@ -1,5 +1,5 @@
-import { other, type Side } from '../../core/game.ts'
-import { banner, hudY } from '../../core/hud.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { banner, hudY, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -39,8 +39,16 @@ export interface State {
   streak: number
   /** Game time the finished board was judged (the closing wave), or -1. */
   doneAt: number
-  /** Winner once judged: 0, 1, or -1 for a draw / not yet. */
+  /** Winner of the board once judged: 0, 1, or -1 for a draw / not yet. */
   winner: number
+  /** Rounds won so far by each side. */
+  wins: [number, number]
+  /** Who opened the current round. The other player opens the next one. */
+  starter: Side
+  /** Rounds started, counting the current one. */
+  round: number
+  /** Game time the current round began. */
+  roundAt: number
 }
 
 /**
@@ -53,6 +61,15 @@ function notice(g: Draw, text: string, alpha: number, color?: string): void {
   if (g.flipTop) banner(g, undefined, text, MID, { ...o, gap: 600 })
   else banner(g, 0, text, MID + 600, o)
 }
+
+/** Seconds a judged round stays on the board before the next one is drawn. */
+const ROUND_PAUSE = 2.6
+
+/**
+ * One round is one board. The match is first to `target` round wins; the
+ * default of one round is a single game, exactly as before.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 /** Narrow enough that the left column of dots stays clear of the pause button. */
 const GEO = geom(BOXES, BOXES, 720, 720, MID)
@@ -76,9 +93,15 @@ function gapAt(x: number, y: number): number | null {
 }
 
 class DotsAndBoxes extends TurnGame<State> {
+  /** Round wins that decide the match, as chosen on the ready screen. */
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
+    const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn: this.ctx.rng.chance(0.5) ? 0 : 1,
+      turn: starter,
       lines: emptyBoard().lines,
       lineAt: Array<number>(EDGES).fill(-1),
       boxes: Array<Owner>(BOX_COUNT).fill(null),
@@ -88,6 +111,10 @@ class DotsAndBoxes extends TurnGame<State> {
       streak: 0,
       doneAt: -1,
       winner: -1,
+      wins: [0, 0],
+      starter,
+      round: 1,
+      roundAt: 0,
     }
   }
 
@@ -101,11 +128,14 @@ class DotsAndBoxes extends TurnGame<State> {
 
   protected override step(dt: number): void {
     const s = this.s
-    if (s.endedAt >= 0 && !this.over && this.time >= s.endedAt + 0.7) this.conclude()
+    if (s.endedAt >= 0 && !this.over) {
+      if (s.doneAt < 0 && this.time >= s.endedAt + 0.7) this.conclude()
+      else if (s.doneAt >= 0 && this.time >= s.doneAt + ROUND_PAUSE) this.nextRound()
+    }
     super.step(dt)
   }
 
-  /** Every line is down: a wave across the winner's boxes, then the result. */
+  /** Every line is down: a wave across the winner's boxes, then the result or the next round. */
   private conclude(): void {
     const s = this.s
     const o = outcome(this.board())
@@ -115,11 +145,37 @@ class DotsAndBoxes extends TurnGame<State> {
     this.ctx.fx.shake(0.3)
     this.ctx.fx.stop(6)
     if (o.winner !== 'draw') {
+      s.wins[o.winner]++
       this.ctx.fx.flash(SIDE[o.winner].main, 0.3)
       this.ctx.fx.confetti(o.winner)
       this.ctx.fx.ring(GEO.x + GEO.w / 2, GEO.y + GEO.h / 2, C.yellow, 480)
     }
-    this.finish(o.winner, { score: o.counts, delay: 2.6 })
+    // Draws score nothing. A round that does not decide the match is shown, then the next one starts.
+    if (o.winner === 'draw' || s.wins[o.winner] < this.target) return
+    // A single round keeps the box count on the result screen; a match shows its round wins.
+    const score: [number, number] = this.target > 1 ? s.wins : o.counts
+    this.finish(o.winner, { score, delay: 2.6 })
+  }
+
+  /** A clean board for the next round; the player who did not open the last one starts. */
+  private nextRound(): void {
+    const s = this.s
+    const starter = other(s.starter)
+    const board = emptyBoard()
+    s.starter = starter
+    s.turn = starter
+    s.lines = board.lines
+    s.lineAt = Array<number>(EDGES).fill(-1)
+    s.boxes = board.boxes
+    s.boxAt = Array<number>(BOX_COUNT).fill(-1)
+    s.last = -1
+    s.endedAt = -1
+    s.streak = 0
+    s.doneAt = -1
+    s.winner = -1
+    s.round++
+    s.roundAt = this.time
+    this.ctx.audio.play('go')
   }
 
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
@@ -213,14 +269,24 @@ class DotsAndBoxes extends TurnGame<State> {
       const bump = changed >= 0 ? (this.time - changed) / 0.25 : 1
       const theirs = counts[side === 0 ? 1 : 0]
       boxCount(g, side, counts[side], bump, 170, hudY(g, side, 70), counts[side] > theirs)
+      // Round wins stack above (or below, for blue) the box count; a single round shows none.
+      if (this.target > 1) pips(g, side, s.wins[side], this.target, { x: 170, inset: 170 })
     }
     if (s.doneAt >= 0) {
       const [r, bl] = counts
-      const text =
-        s.winner < 0
+      const text = this.over
+        ? s.winner < 0
           ? `Dead even ${r}–${bl}`
           : `${this.ctx.names[s.winner as Side]} wins ${Math.max(r, bl)}–${Math.min(r, bl)}`
+        : s.winner < 0
+          ? `Dead even ${r}–${bl}`
+          : `${this.ctx.names[s.winner as Side]} takes the round`
       notice(g, text, Math.min(1, (this.time - s.doneAt - 0.3) * 4), C.yellow)
+    }
+    const since = this.time - s.roundAt
+    if (s.round > 1 && since < 1.3 && s.endedAt < 0) {
+      const a = Math.min(1, since * 6, (1.3 - since) * 4)
+      notice(g, `Round ${s.round} · ${this.ctx.names[s.starter]} starts`, a)
     }
   }
 }

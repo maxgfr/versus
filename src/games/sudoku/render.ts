@@ -33,6 +33,43 @@ export function layout(w: number, h: number): Layout {
   }
 }
 
+/**
+ * Round wins as pips. In a half they run down the margin beside the board; on
+ * the whole stage (solo) they sit in a row above it.
+ */
+export function drawRoundWins(
+  g: Draw,
+  side: Side,
+  w: number,
+  h: number,
+  wins: number,
+  goal: number,
+): void {
+  const solo = h > 1000
+  const l = layout(w, h)
+  const mid = l.y0 + (9 * l.c) / 2
+  const gap = solo ? 64 : 60
+  const col = SIDE[side].main
+  for (let i = 0; i < goal; i++) {
+    const off = (i - (goal - 1) / 2) * gap
+    const x = solo ? w / 2 + off : 66
+    const y = solo ? l.y0 - 70 : mid + off
+    const on = i < wins
+    g.circle(x, y, 18, on ? col : alpha(C.white, 0.14))
+    if (on) g.circle(x - 5, y - 5, 6, alpha(C.white, 0.6))
+  }
+}
+
+/** The how-to-play hint, a plate over the middle of the board for the first seconds. */
+export function drawHint(g: Draw, l: Layout): void {
+  const text = 'Tap a square, then a number'
+  const cy = l.y0 + (9 * l.c) / 2
+  const x = l.x0 + (9 * l.c) / 2
+  const w = g.measure(text, 34, 600) + 60
+  g.rrect(x - w / 2, cy - 36, w, 72, 36, alpha(C.ink, 0.82))
+  g.text(text, x, cy + 2, { size: 34, weight: 600, color: C.white })
+}
+
 export function cellAt(l: Layout, x: number, y: number): number {
   const col = Math.floor((x - l.x0) / l.c)
   const row = Math.floor((y - l.y0) / l.c)

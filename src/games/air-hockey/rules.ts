@@ -141,8 +141,9 @@ export function step(w: World, dt: number, targets: Target[], speeds: number[]):
   return events
 }
 
-export function winner(w: World): Side | null {
-  if (w.score[0] >= TARGET) return 0
-  if (w.score[1] >= TARGET) return 1
+/** The side that reached `target` goals first, if any. */
+export function winner(w: World, target = TARGET): Side | null {
+  if (w.score[0] >= target) return 0
+  if (w.score[1] >= target) return 1
   return null
 }

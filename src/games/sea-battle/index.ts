@@ -1,8 +1,10 @@
-import { other, type Side } from '../../core/game.ts'
-import { banner } from '../../core/hud.ts'
+import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { prog } from '../../core/fx/ease.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import type { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
 import { TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
@@ -25,6 +27,8 @@ import {
   shuffleRect,
 } from './render.ts'
 import {
+  CELLS,
+  FLEET,
   fire,
   freshSea,
   HIT,
@@ -37,10 +41,18 @@ import {
   viewOf,
 } from './rules.ts'
 
-/** Seconds to hide your fleet before the guns open. Shuffle works only inside it. */
+/** Seconds to hide your fleet before the guns open. Shuffle works only inside it. Every round starts with one. */
 export const SETUP = 8
 /** Seconds a shell is in the air. */
 const FLIGHT = 0.75
+/** Seconds the fleets stay on show after a round is decided, before the next round. */
+const ROUND_TIME = 4.5
+
+/**
+ * How long a match lasts: first to N round wins (one fleet destroyed is one
+ * round). The default is a single round, the classic match.
+ */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 export interface Shell {
   /** Who fired. */
@@ -70,9 +82,44 @@ export interface State {
   shuffledAt: [number, number]
   /** Game time the last ship went down, or -1. */
   endAt: number
+  /** Game time the setup (hiding your fleet, shuffling it) ends. Every round starts with one. */
+  setupEnd: number
+  /** Round wins, red first. */
+  wins: [number, number]
+  /** The side that opened the current round. Alternates every round. */
+  starter: Side
+  /** Between rounds: "Red takes the round", shown after the sinking. */
+  roundText: string
+  /** Game time the next round starts, or -1. */
+  resetAt: number
+}
+
+/** What a round starts with: both fleets placed at random, the guns closed until `setupEnd`. */
+type Round = Omit<State, 'turn' | 'starter' | 'wins' | 'roundText' | 'resetAt'>
+
+function freshRound(rng: Rng, setupEnd: number): Round {
+  const seas: [Sea, Sea] = [freshSea(rng), freshSea(rng)]
+  const blank = () => Array<number>(CELLS).fill(-10)
+  const none = () => Array<number>(FLEET.length).fill(-1)
+  return {
+    seas,
+    shell: null,
+    pauseUntil: -1,
+    landedAt: [blank(), blank()],
+    revealAt: [none(), none()],
+    peek: [false, false],
+    sank: null,
+    shuffledAt: [-10, -10],
+    endAt: -1,
+    setupEnd,
+  }
 }
 
 class SeaBattle extends TurnGame<State> {
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     const rng = this.ctx.rng
     // On a shared phone a touch on a sea belongs to whoever is firing, not to the half it sits in.
@@ -81,26 +128,27 @@ class SeaBattle extends TurnGame<State> {
       if (inRect(x, y, seaRect(other(turn)))) return turn
       return y >= MID ? 0 : 1
     }
-    const seas: [Sea, Sea] = [freshSea(rng), freshSea(rng)]
-    const blank = () => Array<number>(seas[0].shots.length).fill(-10)
-    const none = () => Array<number>(seas[0].ships.length).fill(-1)
-    return {
-      turn: rng.chance(0.5) ? 0 : 1,
-      seas,
-      shell: null,
-      pauseUntil: -1,
-      landedAt: [blank(), blank()],
-      revealAt: [none(), none()],
-      peek: [false, false],
-      sank: null,
-      shuffledAt: [-10, -10],
-      endAt: -1,
-    }
+    const round = freshRound(rng, SETUP)
+    const starter: Side = rng.chance(0.5) ? 0 : 1
+    return { ...round, turn: starter, starter, wins: [0, 0], roundText: '', resetAt: -1 }
   }
 
   protected override step(dt: number): void {
     this.handleButtons()
     super.step(dt)
+  }
+
+  /** The next round: fresh fleets, a new setup, and the other side opens. */
+  private nextRound(): void {
+    const s = this.s
+    const starter = other(s.starter)
+    Object.assign(s, freshRound(this.ctx.rng, this.time + SETUP), {
+      turn: starter,
+      starter,
+      roundText: '',
+      resetAt: -1,
+    })
+    this.boom = 0
   }
 
   /**
@@ -109,8 +157,8 @@ class SeaBattle extends TurnGame<State> {
    */
   override snapshot(): unknown {
     const snap = super.snapshot() as { s: State; t: number; r: unknown; p: unknown }
-    // Once the battle is decided, both fleets are shown to both players.
-    if (this.over) return snap
+    // Once a round is decided, both fleets are shown to both players.
+    if (this.over || this.s.resetAt >= 0) return snap
     const seas = snap.s.seas.map((sea, owner): Sea => {
       if (owner !== this.ctx.local) return sea
       return { ...sea, ships: sea.ships.map((cells, i) => (isSunk(sea, i) ? cells : [])) }
@@ -128,7 +176,7 @@ class SeaBattle extends TurnGame<State> {
         this.ctx.mode === '2p' &&
         [...inp.held.values()].some((p) => inRect(p.x, p.y, peekRect(side)))
       if (peek !== s.peek[side]) s.peek[side] = peek
-      if (this.time < SETUP && inp.downs.some((p) => inRect(p.x, p.y, shuffleRect(side)))) {
+      if (this.time < s.setupEnd && inp.downs.some((p) => inRect(p.x, p.y, shuffleRect(side)))) {
         s.seas[side].ships = placeFleet(this.ctx.rng)
         s.shuffledAt[side] = this.time
         const c = { x: W / 2, y: seaTop(side) + GRID / 2 }
@@ -147,7 +195,7 @@ class SeaBattle extends TurnGame<State> {
 
   protected override busy(): boolean {
     const s = this.s
-    if (this.time < SETUP) return true
+    if (s.resetAt >= 0 || this.time < s.setupEnd) return true
     if (s.shell) {
       if (this.time >= s.shell.landAt) this.land()
       return true
@@ -268,20 +316,37 @@ class SeaBattle extends TurnGame<State> {
     s.turn = other(sh.by)
     s.pauseUntil = this.time + pause
     if (win) {
-      const score: [number, number] = [sunkCount(s.seas[1]), sunkCount(s.seas[0])]
       s.endAt = this.time
+      s.wins[sh.by]++
       fx.confetti(sh.by)
       fx.flash(SIDE[sh.by].main, 0.35)
       fx.shake(1)
-      this.finish(sh.by, { score, delay: 3 })
+      // A single round ends the match as it always did.
+      if (s.wins[sh.by] >= this.target) {
+        const score: [number, number] =
+          this.target > 1 ? [s.wins[0], s.wins[1]] : [sunkCount(s.seas[1]), sunkCount(s.seas[0])]
+        this.finish(sh.by, { score, delay: 3 })
+      } else {
+        s.roundText = `${this.ctx.names[sh.by]} takes the round`
+        s.resetAt = this.time + ROUND_TIME
+      }
     }
+  }
+
+  protected override animate(dt: number): void {
+    // The rival's sea keeps burning while a round is decided.
+    if (this.s.endAt >= 0) this.burn(dt)
+    if (this.s.resetAt >= 0 && this.time >= this.s.resetAt) this.nextRound()
   }
 
   /** The rival's sea keeps burning while the ending plays. */
   private boom = 0
   protected override afterEnd(dt: number): void {
+    if (this.s.endAt >= 0) this.burn(dt)
+  }
+
+  private burn(dt: number): void {
     const s = this.s
-    if (s.endAt < 0) return
     this.boom -= dt
     if (this.boom > 0) return
     this.boom = 0.28
@@ -308,16 +373,21 @@ class SeaBattle extends TurnGame<State> {
 
   render(g: Draw): void {
     const s = this.s
-    const setup = this.time < SETUP
-    const live = !this.over && !setup && s.shell === null && s.pauseUntil < 0
+    const setup = this.time < s.setupEnd
+    const live = !this.over && !setup && s.shell === null && s.pauseUntil < 0 && s.resetAt < 0
     backdrop(g)
     for (const owner of [0, 1] as Side[]) {
       drawSea(g, owner, s, this.time, {
         target: live && owner === other(s.turn),
         show: this.shown(owner),
-        reveal: this.over,
+        reveal: this.over || s.resetAt >= 0,
       })
       drawFleetTracker(g, owner, s, this.time)
+    }
+    // The pips take the corners where Shuffle sits during setup, so they show once the guns are open.
+    if (this.target > 1 && !setup) {
+      pips(g, 0, s.wins[0], this.target)
+      pips(g, 1, s.wins[1], this.target)
     }
     // The computer lines up its shot: a reticle drifting over the sea it aims at.
     if (live && this.isBot(s.turn)) {
@@ -327,7 +397,7 @@ class SeaBattle extends TurnGame<State> {
       reticle(g, x, y, 1, t * 3, 0.75)
     }
     drawShell(g, s, this.time, (o) => this.origin(o))
-    const left = Math.max(1, Math.ceil(SETUP - this.time))
+    const left = Math.max(1, Math.ceil(s.setupEnd - this.time))
     this.drawTurns(g, setup ? [`Battle in ${left}`, `Battle in ${left}`] : undefined, live || setup)
     if (!this.over) {
       for (const side of [0, 1] as Side[]) {
@@ -338,7 +408,7 @@ class SeaBattle extends TurnGame<State> {
           button(g, side, shuffleRect(side), 'Shuffle', '🎲', {
             on: true,
             pressed: this.time - (s.shuffledAt[side] ?? -10) < 0.12,
-            progress: 1 - this.time / SETUP,
+            progress: Math.max(0, (s.setupEnd - this.time) / SETUP),
           })
       }
     }
@@ -363,11 +433,18 @@ class SeaBattle extends TurnGame<State> {
         color: C.yellow,
       })
     }
-    if (this.over && s.endAt >= 0) {
+    if (s.endAt >= 0 && (this.over || s.resetAt >= 0)) {
       const winner = other(s.turn)
-      const a = Math.min(1, (this.time - s.endAt) * 4)
+      const since = this.time - s.endAt
       const y = seaTop(s.turn) + GRID / 2
-      banner(g, winner, 'Fleet destroyed!', y, { size: 64, alpha: a, color: C.yellow })
+      // A round that decides nothing yet: the fleet is gone, then who took the round.
+      if (s.roundText && since >= 2) {
+        const a = prog(since, 2, 2.3)
+        banner(g, winner, s.roundText, y, { size: 58, alpha: a, color: C.yellow })
+      } else {
+        const a = Math.min(1, since * 4)
+        banner(g, winner, 'Fleet destroyed!', y, { size: 64, alpha: a, color: C.yellow })
+      }
     }
   }
 }

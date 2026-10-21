@@ -1,4 +1,5 @@
-import { BaseGame, other, type Side } from '../../core/game.ts'
+import { BaseGame, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import { approach } from '../../core/fx/ease.ts'
 import type { PlayerInput } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -20,14 +21,30 @@ import {
   FALL_LINE,
   hoverY,
   ISLAND,
+  matchWinner,
   PIECES,
   pieceAt,
+  roundSeed,
   shapeOf,
 } from './rules.ts'
 import { addIsland } from './sim.ts'
 
+/** Seconds the banner stays up after a tower falls, before the next tower is built. */
+const BETWEEN = 2.6
+
+/** Match length: first to N rounds won, a round being one tower until it falls. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
 export interface State {
   turn: Side
+  /** Who dropped first in the current round (the other one starts the next). */
+  first: Side
+  /** Round wins, red first. A round ends when a tower falls. */
+  wins: [number, number]
+  /** Game time the next tower starts, or -1 while this one stands. */
+  resetAt: number
+  /** Banner shown between two rounds. */
+  roundText: string
   phase: 'aim' | 'settle'
   phaseAt: number
   /** Blocks dropped so far. */
@@ -46,6 +63,11 @@ export interface State {
 }
 
 class AnimalStack extends BaseGame<State> {
+  /** Round wins that take the match. */
+  private get goal(): number {
+    return this.ctx.target || match.default
+  }
+
   private Mx: M | null = null
   private world: PhysicsWorld | null = null
   private nextId = 0
@@ -63,8 +85,13 @@ class AnimalStack extends BaseGame<State> {
       this.world = w
     })
     const seed = this.ctx.seed
+    const first: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn: this.ctx.rng.chance(0.5) ? 0 : 1,
+      turn: first,
+      first,
+      wins: [0, 0],
+      resetAt: -1,
+      roundText: '',
       phase: 'aim',
       phaseAt: 0,
       n: 0,
@@ -156,7 +183,13 @@ class AnimalStack extends BaseGame<State> {
       this.ctx.audio.play('explode')
       this.ctx.fx.shake(0.6)
       this.ctx.fx.flash(SIDE[loser].main, 0.3)
-      this.finish(other(loser), { note: `${s.n} block${s.n === 1 ? '' : 's'} stacked`, delay: 2.2 })
+      this.collapsed(loser)
+      return
+    }
+
+    // The round is over: the fallen tower plays out, then the next one is built.
+    if (s.resetAt >= 0) {
+      if (this.time >= s.resetAt) this.newRound()
       return
     }
 
@@ -243,12 +276,60 @@ class AnimalStack extends BaseGame<State> {
     this.ctx.audio.play('whoosh')
   }
 
+  /** Whoever dropped last toppled the tower: the other player takes the round. */
+  private collapsed(loser: Side): void {
+    const s = this.s
+    const winner = other(loser)
+    const note = `${s.n} block${s.n === 1 ? '' : 's'} stacked`
+    s.wins[winner]++
+    s.phase = 'settle'
+    s.phaseAt = this.time
+    if (matchWinner(s.wins, this.goal) !== null) {
+      const o: { note: string; delay: number; score?: [number, number] } = { note, delay: 2.2 }
+      if (this.goal > 1) o.score = [s.wins[0], s.wins[1]]
+      this.finish(winner, o)
+      return
+    }
+    s.resetAt = this.time + BETWEEN
+    s.roundText = `${this.ctx.names[winner]} takes the round`
+    this.ctx.audio.play('score')
+  }
+
+  /** A fresh tower for the next round, the other player dropping first. */
+  private newRound(): void {
+    const s = this.s
+    const seed = roundSeed(this.ctx.seed, s.wins[0] + s.wins[1])
+    if (this.world) {
+      // Deleting entries while iterating a Map is safe in JS.
+      for (const id of this.world.bodies.keys()) this.world.remove(id)
+    }
+    this.splashed.clear()
+    this.planner = null
+    this.plan = null
+    this.aimPtr = null
+    s.first = other(s.first)
+    s.turn = s.first
+    s.n = 0
+    s.piece = pieceAt(seed, 0)
+    s.next = pieceAt(seed, 1)
+    s.bodies = []
+    s.hx = ISLAND.x
+    s.ha = 0
+    s.aiming = false
+    s.lastDropper = null
+    s.phase = 'aim'
+    s.phaseAt = this.time
+    s.resetAt = -1
+    s.roundText = ''
+    this.ctx.audio.play('go')
+  }
+
   private nextTurn(): void {
     const s = this.s
     s.n++
     s.turn = other(s.turn)
     s.piece = s.next
-    s.next = pieceAt(this.ctx.seed, s.n + 1)
+    s.next = pieceAt(roundSeed(this.ctx.seed, s.wins[0] + s.wins[1]), s.n + 1)
     s.ha = 0
     s.phase = 'aim'
     s.phaseAt = this.time
@@ -289,6 +370,15 @@ class AnimalStack extends BaseGame<State> {
       glyph: PIECES[s.piece]?.glyph ?? '',
     }
     drawScene(g, view)
+    if (this.goal > 1) {
+      // Clear of the name pill (a long turn prompt) and the corner buttons.
+      pips(g, 0, s.wins[0], this.goal, { x: 800 })
+      pips(g, 1, s.wins[1], this.goal, { x: 200 })
+    }
+    if (s.resetAt >= 0 && !this.over) {
+      const a = Math.min(1, (this.time - s.phaseAt) * 4)
+      banner(g, undefined, s.roundText, MID, { size: 58, alpha: a })
+    }
   }
 
   override destroy(): void {

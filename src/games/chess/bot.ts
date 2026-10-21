@@ -156,7 +156,7 @@ const NOISE: Record<Difficulty, number> = { easy: 180, normal: 25, hard: 0 }
 /** Best move for the side to move in `pos`. Always a legal move (promotions are queens). */
 export function choose(pos: Pos, difficulty: Difficulty, rng: Rng): Step {
   const c = new Chess(pos.fen)
-  const seen = positionsSeen(pos.history)
+  const seen = positionsSeen(pos.history, pos.start)
   const all = c.moves().filter((san) => !/=[RBN]/.test(san))
   if (difficulty === 'easy' && rng.chance(0.15)) return toStep(c, rng.pick(all))
   let picked = all[0] ?? ''
@@ -192,8 +192,8 @@ export function choose(pos: Pos, difficulty: Difficulty, rng: Rng): Step {
 const key = (fen: string) => fen.split(' ').slice(0, 4).join(' ')
 
 /** Every position the game has passed through. */
-function positionsSeen(history: readonly string[]): Set<string> {
-  const c = new Chess()
+function positionsSeen(history: readonly string[], start?: string): Set<string> {
+  const c = new Chess(start)
   const out = new Set([key(c.fen())])
   for (const san of history) {
     c.move(san)

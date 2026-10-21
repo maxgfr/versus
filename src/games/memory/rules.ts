@@ -55,3 +55,10 @@ export function pairsOf(t: Table, side: Side): number {
 export function cleared(t: Table): boolean {
   return t.owner.every((o) => o !== null)
 }
+
+/** The side that has won `target` rounds, if any. Draws never count. */
+export function matchWinner(wins: readonly [number, number], target: number): Side | null {
+  if (wins[0] >= target) return 0
+  if (wins[1] >= target) return 1
+  return null
+}

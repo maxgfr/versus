@@ -32,6 +32,14 @@ export interface State {
   shots: [number, number]
   /** The live aim of the player whose turn it is (synced, so the online guest sees their own preview). */
   aiming: ShotParams | null
+  /** Rounds won per side. The match is first to the chosen number. */
+  wins: [number, number]
+  /** Who opened this round; the other side opens the next. */
+  starter: Side
+  /** Game time the round was decided, or -1 while it is being fought. */
+  endedAt: number
+  /** Banner for the round just decided. */
+  roundText: string
 }
 
 /** Point symmetry: blue's fort is red's turned half a turn about the centre. */
@@ -85,7 +93,17 @@ export function newState(starter: Side, wind: number): State {
     ],
     shots: [0, 0],
     aiming: null,
+    wins: [0, 0],
+    starter,
+    endedAt: -1,
+    roundText: '',
   }
+}
+
+/** Build fresh forts for the next round. The round wins carry over. */
+export function nextRound(s: State, starter: Side, wind: number): void {
+  const wins = s.wins
+  Object.assign(s, newState(starter, wind), { wins })
 }
 
 export function fire(s: State, shot: ShotParams): void {

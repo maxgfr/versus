@@ -1,8 +1,11 @@
 import { frame, toLocal } from '../../core/frame.ts'
-import { BaseGame, other, type Side } from '../../core/game.ts'
+import { BaseGame, other, type MatchSpec, type Side } from '../../core/game.ts'
+import { banner, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import { MID } from '../../core/stage.ts'
+import type { Rng } from '../../core/rng.ts'
 import { tableBackdrop } from '../../engines/board/index.ts'
 import { choose, type Move, THINK } from './bot.ts'
 import {
@@ -36,6 +39,10 @@ import {
 
 export interface State extends Round {
   turn: Side
+  /** Who started the current round; the other side starts the next one. */
+  starter: Side
+  /** Round wins so far. */
+  wins: [number, number]
   /** The turn side has pressed Guess and is choosing a face. */
   guess: boolean
   /** Game time the turn passes after an answer's flips (-1 = not pending). */
@@ -51,11 +58,39 @@ export interface State extends Round {
 /** The answer bubble shows alone for this long before the faces start to fall. */
 const ANSWER_DELAY = 0.95
 const FLIP_STEP = 0.075
+/** Seconds the ending of a round shows before the next round (or the result) comes. */
+const END_DELAY = 2.4
+
+/** Match length: first to N round wins, each round one secret face per side. Default: a single round. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+const blankFlips = (): number[] => Array.from({ length: FACES }, () => -10)
+
+/** A new cast with a secret face for each side. */
+function dealRound(rng: Rng): Round {
+  const faces = makeCast(rng)
+  const secret: [number, number] = [rng.int(0, FACES - 1), rng.int(0, FACES - 1)]
+  return newRound(faces, secret)
+}
+
+/** The per-round state, for a round that `starter` opens. */
+function roundStart(starter: Side): Omit<State, keyof Round | 'wins'> {
+  return {
+    starter,
+    turn: starter,
+    guess: false,
+    resolveAt: -1,
+    flipAt: [blankFlips(), blankFlips()],
+    last: null,
+    end: null,
+  }
+}
 
 /**
  * Guess the Person: a board of 24 faces each, a secret face for each side. On
  * your turn ask a trait question (the game answers truthfully from the rival's
  * secret and your impossible faces flip down), or press Guess and name a face.
+ * A right guess wins the round, a wrong one hands it to the rival.
  */
 class GuessThePerson extends BaseGame<State> {
   /** Computer: seconds until its move (-1 = not thinking). */
@@ -67,27 +102,26 @@ class GuessThePerson extends BaseGame<State> {
   /** Scheduled flip sounds, in game time. */
   private flipSounds: number[] = []
 
+  private get target(): number {
+    return this.ctx.target || match.default
+  }
+
   protected setup(): State {
     const rng = this.ctx.rng
-    const faces = makeCast(rng)
-    const secret: [number, number] = [rng.int(0, FACES - 1), rng.int(0, FACES - 1)]
-    const round = newRound(faces, secret)
-    const blank = () => Array.from({ length: FACES }, () => -10)
-    return {
-      ...round,
-      turn: rng.chance(0.5) ? 0 : 1,
-      guess: false,
-      resolveAt: -1,
-      flipAt: [blank(), blank()],
-      last: null,
-      end: null,
-    }
+    const round = dealRound(rng)
+    const starter: Side = rng.chance(0.5) ? 0 : 1
+    return { ...round, ...roundStart(starter), wins: [0, 0] }
   }
 
   protected step(dt: number): void {
     const s = this.s
     this.playFlips()
     if (this.ctx.mode === '2p') this.updatePeek()
+    if (s.end) {
+      // The round is decided but the match is not: deal the next round after the ending.
+      if (!this.over && this.time >= s.end.at + END_DELAY) this.nextRound()
+      return
+    }
     if (s.resolveAt >= 0) {
       if (this.time >= s.resolveAt) {
         s.resolveAt = -1
@@ -112,6 +146,22 @@ class GuessThePerson extends BaseGame<State> {
 
   protected override afterEnd(): void {
     this.playFlips()
+  }
+
+  private nextRound(): void {
+    const s = this.s
+    const starter = other(s.starter)
+    Object.assign(s, dealRound(this.ctx.rng), roundStart(starter))
+    this.botWait = -1
+    this.botMove = null
+    this.ctx.audio.play('swish', 1.1)
+  }
+
+  /** `winner` takes the round: the match ends at the target, otherwise the ending plays and the next round follows. */
+  private settle(winner: Side): void {
+    const s = this.s
+    s.wins[winner]++
+    if (s.wins[winner] >= this.target) this.finish(winner, { delay: END_DELAY })
   }
 
   private playFlips(): void {
@@ -221,7 +271,7 @@ class GuessThePerson extends BaseGame<State> {
       fx.shake(0.4)
       fx.confetti(side)
       this.ctx.audio.play('score')
-      this.finish(side, { delay: 2.4 })
+      this.settle(side)
       return
     }
     s.down[side][i] = true
@@ -231,7 +281,7 @@ class GuessThePerson extends BaseGame<State> {
     fx.shake(0.5)
     this.ctx.audio.play('buzz')
     fx.confetti(other(side))
-    this.finish(other(side), { delay: 2.4 })
+    this.settle(other(side))
   }
 
   /** Whether `side`'s secret is shown to this device. */
@@ -246,10 +296,14 @@ class GuessThePerson extends BaseGame<State> {
     const s = this.s
     if (s.end) {
       const won = s.end.right ? s.end.side === side : s.end.side !== side
-      return {
-        text: won ? 'Winner!' : s.end.side === side ? 'Wrong face!' : 'Found you!',
-        active: won,
-      }
+      const text = won
+        ? this.over
+          ? 'Winner!'
+          : 'Round won!'
+        : s.end.side === side
+          ? 'Wrong face!'
+          : 'Found you!'
+      return { text, active: won }
     }
     if (!this.over && s.turn === side && s.resolveAt < 0) {
       if (s.guess) return { text: 'Pick a face', active: true }
@@ -264,7 +318,7 @@ class GuessThePerson extends BaseGame<State> {
     tableBackdrop(g)
     // A soft divider between the two boards.
     g.alpha(0.5, () => g.midline())
-    const live = !this.over && s.resolveAt < 0
+    const live = !this.over && s.resolveAt < 0 && !s.end
     for (const side of [0, 1] as Side[]) {
       const active = live && s.turn === side
       renderBoard(g, s, now, side, { active, guessing: active && s.guess })
@@ -289,6 +343,15 @@ class GuessThePerson extends BaseGame<State> {
       renderGuessButton(g, this.ctx.stage, side, turn, turn && s.guess)
     }
     renderEnding(g, s, now)
+    if (this.target > 1) {
+      for (const side of [0, 1] as Side[]) {
+        pips(g, side, s.wins[side], this.target, { x: frame(side, 560, 0).x, inset: 128 })
+      }
+    }
+    if (s.end && !this.over) {
+      const winner = s.end.right ? s.end.side : other(s.end.side)
+      banner(g, undefined, `${this.ctx.names[winner]} takes the round`, MID, { size: 52 })
+    }
   }
 }
 
