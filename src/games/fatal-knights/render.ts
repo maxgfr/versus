@@ -8,6 +8,7 @@ import { MID, W } from '../../core/stage.ts'
 import type { State } from './index.ts'
 import {
   angleTo,
+  heatOf,
   BODY,
   BOX,
   type Knight,
@@ -201,15 +202,28 @@ function knight(
   charging: boolean,
   dazed: boolean,
   now: number,
+  speed = 0,
 ): void {
   g.shadow(k.x + 8, k.y + 16, BODY * 1.95, BODY * 1.15, 0.38)
   guardArc(g, k, side)
   const wobble = dazed ? Math.sin(now * 18) * 0.12 : 0
-  g.at(k.x, k.y, k.a + wobble, () => {
-    g.at(0, 0, 0, () => horse(g, walk, side, charging), 1.22)
-    lance(g, side, charging, now)
-    g.at(0, 0, 0, () => rider(g, side), 1.18)
-  })
+  // A charge stretches the pair along the run; a gallop bobs with the stride.
+  const run = Math.min(1, Math.abs(speed) / 640)
+  const stride = 1 + Math.sin(walk * 0.09) * 0.03 * Math.min(1, Math.abs(speed) / 230)
+  const sx = 1 + run * 0.1
+  const sy = (1 - run * 0.06) * stride
+  g.at(
+    k.x,
+    k.y,
+    k.a + wobble,
+    () => {
+      g.at(0, 0, 0, () => horse(g, walk, side, charging), 1.22)
+      lance(g, side, charging, now)
+      g.at(0, 0, 0, () => rider(g, side), 1.18)
+    },
+    sx,
+    sy,
+  )
   if (dazed)
     for (let i = 0; i < 3; i++) {
       const a = now * 5 + (i * Math.PI * 2) / 3
@@ -326,11 +340,24 @@ function stamp(g: Draw, title: string, sub: string, age: number, color: string, 
   })
 }
 
+/** Cosmetic extras from the game (never in the state). */
+export interface Look {
+  alpha: number
+  /** Last step's pose of each knight, for interpolation. */
+  prev: readonly (Pose | undefined)[]
+}
+
 /** Where a knight is drawn: at the touch for a moment, then gliding back to its spawn. */
-function poseOf(w: World, side: Side): Pose {
+function poseOf(w: World, side: Side, look: Look): Pose {
   const k: Knight = w.k[side]
   const gl = w.glide
-  if (!gl || w.t - gl.t > REST) return k
+  if (!gl || w.t - gl.t > REST) {
+    const p = look.prev[side]
+    // Blend between the last two steps (not across a jump back to the spawn).
+    if (!p || Math.hypot(p.x - k.x, p.y - k.y) > 60) return k
+    const t = look.alpha
+    return { x: p.x + (k.x - p.x) * t, y: p.y + (k.y - p.y) * t, a: p.a + angleTo(p.a, k.a) * t }
+  }
   const from = gl.from[side]
   const e = inOutCubic(clamp((w.t - gl.t - HOLD) / (REST - HOLD - 0.15), 0, 1))
   return {
@@ -347,12 +374,17 @@ export function renderJoust(
   target: number,
   over: boolean,
   now: number,
+  look: Look,
 ): void {
   const w: World = s.w
   field(g, now)
   const hit = w.hit
   const fresh = hit !== null && w.t - hit.t < REST
-  const poses = [poseOf(w, 0), poseOf(w, 1)] as const
+  const poses = [poseOf(w, 0, look), poseOf(w, 1, look)] as const
+  // A pass that drags on heats up: the field glows warmer.
+  const heat = heatOf(w)
+  if (heat > 0.05 && w.rest < 0)
+    g.alpha(heat * (0.12 + 0.05 * Math.sin(g.t * 6)), () => g.fillView(C.orange))
   for (const side of [0, 1] as Side[]) if (w.t < w.k[side].charge) dust(g, poses[side])
   for (const side of [0, 1] as Side[]) {
     const k = w.k[side]
@@ -365,9 +397,11 @@ export function renderJoust(
       w.t < k.charge,
       w.t < k.stun || (struck && (over || w.t - (hit?.t ?? 0) < HOLD + 0.3)),
       now,
+      k.v,
     )
   }
-  for (const c of s.ctl) pad(g, c, '🐎')
+  // Online, each phone shows only its own player's stick and button.
+  for (const c of s.ctl) if (g.viewer === null || c.side === g.viewer) pad(g, c, '🐎')
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, names[side], { active: (fresh || over) && hit?.side === side })
     points(g, side, w.pts[side], target)

@@ -9,6 +9,8 @@ import {
   CHARGE_SPEED,
   type Drive,
   type Ev,
+  HEAT,
+  HEAT_T,
   newWorld,
   REST,
   SPAWN,
@@ -127,7 +129,78 @@ describe('fatal knights: riding', () => {
   })
 })
 
+describe('fatal knights: fairness and feel', () => {
+  it('two lances landing on the same step are a double: no point for either', () => {
+    const w = newWorld()
+    // Red faces east with its tip on blue's flank; blue faces west with its tip
+    // on red's flank. Judged in list order, red used to take the point.
+    place(w, [400, 900, 0], [522, 930, Math.PI])
+    const ev: Ev[] = []
+    const scorer = stepWorld(w, [still, still], STEP, ev)
+    expect(scorer).toBeNull()
+    expect(w.pts).toEqual([0, 0])
+    expect(ev.some((e) => e.k === 'double')).toBe(true)
+  })
+
+  it('riding into the rail turns the horse away instead of pinning it there', () => {
+    const w = newWorld()
+    place(w, [BOX.x1 - BODY - 4, 900, 0], [500, 500, Math.PI / 2])
+    w.k[0].v = SPEED
+    for (let i = 0; i < 40; i++) stepWorld(w, [still, still], STEP, [])
+    // It bounced off once and rolls back into the field, not glued to the rail
+    // with its heading flipping every step.
+    expect(w.k[0].x).toBeLessThan(BOX.x1 - BODY - 10)
+    expect(Math.abs(Math.cos(w.k[0].a) + 1)).toBeLessThan(1e-6)
+  })
+
+  it('a charge spurred from a gallop runs faster than one from a standstill', () => {
+    const top = (gallop: boolean): number => {
+      const w = newWorld()
+      place(w, [500, 1300, -Math.PI / 2], [900, 420, Math.PI / 2])
+      const go: Drive = { jx: 0, jy: gallop ? -1 : 0, press: false }
+      for (let i = 0; i < 60; i++) stepWorld(w, [go, still], STEP, [])
+      let best = 0
+      for (let i = 0; i < 30; i++) {
+        stepWorld(w, [{ ...go, press: i === 0 }, still], STEP, [])
+        best = Math.max(best, w.k[0].v)
+      }
+      return best
+    }
+    expect(top(true)).toBeGreaterThan(top(false) + 30)
+  })
+
+  it('a pass that drags on heats up: horses ride faster', () => {
+    const w = newWorld()
+    place(w, [500, 1300, -Math.PI / 2], [900, 420, Math.PI / 2])
+    w.t = w.last + HEAT_T + 1
+    const go: Drive = { jx: 0, jy: -1, press: false }
+    for (let i = 0; i < 120; i++) stepWorld(w, [go, still], STEP, [])
+    expect(w.k[0].v).toBeGreaterThan(SPEED * (1 + HEAT * 0.8))
+  })
+})
+
 describe('fatal knights: bot', () => {
+  it('hard out-jousts normal and easy in most seeded matches', () => {
+    for (const weak of ['easy', 'normal'] as const) {
+      let wins = 0
+      for (let seed = 0; seed < 10; seed++) {
+        const rng = new Rng(seed)
+        const w = newWorld()
+        const side = seed % 2
+        const bots = [0, 1].map((s) => new KnightBot(rng.fork(), s === side ? 'hard' : weak))
+        for (let i = 0; i < 60 * 240 && Math.max(...w.pts) < 3; i++)
+          stepWorld(
+            w,
+            [0, 1].map((s) => bots[s]?.decide(w, s as 0 | 1, STEP) ?? still),
+            STEP,
+            [],
+          )
+        if ((w.pts[side] ?? 0) >= 3) wins++
+      }
+      expect(wins).toBeGreaterThanOrEqual(7)
+    }
+  })
+
   it('plays either side and always returns finite drives', () => {
     const w = newWorld()
     const bot = new KnightBot(new Rng(1), 'normal')

@@ -1,4 +1,5 @@
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { floatFor } from '../../core/fx/fx.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import {
@@ -9,8 +10,17 @@ import {
   snapControl,
 } from '../../engines/arena/index.ts'
 import { KnightBot } from './bot.ts'
-import { renderJoust } from './render.ts'
-import { type Drive, type Ev, newWorld, stepWorld, type World } from './rules.ts'
+import { type Look, renderJoust } from './render.ts'
+import {
+  CHARGE_CD,
+  CHARGE_SPEED,
+  type Drive,
+  type Ev,
+  newWorld,
+  type Pose,
+  stepWorld,
+  type World,
+} from './rules.ts'
 
 export interface State {
   w: World
@@ -27,6 +37,9 @@ class FatalKnights extends BaseGame<State> {
   private ev: Ev[] = []
   /** Host-only: time of the last bump sound, so touching horses do not buzz. */
   private bumpT = -9
+  // Cosmetic only (never synced): last step's poses for interpolation.
+  private prev: (Pose | undefined)[] = []
+  private look: Look = { alpha: 1, prev: this.prev }
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -47,6 +60,14 @@ class FatalKnights extends BaseGame<State> {
   protected step(dt: number): void {
     const s = this.s
     const { ctx } = this
+    s.w.k.forEach((k, i) => {
+      const p = this.prev[i]
+      if (p) {
+        p.x = k.x
+        p.y = k.y
+        p.a = k.a
+      } else this.prev[i] = { x: k.x, y: k.y, a: k.a }
+    })
     const drives: Drive[] = ([0, 1] as Side[]).map((side) => {
       const c = this.controls[side] as SideControl
       const bot = this.bots[side]
@@ -67,10 +88,11 @@ class FatalKnights extends BaseGame<State> {
     s.ctl = this.controls.map((c) => {
       const k = s.w.k[c.side]
       const cd = k.ready - s.w.t
-      return snapControl(c, Math.min(1, Math.max(0, 1 - cd / 2.6)))
+      return snapControl(c, Math.min(1, Math.max(0, 1 - cd / CHARGE_CD)))
     })
     if (scorer !== null && s.w.pts[scorer] >= this.target) {
       ctx.fx.confetti(scorer)
+      ctx.fx.flash(SIDE[scorer].main, 0.3)
       this.finish(scorer, { score: [s.w.pts[0], s.w.pts[1]], delay: 2.6 })
     }
   }
@@ -80,27 +102,47 @@ class FatalKnights extends BaseGame<State> {
     this.s.w.t += dt
   }
 
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    // The guest has no previous step to blend from.
+    this.prev.length = 0
+  }
+
   private feedback(e: Ev): void {
-    const { fx, audio, rng } = this.ctx
+    const { fx, audio } = this.ctx
     switch (e.k) {
       case 'charge':
-        audio.play('whoosh', 0.85 + rng.next() * 0.1)
+        audio.play('whoosh', 0.85 + Math.random() * 0.1)
         fx.puff(e.x, e.y, 'rgba(236,224,196,0.5)', 8)
         fx.shake(0.12)
         break
-      case 'clash':
-        audio.play('hit', 0.9)
-        audio.play('zap', 1.1)
-        audio.buzz(30)
-        fx.sparks(e.x, e.y, C.yellow, 16)
-        fx.ring(e.x, e.y, C.white, 120)
-        fx.shake(0.4)
-        fx.stop(4)
+      case 'clash': {
+        // Lance on shield: the harder they came together, the louder the ring.
+        const k = Math.min(1, e.speed / (CHARGE_SPEED * 1.4))
+        audio.play('hit', 0.8 + k * 0.4)
+        audio.play('zap', 1 + k * 0.3)
+        audio.buzz(20 + Math.round(k * 30))
+        fx.sparks(e.x, e.y, C.yellow, Math.round(10 + k * 16))
+        fx.ring(e.x, e.y, C.white, 90 + k * 70)
+        fx.shake(0.2 + k * 0.35)
+        fx.stop(2 + Math.round(k * 4))
         break
-      case 'point':
+      }
+      case 'double':
+        audio.play('hit', 0.8)
+        audio.play('thud')
+        fx.sparks(e.x, e.y, C.white, 18)
+        fx.ring(e.x, e.y, C.white, 160)
+        fx.shake(0.35)
+        fx.stop(5)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Double hit!')
+        break
+      case 'point': {
+        // A touch at full charge lands like a thunderclap.
+        const k = Math.min(1, e.speed / CHARGE_SPEED)
         audio.play('coin', 1)
-        audio.play('explode', 0.7)
-        audio.buzz(70)
+        audio.play('explode', 0.85 - k * 0.2)
+        audio.buzz(50 + Math.round(k * 40))
         fx.burst(e.x, e.y, SIDE[e.side].light, {
           count: 30,
           speed: 620,
@@ -121,10 +163,11 @@ class FatalKnights extends BaseGame<State> {
           colors: ['#c9ced9', '#8d929e'],
         })
         fx.float('+1', e.x, e.y - 80, SIDE[e.side].light, 72, e.side)
-        fx.flash(SIDE[e.side].light, 0.3)
-        fx.shake(0.7)
-        fx.stop(10)
+        fx.flash(SIDE[e.side].light, 0.2 + k * 0.15)
+        fx.shake(0.45 + k * 0.35)
+        fx.stop(6 + Math.round(k * 6))
         break
+      }
       case 'bump':
         if (this.time - this.bumpT < 0.35) break
         this.bumpT = this.time
@@ -138,8 +181,9 @@ class FatalKnights extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderJoust(g, this.s, this.ctx.names, this.target, this.over, this.time)
+  render(g: Draw, alpha: number): void {
+    this.look.alpha = alpha
+    renderJoust(g, this.s, this.ctx.names, this.target, this.over, this.time, this.look)
   }
 }
 

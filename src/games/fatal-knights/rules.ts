@@ -27,6 +27,18 @@ const STUN = 0.6
 export const REST = 1.4
 /** If nobody scores for this long, the knights are sent back to their spawns. */
 export const IDLE_T = 30
+/**
+ * The longer a pass lasts, the hotter it gets: riding speed grows by up to
+ * this share and the charge recharges faster, reaching the peak after
+ * `HEAT_T` seconds without a point.
+ */
+export const HEAT = 0.3
+export const HEAT_T = 20
+/** Share of the gallop speed a charge carries on top of its own burst. */
+export const MOMENTUM = 0.35
+
+/** 0..1: how hot the current pass is. */
+export const heatOf = (w: World): number => Math.max(0, Math.min(1, (w.t - w.last) / HEAT_T))
 /** The spawns for each pass: red faces up from the bottom, blue faces down from the top. */
 export const SPAWN: [{ x: number; y: number; a: number }, { x: number; y: number; a: number }] = [
   { x: 500, y: 1250, a: -Math.PI / 2 },
@@ -48,6 +60,8 @@ export interface Knight {
   stun: number
   /** Distance travelled, for the gallop animation. */
   walk: number
+  /** Top speed of the current charge (0 = none yet). */
+  burst: number
 }
 
 /** Where a knight stood, for the glide back to the spawns (render only). */
@@ -83,7 +97,9 @@ export interface Drive {
 export type Ev =
   | { k: 'charge'; side: Side; x: number; y: number }
   | { k: 'clash'; x: number; y: number; speed: number }
-  | { k: 'point'; side: Side; x: number; y: number }
+  | { k: 'point'; side: Side; x: number; y: number; speed: number }
+  /** Both lances landed on the same step: no point, the pass is ridden again. */
+  | { k: 'double'; x: number; y: number }
   | { k: 'bump'; x: number; y: number }
   | { k: 'wall'; x: number; y: number; speed: number }
 
@@ -96,7 +112,7 @@ export const angleTo = (a: number, b: number): number => {
 
 const spawnKnight = (side: Side): Knight => {
   const s = SPAWN[side]
-  return { x: s.x, y: s.y, a: s.a, v: 0, charge: -9, ready: 0, stun: -9, walk: 0 }
+  return { x: s.x, y: s.y, a: s.a, v: 0, charge: -9, ready: 0, stun: -9, walk: 0, burst: 0 }
 }
 
 export function newWorld(): World {
@@ -138,10 +154,13 @@ export function stepWorld(w: World, drives: readonly Drive[], dt: number, ev: Ev
   for (const side of [0, 1] as Side[]) {
     const k = w.k[side]
     const d = drives[side] ?? { jx: 0, jy: 0, press: false }
+    const heat = heatOf(w)
     if (!resting) {
       if (d.press && t >= k.ready && t >= k.charge) {
         k.charge = t + CHARGE_T
-        k.ready = t + CHARGE_CD
+        k.ready = t + CHARGE_CD * (1 - heat * 0.3)
+        // Spurring from a gallop carries the gallop into the charge.
+        k.burst = CHARGE_SPEED + Math.max(0, k.v) * MOMENTUM
         ev.push({ k: 'charge', side, x: k.x, y: k.y })
       }
     }
@@ -154,27 +173,30 @@ export function stepWorld(w: World, drives: readonly Drive[], dt: number, ev: Ev
     let target = 0
     if (stunned) target = -120
     else if (resting) target = 0
-    else if (t < k.charge) target = CHARGE_SPEED
-    else target = m * SPEED
+    else if (t < k.charge) target = k.burst || CHARGE_SPEED
+    else target = m * SPEED * (1 + HEAT * heat)
     const rate = target < k.v ? 4 : 2.6
     k.v += (target - k.v) * Math.min(1, rate * dt)
     const step = k.v * dt
     k.x += Math.cos(k.a) * step
     k.y += Math.sin(k.a) * step
     k.walk += Math.abs(step)
-    // Fence: bounce off the rails.
+    // Fence: bounce off the rails. Riding forward into a rail turns the horse
+    // away from it (the heading is mirrored, the speed kept positive); backing
+    // into one just pushes it forward again. Mirroring the heading *and*
+    // reversing the speed sent it straight back into the rail.
     if (k.x < BOX.x0 + BODY || k.x > BOX.x1 - BODY) {
       const s = Math.abs(k.v)
       k.x = Math.max(BOX.x0 + BODY, Math.min(BOX.x1 - BODY, k.x))
-      k.a = Math.PI - k.a
-      k.v *= -0.4
+      if (k.v > 0) k.a = Math.PI - k.a
+      k.v = Math.abs(k.v) * 0.4
       if (s > 150) ev.push({ k: 'wall', x: k.x, y: k.y, speed: s })
     }
     if (k.y < BOX.y0 + BODY || k.y > BOX.y1 - BODY) {
       const s = Math.abs(k.v)
       k.y = Math.max(BOX.y0 + BODY, Math.min(BOX.y1 - BODY, k.y))
-      k.a = -k.a
-      k.v *= -0.4
+      if (k.v > 0) k.a = -k.a
+      k.v = Math.abs(k.v) * 0.4
       if (s > 150) ev.push({ k: 'wall', x: k.x, y: k.y, speed: s })
     }
   }
@@ -202,33 +224,56 @@ export function stepWorld(w: World, drives: readonly Drive[], dt: number, ev: Ev
     return null
   }
 
-  // Lances: the tip of each knight against the other knight.
+  // Lances: judge both tips before acting on either, so neither knight's
+  // place in the list decides a simultaneous touch.
+  const res: ('point' | 'clash' | null)[] = [null, null]
+  const tips = [tipOf(w.k[0]), tipOf(w.k[1])]
   for (const att of [0, 1] as Side[]) {
     const me = w.k[att]
     const rival = w.k[att === 0 ? 1 : 0]
     if (t < me.stun) continue
-    const tip = tipOf(me)
+    const tip = tips[att] as { x: number; y: number }
     if (Math.hypot(tip.x - rival.x, tip.y - rival.y) > BODY + TOUCH) continue
     // Which part of the rival did the tip land on?
     const delta = angleTo(rival.a, Math.atan2(tip.y - rival.y, tip.x - rival.x))
-    if (Math.abs(delta) < SHIELD) {
-      // Shield: both are knocked back and stunned, no point.
-      const speed = Math.abs(me.v)
-      me.v = -150
-      rival.v = -150
-      me.stun = t + STUN
-      rival.stun = t + STUN
-      ev.push({ k: 'clash', x: tip.x, y: tip.y, speed })
-      return null
-    }
+    res[att] = Math.abs(delta) < SHIELD ? 'clash' : 'point'
+  }
+  if (res[0] === 'point' && res[1] === 'point') {
+    // A double touch: no point, ride the pass again.
+    const x = ((tips[0]?.x ?? 0) + (tips[1]?.x ?? 0)) / 2
+    const y = ((tips[0]?.y ?? 0) + (tips[1]?.y ?? 0)) / 2
+    ev.push({ k: 'double', x, y })
+    resetPass(w)
+    w.rest = t + REST
+    w.last = t + REST
+    return null
+  }
+  for (const att of [0, 1] as Side[]) {
+    if (res[att] !== 'point') continue
     // A touch from behind or the side: a point, then both go back to their spawns.
+    const me = w.k[att]
+    const tip = tips[att] as { x: number; y: number }
     w.pts[att]++
     w.hit = { side: att, x: tip.x, y: tip.y, t }
-    ev.push({ k: 'point', side: att, x: tip.x, y: tip.y })
+    ev.push({ k: 'point', side: att, x: tip.x, y: tip.y, speed: Math.abs(me.v) })
     resetPass(w)
     w.rest = t + REST
     w.last = t + REST
     return att
+  }
+  for (const att of [0, 1] as Side[]) {
+    if (res[att] !== 'clash') continue
+    // Shield: both are knocked back and stunned, no point.
+    const me = w.k[att]
+    const rival = w.k[att === 0 ? 1 : 0]
+    const tip = tips[att] as { x: number; y: number }
+    const speed = Math.abs(me.v) + Math.max(0, rival.v)
+    me.v = -150
+    rival.v = -150
+    me.stun = t + STUN
+    rival.stun = t + STUN
+    ev.push({ k: 'clash', x: tip.x, y: tip.y, speed })
+    return null
   }
   return null
 }
