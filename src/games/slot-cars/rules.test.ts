@@ -259,4 +259,36 @@ describe('bots', () => {
     c.v = TOP
     expect(bot.throttle(c)).toBe(false)
   })
+
+  it('a half squeeze of the trigger tops out at half speed', () => {
+    const half = newCar(0)
+    const full = newCar(1)
+    for (let i = 0; i < 60 * 14; i++) {
+      stepCars([half], [0.5, 0], STEP, i * STEP, 0, 99, [])
+      stepCars([full], [0, 1], STEP, i * STEP, 0, 99, [])
+      // Park them back on the start so no bend throws them.
+      half.s = full.s = 0
+    }
+    expect(half.v).toBeCloseTo(TOP / 2, 0)
+    expect(full.v).toBeCloseTo(TOP, 0)
+  })
+
+  it('hard beats easy over five laps', () => {
+    let hard = 0
+    for (const hardSide of [0, 1] as const) {
+      const cars = [newCar(0), newCar(1)]
+      const bots = [
+        SlotBot.of(hardSide === 0 ? 'hard' : 'easy'),
+        SlotBot.of(hardSide === 1 ? 'hard' : 'easy'),
+      ]
+      let w: 0 | 1 | null = null
+      for (let i = 0; i < 60 * 300 && w === null; i++) {
+        const th = cars.map((c, k) => (bots[k] as SlotBot).throttle(c))
+        stepCars(cars, th, STEP, i * STEP, 0, 5, [])
+        w = winnerOf(cars)
+      }
+      if (w === hardSide) hard++
+    }
+    expect(hard).toBe(2)
+  })
 })

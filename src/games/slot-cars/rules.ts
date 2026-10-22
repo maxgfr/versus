@@ -77,7 +77,7 @@ export interface Car {
 }
 
 export type Ev =
-  | { k: 'crash'; side: 0 | 1; x: number; y: number }
+  | { k: 'crash'; side: 0 | 1; x: number; y: number; speed: number }
   | { k: 'lap'; side: 0 | 1; x: number; y: number; lap: number }
   | { k: 'land'; side: 0 | 1; x: number; y: number }
 
@@ -199,12 +199,14 @@ export function limitAt(tr: Track, side: 0 | 1, s: number): number {
 }
 
 /**
- * Advance the cars one step. `throttle[side]` is whether that car's throttle
- * is held. The race is on from `go` (s); before that cars sit still.
+ * Advance the cars one step. `throttle[side]` is how hard that car's trigger
+ * is squeezed, 0..1 (true = 1, false = 0): it scales the motor's push, so a
+ * half squeeze tops out at half speed. The race is on from `go` (s); before
+ * that cars sit still.
  */
 export function stepCars(
   cars: Car[],
-  throttle: readonly boolean[],
+  throttle: readonly (boolean | number)[],
   dt: number,
   now: number,
   go: number,
@@ -246,8 +248,8 @@ export function stepCars(
       continue
     }
     const lane = tr.lanes[c.side]
-    const on = throttle[c.side] ?? false
-    c.v = Math.max(0, c.v + ((on ? ACCEL : 0) - DRAG * c.v) * dt)
+    const thr = Math.max(0, Math.min(1, Number(throttle[c.side] ?? 0)))
+    c.v = Math.max(0, c.v + (ACCEL * thr - DRAG * c.v) * dt)
     c.s += c.v * dt
     const lat = c.v * c.v * curvatureAt(tr, c.side, c.s)
     const at = pose(tr, c.side, c.s)
@@ -263,8 +265,8 @@ export function stepCars(
       c.t0 = now
       c.fvx = Math.cos(at.h) * c.v * 0.9 + n.x * out * c.v * 0.55
       c.fvy = Math.sin(at.h) * c.v * 0.9 + n.y * out * c.v * 0.55
+      ev.push({ k: 'crash', side: c.side, x: at.x, y: at.y, speed: c.v })
       c.v = 0
-      ev.push({ k: 'crash', side: c.side, x: at.x, y: at.y })
       continue
     }
     const laps = Math.max(0, Math.floor(c.s / lane.len))

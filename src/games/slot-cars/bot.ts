@@ -14,8 +14,8 @@ interface Skill {
 
 const SKILL: Record<Difficulty, Skill> = {
   easy: { overshoot: 0.05, look: 360 },
-  normal: { overshoot: -0.1, look: 360 },
-  hard: { overshoot: -0.02, look: 360 },
+  normal: { overshoot: -0.06, look: 360 },
+  hard: { overshoot: -0.02, look: 420 },
 }
 
 /** Distance step of the look-ahead (units). */

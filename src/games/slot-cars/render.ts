@@ -24,6 +24,15 @@ export interface ThrottleLook {
   y: number
   r: number
   on: boolean
+  /** How hard the trigger is squeezed, 0..1. */
+  level: number
+}
+
+/** Cosmetic extras from the game: interpolated cars, landing squash, lap pulses. */
+export interface SlotLook {
+  cars: Car[]
+  squash: [number, number]
+  pulse: [number, number]
 }
 
 /** Half-width of the plastic road around the centre line. */
@@ -183,7 +192,7 @@ function circuit(g: Draw, tr: Track): void {
 }
 
 /** A slot car: a low chunky body, a pin at the front that rides in the slot. */
-function car(g: Draw, c: Car, now: number, leader: boolean): void {
+function car(g: Draw, c: Car, now: number, leader: boolean, squash = 1): void {
   const col = SIDE[c.side].main
   const flying = c.st === 'fly'
   const k = flying ? Math.min(1, (now - c.t0) / RESPAWN) : 0
@@ -197,6 +206,14 @@ function car(g: Draw, c: Car, now: number, leader: boolean): void {
     g.circle(c.x, c.y, 56, alpha(C.orange, 0.35 * a))
   }
   const scale = 1.4 + lift / 150
+  const sq = Math.max(0.7, Math.min(1.3, squash))
+  // Speed streaks off the tail when flat out.
+  if (!flying && c.v > TOP * 0.8) {
+    const k = (c.v - TOP * 0.8) / (TOP * 0.2)
+    g.at(c.x, c.y, c.h, () => {
+      for (const sy of [-14, 14]) g.line(-50, sy, -50 - 70 * k, sy, alpha(C.white, 0.3 * k), 4)
+    })
+  }
   g.alpha(blink ? 0.4 : 1, () => {
     g.at(
       c.x,
@@ -225,8 +242,8 @@ function car(g: Draw, c: Car, now: number, leader: boolean): void {
         // The guide pin at the nose that rides in the slot.
         g.circle(33, -1, 5, '#d6d0e6')
       },
-      scale,
-      scale,
+      scale / sq,
+      scale * sq,
     )
   })
   if (!flying) {
@@ -244,9 +261,23 @@ function car(g: Draw, c: Car, now: number, leader: boolean): void {
 function throttle(g: Draw, t: ThrottleLook, speed: number, warn: number, hint: number): void {
   const col = SIDE[t.side].main
   const depth = t.r * 0.16
-  const press = t.on ? 1 : 0
+  // The harder the squeeze, the deeper it sinks and the brighter it glows.
+  const press = t.on ? 0.4 + 0.6 * t.level : 0
   g.forSide(t.side, t.x, t.y, () => {
-    if (t.on) g.circle(0, depth, t.r + 26, alpha(col, 0.25))
+    if (t.on) g.circle(0, depth, t.r + 18 + 22 * t.level, alpha(col, 0.15 + 0.25 * t.level))
+    // Trigger gauge up the side: how far the thumb has slid toward full.
+    if (t.on) {
+      const h = t.r * 1.6
+      g.rrect(-t.r - 46, -h / 2, 18, h, 9, alpha('#000000', 0.4))
+      g.rrect(
+        -t.r - 46,
+        h / 2 - h * t.level,
+        18,
+        h * t.level,
+        9,
+        t.level > 0.95 ? C.yellow : alpha(C.white, 0.85),
+      )
+    }
     g.circle(0, depth, t.r + 4, shade(col, -0.45))
     g.circle(
       0,
@@ -278,7 +309,7 @@ function throttle(g: Draw, t: ThrottleLook, speed: number, warn: number, hint: n
     g.emoji('⚡', 0, depth * press, t.r * 1.05)
     if (hint > 0)
       g.alpha(hint, () =>
-        g.text('HOLD', 0, -t.r - 50, {
+        g.text('HOLD · SLIDE UP', 0, -t.r - 50, {
           size: 40,
           weight: 700,
           color: C.white,
@@ -289,13 +320,13 @@ function throttle(g: Draw, t: ThrottleLook, speed: number, warn: number, hint: n
 }
 
 /** Lap counter on the player's left, upright for them. */
-function laps(g: Draw, c: Car, total: number): void {
+function laps(g: Draw, c: Car, total: number, pulse = 0): void {
   const side = c.side
   const x = side === 0 ? 150 : W - 150
   g.forSide(side, x, hudY(g, side), () => {
     g.text('LAP', 0, -40, { size: 34, weight: 700, color: alpha(C.white, 0.75) })
     g.text(c.finishT >= 0 ? '🏁' : `${Math.min(total, c.laps + 1)}/${total}`, 0, 12, {
-      size: 52,
+      size: 52 * (1 + 0.35 * Math.min(1, pulse)),
       weight: 700,
       color: SIDE[side].light,
       drop: alpha('#000000', 0.4),
@@ -310,6 +341,7 @@ export function renderSlot(
   names: [string, string],
   over: boolean,
   humans: readonly [boolean, boolean],
+  look: SlotLook,
 ): void {
   const tr = track()
   const [a, b] = s.cars
@@ -324,16 +356,18 @@ export function renderSlot(
   table(g)
   circuit(g, tr)
   // Flying cars over grounded ones.
-  const order = [...s.cars].sort((x, y) => Number(x.st === 'fly') - Number(y.st === 'fly'))
-  for (const c of order) car(g, c, now, c.side === lead)
+  const order = [...look.cars].sort((x, y) => Number(x.st === 'fly') - Number(y.st === 'fly'))
+  for (const c of order) car(g, c, now, c.side === lead, look.squash[c.side])
   const hint = now - s.go < 3 ? Math.min(1, (3 - (now - s.go)) * 2) : 0
   for (const t of s.ctl) {
+    // Online, each phone shows only its own trigger.
+    if (g.viewer !== null && t.side !== g.viewer) continue
     const c = s.cars[t.side]
     throttle(g, t, Math.min(1, (c?.v ?? 0) / TOP), c ? danger(c) : 0, humans[t.side] ? hint : 0)
   }
   namePill(g, 0, names[0], { active: lead === 0 })
   namePill(g, 1, names[1], { active: lead === 1 })
-  for (const c of s.cars) laps(g, c, s.laps)
+  for (const c of s.cars) laps(g, c, s.laps, look.pulse[c.side])
   if (over) return
   if (now < s.go) {
     const left = s.go - now
