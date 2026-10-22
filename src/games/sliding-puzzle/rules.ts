@@ -1,3 +1,4 @@
+import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 
 /**
@@ -43,10 +44,10 @@ export interface Scramble {
  * before it, and every move is legal, so the result is always solvable.
  * Same seed → same board on both halves.
  */
-export function scramble(rng: Rng, moves = SCRAMBLE_MOVES): Scramble {
+export function scramble(rng: Rng, moves = SCRAMBLE_MOVES, min = MIN_DISTANCE): Scramble {
   let best = walk(rng, moves)
   // A few redraws at most; keep the farthest walk if none reaches the bar.
-  for (let k = 0; k < 40 && distance(best.tiles) < Math.min(MIN_DISTANCE, moves); k++) {
+  for (let k = 0; k < 40 && distance(best.tiles) < Math.min(min, moves); k++) {
     const next = walk(rng, moves)
     if (distance(next.tiles) > distance(best.tiles)) best = next
   }
@@ -67,6 +68,24 @@ function walk(rng: Rng, moves: number): Scramble {
     path.push(gap)
   }
   return { tiles, path }
+}
+
+/** Scramble size per level: steps of the walk and the least tile distance it must reach. */
+const SIZES: Record<Difficulty, { moves: number; min: number }> = {
+  easy: { moves: 40, min: 14 },
+  normal: { moves: 60, min: 24 },
+  hard: { moves: 90, min: 32 },
+}
+
+/**
+ * The scramble for race `round` of a match on level `d`: each race walks a
+ * little further from solved than the last (up to a cap), so a long match
+ * ramps up instead of staying flat.
+ */
+export function scrambleSize(d: Difficulty, round: number): { moves: number; min: number } {
+  const base = SIZES[d]
+  const r = Math.min(round, 4)
+  return { moves: base.moves + 10 * r, min: Math.min(40, base.min + 2 * r) }
 }
 
 /**
@@ -156,4 +175,123 @@ export function distance(tiles: readonly number[]): number {
 export function progress(tiles: readonly number[], start: number): number {
   if (start <= 0) return 1
   return Math.max(0, Math.min(1, 1 - distance(tiles) / start))
+}
+
+/** Manhattan distance plus linear conflicts: an estimate of the moves left. */
+export function estimate(tiles: ArrayLike<number>): number {
+  let h = 0
+  for (let i = 0; i < CELLS; i++) {
+    const v = tiles[i] as number
+    if (!v) continue
+    const home = v - 1
+    h += Math.abs(rowOf(i) - rowOf(home)) + Math.abs(colOf(i) - colOf(home))
+  }
+  // Two tiles in their home row (or column) but in the wrong order: one must step aside.
+  for (let line = 0; line < SIZE; line++) {
+    for (let a = 0; a < SIZE; a++) {
+      const ia = line * SIZE + a
+      const va = tiles[ia] as number
+      const ja = a * SIZE + line
+      const wa = tiles[ja] as number
+      for (let b = a + 1; b < SIZE; b++) {
+        const vb = tiles[line * SIZE + b] as number
+        if (va && vb && rowOf(va - 1) === line && rowOf(vb - 1) === line && va > vb) h += 2
+        const wb = tiles[b * SIZE + line] as number
+        if (wa && wb && colOf(wa - 1) === line && colOf(wb - 1) === line && wa > wb) h += 2
+      }
+    }
+  }
+  return h
+}
+
+/**
+ * Solve a board from what is on it (weighted A*: `weight` 1 is shortest, higher
+ * finds a longer route much faster). Returns the cells to tap, one step of the
+ * gap each, or null if `maxNodes` boards were looked at without a solution.
+ */
+export function solveTaps(
+  tiles: readonly number[],
+  weight: number,
+  maxNodes = 200_000,
+): number[] | null {
+  const key = (t: ArrayLike<number>): string => String.fromCharCode(...Array.from(t))
+  const start = key(tiles)
+  const goal = key(solvedBoard())
+  if (start === goal) return []
+  // Each seen board: moves so far, the board it came from, and the cell tapped.
+  const seen = new Map<string, { g: number; from: string; tap: number }>()
+  seen.set(start, { g: 0, from: '', tap: -1 })
+  // Binary heap of [f, h, board].
+  const heap: [number, number, string][] = []
+  const push = (n: [number, number, string]): void => {
+    heap.push(n)
+    let i = heap.length - 1
+    while (i > 0) {
+      const p = (i - 1) >> 1
+      const a = heap[p] as [number, number, string]
+      if (a[0] < n[0] || (a[0] === n[0] && a[1] <= n[1])) break
+      heap[i] = a
+      i = p
+    }
+    heap[i] = n
+  }
+  const pop = (): [number, number, string] => {
+    const top = heap[0] as [number, number, string]
+    const last = heap.pop() as [number, number, string]
+    if (heap.length) {
+      let i = 0
+      for (;;) {
+        const l = 2 * i + 1
+        const r = l + 1
+        let m = i
+        const at = (k: number) => (k === i ? last : (heap[k] as [number, number, string]))
+        const less = (x: [number, number, string], y: [number, number, string]) =>
+          x[0] < y[0] || (x[0] === y[0] && x[1] < y[1])
+        if (l < heap.length && less(at(l), at(m))) m = l
+        if (r < heap.length && less(at(r), at(m))) m = r
+        if (m === i) break
+        heap[i] = heap[m] as [number, number, string]
+        i = m
+      }
+      heap[i] = last
+    }
+    return top
+  }
+  const h0 = estimate(tiles)
+  push([weight * h0, h0, start])
+  const board = Array<number>(CELLS).fill(0)
+  let expanded = 0
+  while (heap.length) {
+    const [, , k] = pop()
+    if (k === goal) {
+      const taps: number[] = []
+      let cur = k
+      for (;;) {
+        const n = seen.get(cur) as { g: number; from: string; tap: number }
+        if (n.tap < 0) break
+        taps.push(n.tap)
+        cur = n.from
+      }
+      return taps.reverse()
+    }
+    if (++expanded > maxNodes) return null
+    const node = seen.get(k) as { g: number; from: string; tap: number }
+    for (let i = 0; i < CELLS; i++) board[i] = k.charCodeAt(i)
+    const gap = board.indexOf(0)
+    for (const n of neighbours(gap)) {
+      board[gap] = board[n] as number
+      board[n] = 0
+      const nk = key(board)
+      const g = node.g + 1
+      const old = seen.get(nk)
+      if (!old || g < old.g) {
+        seen.set(nk, { g, from: k, tap: n })
+        const h = estimate(board)
+        push([g + weight * h, h, nk])
+      }
+      board[n] = board[gap] as number
+      board[gap] = 0
+    }
+  }
+  return null
 }

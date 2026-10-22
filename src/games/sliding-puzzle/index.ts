@@ -27,6 +27,7 @@ import {
   progress,
   rowOf,
   scramble,
+  scrambleSize,
   SIZE,
   slide,
 } from './rules.ts'
@@ -124,8 +125,10 @@ class SlidingPuzzle extends PuzzleRace<State> {
 
   /** Race `round`, dealt at game time `at`: a fresh scramble, the same on both phones. */
   private deal(round: number, at: number): State {
-    const sc = scramble(new Rng(this.ctx.seed + round * 7919))
-    const plan = botPlan(sc.path, this.ctx.difficulty)
+    const size = scrambleSize(this.ctx.difficulty, round)
+    const sc = scramble(new Rng(this.ctx.seed + round * 7919), size.moves, size.min)
+    // Only a computer needs a plan (people and the online guest skip the search).
+    const plan = this.ctx.bots.some(Boolean) ? botPlan(sc.tiles, this.ctx.difficulty) : []
     const board = (): Board => ({
       tiles: sc.tiles.slice(),
       from: sc.tiles.map((_, i) => i),

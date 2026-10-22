@@ -7,6 +7,8 @@ import {
   distance,
   foldPlan,
   MIN_DISTANCE,
+  scrambleSize,
+  solveTaps,
   isSolved,
   neighbours,
   progress,
@@ -79,8 +81,8 @@ describe('sliding puzzle: folded plans', () => {
   it('a folded plan still solves the scramble, in fewer taps', () => {
     for (const seed of [1, 5, 9, 40]) {
       const sc = scramble(new Rng(seed))
-      const plan = botPlan(sc.path, 'hard')
-      expect(plan.length).toBeLessThan(botPlan(sc.path, 'easy').length)
+      const plan = botPlan(sc.tiles, 'hard')
+      expect(plan.length).toBeLessThan(botPlan(sc.tiles, 'easy').length)
       let tiles = sc.tiles
       for (const cell of plan) {
         const r = slide(tiles, cell)
@@ -161,7 +163,7 @@ describe('sliding puzzle: bot', () => {
         const sc = scramble(new Rng(seed))
         const rng = new Rng(seed + 1)
         let tiles = sc.tiles
-        let plan = botPlan(sc.path, d)
+        let plan = botPlan(sc.tiles, d)
         let taps = 0
         while (!isSolved(tiles) && taps < 400) {
           const m = botTap(tiles, plan, d, rng)
@@ -177,4 +179,60 @@ describe('sliding puzzle: bot', () => {
       }
     })
   }
+})
+
+describe('sliding puzzle: difficulty', () => {
+  it('scrambles further on harder levels and further each race of a match', () => {
+    expect(scrambleSize('easy', 0).min).toBeLessThan(scrambleSize('normal', 0).min)
+    expect(scrambleSize('normal', 0).min).toBeLessThan(scrambleSize('hard', 0).min)
+    for (let r = 1; r < 8; r++) {
+      expect(scrambleSize('normal', r).moves).toBeGreaterThanOrEqual(
+        scrambleSize('normal', r - 1).moves,
+      )
+      expect(scrambleSize('normal', r).min).toBeGreaterThanOrEqual(
+        scrambleSize('normal', r - 1).min,
+      )
+    }
+    const sz = scrambleSize('hard', 2)
+    const sc = scramble(new Rng(12), sz.moves, sz.min)
+    expect(distance(sc.tiles)).toBeGreaterThanOrEqual(sz.min)
+  })
+
+  it('solves a board from the board alone', () => {
+    const sz = scrambleSize('hard', 0)
+    for (const seed of [2, 3]) {
+      const sc = scramble(new Rng(seed), sz.moves, sz.min)
+      const taps = solveTaps(sc.tiles, 1.6) as number[]
+      expect(taps).not.toBeNull()
+      let tiles = sc.tiles
+      for (const cell of taps) tiles = slide(tiles, cell)?.tiles as number[]
+      expect(isSolved(tiles)).toBe(true)
+      // Shorter than undoing the scramble walk.
+      expect(taps.length).toBeLessThan(sz.moves)
+    }
+  })
+
+  it('a hard bot beats an easy one on the same board in most seeded races', () => {
+    const sz = scrambleSize('normal', 0)
+    const race = (d: Difficulty, seed: number, tiles0: number[]): number => {
+      const rng = new Rng(seed)
+      let tiles = tiles0
+      let plan = botPlan(tiles, d)
+      let t = 0
+      for (let n = 0; n < 500 && !isSolved(tiles); n++) {
+        const m = botTap(tiles, plan, d, rng) as { cell: number; plan: number[] }
+        tiles = slide(tiles, m.cell)?.tiles as number[]
+        plan = m.plan
+        t += PACE[d] * rng.range(0.7, 1.3)
+      }
+      return t
+    }
+    let wins = 0
+    const seeds = [3, 4, 5, 6, 7, 8]
+    for (const seed of seeds) {
+      const sc = scramble(new Rng(seed), sz.moves, sz.min)
+      if (race('hard', seed, sc.tiles) < race('easy', seed + 50, sc.tiles)) wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(seeds.length - 1)
+  })
 })
