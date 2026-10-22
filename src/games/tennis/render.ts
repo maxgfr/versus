@@ -441,7 +441,9 @@ export function render(g: Draw, w: World, look: Look): void {
     drawBall(g, ball, false, look.roll, look.ballSquash)
   if (w.phase === 'serve' && w.toss < 0 && look.ended < 0) {
     const s = w.server
-    if (!look.bots[s]) banner(g, s, 'Tap to serve', s === 0 ? MID + 200 : MID - 200, { size: 52 })
+    // Online, each phone shows only its own player's prompt.
+    if (!look.bots[s] && (g.viewer === null || g.viewer === s))
+      banner(g, s, 'Tap to serve', s === 0 ? MID + 200 : MID - 200, { size: 52 })
     const p = look.blobs[s]
     const pulse = 0.5 + 0.5 * Math.sin(g.t * 6)
     g.ring(p.x, p.y, BLOB_R + 26 + pulse * 10, alpha(C.yellow, 0.45 + pulse * 0.45), 7)
