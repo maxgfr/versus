@@ -1,5 +1,6 @@
 import type { Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
+import { hash01 } from '../../engines/runner/index.ts'
 
 /**
  * Pure rules for Water Game. Each player has a water tank in their own half.
@@ -73,6 +74,13 @@ const JET = 46
 const KICK = 230
 /** Top speed (u/s) of a ring rolling down the sand into a nozzle well. */
 const ROLL = 110
+/**
+ * A fresh press is a blast: a few strong bubbles on top of the stream, like
+ * slapping the toy's button. Pumping in quick strokes moves more water than
+ * holding, so how hard and fast a player works the pump matters.
+ */
+export const BLAST = 3
+export const BLAST_F = 1.35
 
 export interface Ring {
   id: number
@@ -90,9 +98,15 @@ export interface Bubble {
   h: number
   p: number
   r: number
+  /** Strength: 1 for the stream, more for a blast. */
+  f: number
 }
 
 export interface Tank {
+  /** The match's course seed: both tanks get their rings at the same places. */
+  seed: number
+  /** Pumps held last step, so a fresh press can blast. */
+  was: [boolean, boolean]
   /** Rings in the water. */
   rings: Ring[]
   /** Rings sitting on each peg. */
@@ -118,7 +132,7 @@ export interface Tank {
 /** Something that happened in a step, in red's frame, for juice and bots. */
 export type TankEv =
   | { k: 'drop'; x: number; y: number }
-  | { k: 'land'; peg: 0 | 1; x: number; y: number; n: number }
+  | { k: 'land'; peg: 0 | 1; x: number; y: number; n: number; v: number }
   | { k: 'miss'; x: number; y: number }
 
 const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v)
@@ -138,20 +152,22 @@ export function wellOf(x: number): 0 | 1 {
   return Math.abs(x - NOZZLES[0]) <= Math.abs(x - NOZZLES[1]) ? 0 : 1
 }
 
-/** Where a ring drops in. */
-export function dropX(rng: Rng): number {
-  return rng.range(320, 680)
+/** Where ring `i` (0-based) drops in: the same for both players. */
+export function dropX(seed: number, i: number): number {
+  return 320 + hash01(seed, i, 41) * 360
 }
 
-export function newTank(rng: Rng): Tank {
+export function newTank(seed: number): Tank {
   return {
+    seed,
+    was: [false, false],
     rings: [],
     pegs: [0, 0],
     stacks: [[], []],
     landAt: [-9, -9],
     released: 0,
     missed: 0,
-    nextX: dropX(rng),
+    nextX: dropX(seed, 0),
     nextAt: FIRST_DROP,
     puffAt: [0, 0],
     bubbles: [],
@@ -168,6 +184,18 @@ export function landedOf(t: Tank): number {
 export function ringWinner(red: number, blue: number): Side | 'draw' {
   if (red === blue) return 'draw'
   return red > blue ? 0 : 1
+}
+
+/**
+ * The match at the whistle: more rings landed wins; equal counts go to whoever
+ * got there first (the earlier last landing); nothing landed or a dead heat is a draw.
+ */
+export function tankWinner(a: Tank, b: Tank): Side | 'draw' {
+  const w = ringWinner(landedOf(a), landedOf(b))
+  if (w !== 'draw' || landedOf(a) === 0) return w
+  const ta = Math.max(a.landAt[0], a.landAt[1])
+  const tb = Math.max(b.landAt[0], b.landAt[1])
+  return ta === tb ? 'draw' : ta < tb ? 0 : 1
 }
 
 /** True when a ring lies on the sand. */
@@ -189,11 +217,30 @@ export function stepTank(
     ev.push({ k: 'drop', x: t.nextX, y: TANK.surface })
     t.released++
     t.nextAt = time + DROP_EVERY
-    t.nextX = dropX(rng)
+    t.nextX = dropX(t.seed, t.released)
   }
 
-  // Pumps puff bubbles up from their nozzles.
+  // Pumps puff bubbles up from their nozzles; a fresh press blasts.
   for (const side of [0, 1] as const) {
+    const fresh = pump[side] && !t.was[side]
+    t.was[side] = pump[side]
+    if (fresh) {
+      for (let k = 0; k < BLAST; k++) {
+        t.bubbles.push({
+          x: NOZZLES[side] + rng.range(-16, 16),
+          y: TANK.floor - k * 14,
+          v: RISE * rng.range(1.15, 1.4),
+          h: (side === 0 ? 1 : -1) * rng.range(LEAN[0], LEAN[1]),
+          p: rng.range(0, Math.PI * 2),
+          r: rng.range(14, 20),
+          f: BLAST_F,
+        })
+      }
+      for (const r of t.rings) {
+        if (resting(r) && Math.abs(r.x - NOZZLES[side]) < JET)
+          r.vy = Math.min(r.vy, -KICK * BLAST_F)
+      }
+    }
     if (!pump[side] || time < t.puffAt[side]) continue
     t.puffAt[side] = time + BUBBLE_EVERY
     t.bubbles.push({
@@ -204,6 +251,7 @@ export function stepTank(
       h: (side === 0 ? 1 : -1) * rng.range(LEAN[0], LEAN[1]),
       p: rng.range(0, Math.PI * 2),
       r: rng.range(9, 16),
+      f: 1,
     })
     // The jet pops a ring lying in the well straight up off the sand.
     for (const r of t.rings) {
@@ -226,7 +274,7 @@ export function stepTank(
       if (dy < -RING_R * 0.3 || dy > REACH) continue
       const d = Math.hypot(dx, dy)
       if (d >= REACH) continue
-      const f = 1 - d / REACH
+      const f = (1 - d / REACH) * b.f
       r.vy -= LIFT * f * dt
       r.vx += PUSH * Math.sign(b.h) * f * dt
     }
@@ -294,7 +342,7 @@ export function stepTank(
         t.pegs[p]++
         t.stacks[p].push(r.id)
         t.landAt[p] = time
-        ev.push({ k: 'land', peg: p, x: peg, y: TIP, n: landedOf(t) })
+        ev.push({ k: 'land', peg: p, x: peg, y: TIP, n: landedOf(t), v: r.vy })
         gone = true
         break
       }

@@ -453,14 +453,18 @@ export function drawBoard(g: Draw, v: View): void {
     const dim = lost ? Math.min(0.35, (v.time - v.endAt) * 0.8) : 0
     facing(g, v, side, () => {
       inFrame(g, side, () => tank(g, v.time, v.tanks[side], v.pumps[side], side, dim))
-      pumpButton(g, side, 0, v.pumps[side][0], v.time)
-      pumpButton(g, side, 1, v.pumps[side][1], v.time)
+      // Online, each phone shows only its own player's pumps.
+      if (g.viewer === null || g.viewer === side) {
+        pumpButton(g, side, 0, v.pumps[side][0], v.time)
+        pumpButton(g, side, 1, v.pumps[side][1], v.time)
+      }
       tally(g, side, v.tanks[side], v.time)
     })
   }
   for (const side of [0, 1] as Side[]) {
     const pumping = v.pumps[side][0] || v.pumps[side][1]
-    const hint = !v.bots[side] && !v.over && v.time < 7 && !pumping
+    const mine = g.viewer === null || g.viewer === side
+    const hint = mine && !v.bots[side] && !v.over && v.time < 7 && !pumping
     namePill(g, side, v.names[side], {
       active: pumping && !v.over,
       ...(hint ? { text: 'Hold the pumps' } : {}),

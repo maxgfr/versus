@@ -30,6 +30,13 @@ const SKILL: Record<Difficulty, Skill> = {
 
 export const thinkEvery = (d: Difficulty): number => SKILL[d].think
 
+/**
+ * Steps between strokes when the computer pumps (each fresh press blasts; 0:
+ * it holds). Blasts are strong but rough: the planners place rings better with
+ * a steady stream, so only the button-masher strokes.
+ */
+export const PULSE: Record<Difficulty, number> = { easy: 6, normal: 0, hard: 0 }
+
 const OPTIONS: readonly Pumps[] = [
   [false, false],
   [true, false],
@@ -81,6 +88,7 @@ export function push(t: Tank, noise: number, rng: Rng): Pumps {
 function clone(t: Tank): Tank {
   return {
     ...t,
+    was: [t.was[0], t.was[1]],
     rings: t.rings.map((r) => ({ ...r })),
     pegs: [t.pegs[0], t.pegs[1]],
     stacks: [[...t.stacks[0]], [...t.stacks[1]]],

@@ -4,7 +4,8 @@ import { BaseGame, type GameContext, type MatchSpec, type Side } from '../../cor
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import type { Rng } from '../../core/rng.ts'
-import { choosePumps, type Pumps, thinkEvery } from './bot.ts'
+import { lerp } from '../../core/fx/ease.ts'
+import { choosePumps, PULSE, type Pumps, thinkEvery } from './bot.ts'
 import { halfFrame, mirrorFx } from '../../engines/runner/frame.ts'
 import { drawBoard, ringColor } from './render.ts'
 import {
@@ -14,12 +15,12 @@ import {
   NOZZLES,
   newTank,
   RINGS,
-  ringWinner,
   SAND_Y,
   stepTank,
   TANK,
   type Tank,
   type TankEv,
+  tankWinner,
 } from './rules.ts'
 
 /** Match length: seconds on the clock. Landing all six rings ends the match early. */
@@ -54,6 +55,18 @@ class WaterGame extends BaseGame<State> {
   private lastSec = -1
 
   private turned: [boolean, boolean] = [false, false]
+  /** Cosmetic: ring positions at the previous step, by tank and ring id, for interpolation. */
+  private prev: [Map<number, { x: number; y: number }>, Map<number, { x: number; y: number }>] = [
+    new Map(),
+    new Map(),
+  ]
+  private stepped = false
+  private steps = 0
+  /** Game time of each pump's last stroke (cosmetic): quick strokes splash harder. */
+  private strokeAt: [[number, number], [number, number]] = [
+    [-9, -9],
+    [-9, -9],
+  ]
 
   override init(ctx: GameContext): void {
     super.init(ctx)
@@ -75,7 +88,8 @@ class WaterGame extends BaseGame<State> {
       }),
     ) as [Button[], Button[]]
     return {
-      tanks: [newTank(this.tankRng[0]), newTank(this.tankRng[1])],
+      // Both tanks get their rings at the same places, in the same order.
+      tanks: [newTank(ctx.seed), newTank(ctx.seed)],
       pumps: [
         [false, false],
         [false, false],
@@ -88,6 +102,8 @@ class WaterGame extends BaseGame<State> {
 
   protected step(dt: number): void {
     const { s, ctx } = this
+    this.remember()
+    this.steps++
     const sec = Math.max(0, Math.ceil(this.limit - this.time))
     if (sec !== this.lastSec) {
       this.lastSec = sec
@@ -102,7 +118,9 @@ class WaterGame extends BaseGame<State> {
       for (const p of [0, 1] as const) {
         const b = this.buttons[side][p]
         if (!b) continue
-        if (bot && this.plans[side][p]) b.press(1)
+        // The computer pumps in strokes on the better levels: each fresh press blasts.
+        const pulse = PULSE[ctx.difficulty]
+        if (bot && this.plans[side][p] && (pulse === 0 || this.steps % pulse >= 2)) b.press(1)
         b.update(input)
         if (b.hit) this.puff(side, p)
         s.pumps[side][p] = b.pressed
@@ -126,8 +144,13 @@ class WaterGame extends BaseGame<State> {
     }
     if (this.time >= this.limit) {
       ctx.audio.play('buzz')
-      const winner = ringWinner(landedOf(s.tanks[0]), landedOf(s.tanks[1]))
-      this.end(winner, 'time', "Time's up")
+      const winner = tankWinner(s.tanks[0], s.tanks[1])
+      const tied = landedOf(s.tanks[0]) === landedOf(s.tanks[1])
+      this.end(
+        winner,
+        'time',
+        tied && winner !== 'draw' ? "Time's up: first there wins" : "Time's up",
+      )
     }
   }
 
@@ -142,6 +165,29 @@ class WaterGame extends BaseGame<State> {
       for (const b of t.bubbles) b.y -= b.v * dt
       t.bubbles = t.bubbles.filter((b) => b.y > TANK.surface - 10)
     }
+  }
+
+  /** Ring positions before this step, for the in-between frames. */
+  private remember(): void {
+    this.stepped = true
+    for (const side of [0, 1] as Side[]) {
+      const m = this.prev[side]
+      const rings = this.s.tanks[side].rings
+      for (const r of rings) {
+        const p = m.get(r.id)
+        if (p) {
+          p.x = r.x
+          p.y = r.y
+        } else m.set(r.id, { x: r.x, y: r.y })
+      }
+      if (m.size > rings.length + 4)
+        for (const id of m.keys()) if (!rings.some((r) => r.id === id)) m.delete(id)
+    }
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.stepped = false
   }
 
   /** The computer re-reads its tank every so often and keeps the pumps it chose. */
@@ -168,22 +214,26 @@ class WaterGame extends BaseGame<State> {
     this.finish(winner, { score, note, delay: 2.4 })
   }
 
-  /** A click and a puff of bubbles when a pump goes down. */
+  /** A click and a blast of bubbles when a pump goes down: the quicker the strokes, the bigger. */
   private puff(side: Side, p: 0 | 1): void {
     const { fx, audio } = this.ctx
+    const k = Math.max(0, Math.min(1, 1 - (this.time - this.strokeAt[side][p] - 0.12) / 0.5))
+    this.strokeAt[side][p] = this.time
     const at = frame(side, NOZZLES[p], SAND_Y)
     const btn = frame(side, BUTTON.x[p], BUTTON.y)
-    audio.play('click', p === 0 ? 1.1 : 1.25)
+    audio.play('click', (p === 0 ? 1.1 : 1.25) + k * 0.25)
+    audio.play('splash', 1.5 - k * 0.3)
+    if (k > 0.5) audio.buzz(6)
     fx.burst(at.x, at.y, C.white, {
-      count: 9,
-      speed: 280,
-      size: 8,
+      count: Math.round(9 + k * 9),
+      speed: 280 + k * 160,
+      size: 8 + k * 4,
       life: 0.5,
       gravity: side === 0 ? -260 : 260,
       spread: Math.PI * 0.6,
       dir: side === 0 ? -Math.PI / 2 : Math.PI / 2,
     })
-    fx.ring(btn.x, btn.y, SIDE[side].light, BUTTON.r * 1.5)
+    fx.ring(btn.x, btn.y, SIDE[side].light, BUTTON.r * (1.4 + k * 0.5))
   }
 
   /** Every ring that splashed in, landed or sank plays its own feedback. */
@@ -206,19 +256,22 @@ class WaterGame extends BaseGame<State> {
       } else if (e.k === 'land') {
         const t = this.s.tanks[side]
         const col = ringColor(t.stacks[e.peg][t.stacks[e.peg].length - 1] ?? 1)
+        // A ring that drops onto the peg fast lands with a clack; a gentle one settles.
+        const k = Math.max(0, Math.min(1, e.v / 200))
         audio.play('coin', 0.95 + e.n * 0.08)
         if (e.n >= RINGS - 1) audio.play('score')
+        audio.buzz(Math.round(10 + k * 15))
         fx.burst(at.x, at.y, col, {
-          count: 20,
-          speed: 480,
+          count: Math.round(14 + k * 12),
+          speed: 380 + k * 200,
           size: 8,
           life: 0.6,
           kind: 'spark',
           colors: [col, C.yellow, C.white],
         })
-        fx.ring(at.x, at.y, C.yellow, 150)
-        fx.shake(0.14)
-        fx.stop(3)
+        fx.ring(at.x, at.y, C.yellow, 120 + k * 60 + e.n * 8)
+        fx.shake(0.08 + k * 0.1 + (e.n >= RINGS - 1 ? 0.15 : 0))
+        fx.stop(Math.round(2 + k * 2))
         fx.float(`${e.n}/${RINGS}`, at.x, at.y + up * 120, C.white, 64, side)
       } else {
         audio.play('thud', 1.4 + Math.random() * 0.2)
@@ -235,10 +288,23 @@ class WaterGame extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha = 1): void {
     const s = this.s
+    // Rings drawn between the last two steps (not during hit-stop, nor on the guest).
+    const a = this.stepped && this.ctx.fx.hitstop === 0 ? alpha : 1
+    const tanks = s.tanks.map((t, side) =>
+      a === 1
+        ? t
+        : {
+            ...t,
+            rings: t.rings.map((r) => {
+              const p = this.prev[side]?.get(r.id)
+              return p ? { ...r, x: lerp(p.x, r.x, a), y: lerp(p.y, r.y, a) } : r
+            }),
+          },
+    ) as [Tank, Tank]
     drawBoard(g, {
-      tanks: s.tanks,
+      tanks,
       pumps: s.pumps,
       time: this.time,
       remaining: s.endAt >= 0 ? this.limit - s.endAt : this.limit - this.time,

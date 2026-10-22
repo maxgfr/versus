@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { choosePumps, push, thinkEvery } from './bot.ts'
+import { choosePumps, PULSE, push, thinkEvery } from './bot.ts'
 import {
+  BLAST,
   BUTTON,
+  dropX,
   DROP_EVERY,
   FIRST_DROP,
   landedOf,
@@ -22,6 +24,7 @@ import {
   stepTank,
   TANK,
   type Tank,
+  tankWinner,
   TIP,
 } from './rules.ts'
 
@@ -29,7 +32,7 @@ const DT = 1 / 60
 
 /** A tank with no more rings to release, so only the ring under test is in play. */
 function quiet(seed = 1): Tank {
-  const t = newTank(new Rng(seed))
+  const t = newTank(seed)
   t.released = RINGS
   return t
 }
@@ -56,7 +59,7 @@ function run(
 
 describe('water game rules', () => {
   it('starts a tank with no rings on the pegs and the first ring rolled', () => {
-    const t = newTank(new Rng(4))
+    const t = newTank(4)
     expect(t.released).toBe(0)
     expect(t.pegs).toEqual([0, 0])
     expect(t.nextAt).toBe(FIRST_DROP)
@@ -66,7 +69,7 @@ describe('water game rules', () => {
   })
 
   it('releases one ring at a time, every DROP_EVERY seconds, until all are out', () => {
-    const t = newTank(new Rng(2))
+    const t = newTank(2)
     const drops = run(t, FIRST_DROP + DROP_EVERY * RINGS + 1).filter((e) => e.k === 'drop')
     expect(drops).toHaveLength(RINGS)
     expect(t.released).toBe(RINGS)
@@ -193,6 +196,56 @@ describe('water game rules', () => {
     expect(ringWinner(4, 4)).toBe('draw')
   })
 
+  it('drops every ring at the same place for both players', () => {
+    const a = newTank(77)
+    const b = newTank(77)
+    const xs = (t: Tank) =>
+      run(t, FIRST_DROP + DROP_EVERY * RINGS + 1)
+        .filter((e) => e.k === 'drop')
+        .map((e) => e.x)
+    expect(xs(a)).toEqual(xs(b))
+    expect(new Set(xs(newTank(78))).size).toBeGreaterThan(1)
+    expect(dropX(77, 2)).toBe(dropX(77, 2))
+  })
+
+  it('a fresh press blasts: pumping in strokes lifts a ring higher than holding', () => {
+    const lift = (stroke: boolean): number => {
+      const t = quiet()
+      drop(t, NOZZLES[0], REST_Y)
+      const rng = new Rng(3)
+      // Mean height over the first second (the surface caps it).
+      let sum = 0
+      for (let i = 0; i < 60; i++) {
+        const on = stroke ? i % 8 < 6 : true
+        stepTank(t, DT, i * DT, [on, false], rng)
+        sum += REST_Y - (t.rings[0]?.y ?? REST_Y)
+      }
+      return sum / 60
+    }
+    expect(lift(true)).toBeGreaterThan(lift(false))
+    // The blast is a few big bubbles, not a flood.
+    const t = quiet()
+    stepTank(t, DT, 0, [true, false], new Rng(1))
+    expect(t.bubbles.length).toBe(BLAST + 1)
+  })
+
+  it('a tie on rings at the whistle goes to whoever got there first', () => {
+    const a = newTank(1)
+    const b = newTank(1)
+    a.pegs = [2, 1]
+    b.pegs = [1, 2]
+    a.landAt = [20, 31]
+    b.landAt = [25, 28]
+    expect(tankWinner(a, b)).toBe(1)
+    b.landAt = [25, 40]
+    expect(tankWinner(a, b)).toBe(0)
+    b.landAt = [25, 31]
+    expect(tankWinner(a, b)).toBe('draw')
+    expect(tankWinner(newTank(1), newTank(1))).toBe('draw')
+    b.pegs = [3, 1]
+    expect(tankWinner(a, b)).toBe(1)
+  })
+
   it('reads the default match length and bot skill for each level', () => {
     expect(LIMIT).toBeGreaterThan(0)
     expect(thinkEvery('easy')).toBeGreaterThan(thinkEvery('hard'))
@@ -242,7 +295,7 @@ describe('water game bot', () => {
     for (const d of ['easy', 'normal', 'hard'] as const) {
       for (let seed = 1; seed <= 4; seed++) {
         const rng = new Rng(seed * 101)
-        const tanks: [Tank, Tank] = [newTank(rng.fork()), newTank(rng.fork())]
+        const tanks: [Tank, Tank] = [newTank(seed), newTank(seed)]
         const brng = [rng.fork(), rng.fork()] as const
         const trng = [rng.fork(), rng.fork()] as const
         const pumps: [[boolean, boolean], [boolean, boolean]] = [
@@ -272,6 +325,50 @@ describe('water game bot', () => {
     expect(finished).toBe(12)
     // The computers do land rings: a match is not a time-out with nothing scored.
     expect(landed).toBeGreaterThan(0)
+  })
+})
+
+describe('water game levels', () => {
+  /** A whole match, red at one level and blue at another, as the game drives it. */
+  function duel(seed: number, red: 'easy' | 'normal' | 'hard', blue: typeof red): 0 | 1 | 'draw' {
+    const levels = [red, blue] as const
+    const rng = new Rng(seed * 101)
+    const tanks: [Tank, Tank] = [newTank(seed), newTank(seed)]
+    const brng = [rng.fork(), rng.fork()] as const
+    const trng = [rng.fork(), rng.fork()] as const
+    const plans: [[boolean, boolean], [boolean, boolean]] = [
+      [false, false],
+      [false, false],
+    ]
+    const next: [number, number] = [0, 0]
+    let time = 0
+    for (let i = 0; i < Math.round(LIMIT / DT); i++) {
+      for (const s of [0, 1] as const) {
+        const d = levels[s]
+        if (time >= next[s]) {
+          plans[s] = choosePumps(tanks[s], d, brng[s], time)
+          next[s] = time + thinkEvery(d)
+        }
+        const pulse = PULSE[d]
+        const on = pulse === 0 || i % pulse >= 2
+        stepTank(tanks[s], DT, time, [plans[s][0] && on, plans[s][1] && on], trng[s])
+      }
+      time += DT
+      if (landedOf(tanks[0]) >= RINGS || landedOf(tanks[1]) >= RINGS) break
+    }
+    const a = landedOf(tanks[0]) >= RINGS
+    const b = landedOf(tanks[1]) >= RINGS
+    if (a !== b) return a ? 0 : 1
+    return tankWinner(tanks[0], tanks[1])
+  }
+
+  it('hard beats easy most matches, from either side', () => {
+    let hard = 0
+    for (let seed = 1; seed <= 4; seed++) {
+      if (duel(seed, 'easy', 'hard') === 1) hard++
+      if (duel(seed + 50, 'hard', 'easy') === 0) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(7)
   })
 })
 
