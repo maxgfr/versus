@@ -5,6 +5,7 @@ import { newMem, steer } from './bot.ts'
 import {
   DASH_COOL,
   DASH_SPEED,
+  dashSpeed,
   FRAME,
   indexOf,
   RING,
@@ -21,6 +22,7 @@ function playRound(
   lanes: 1 | 2,
   d: 'easy' | 'normal' | 'hard',
   seed: number,
+  blue: 'easy' | 'normal' | 'hard' = d,
 ): { outs: Side[]; frames: number } {
   const w = spawn(lanes)
   const rng = new Rng(seed)
@@ -31,9 +33,10 @@ function playRound(
     const time = f * FRAME
     const ring = ringAt(time)
     const targets: Target[] = []
-    const dashes: boolean[] = []
+    const dashes: (boolean | number)[] = []
     w.forEach((a, k) => {
-      const r = steer(w, k, a.side, time, ring, d, rng, mems[k] as ReturnType<typeof newMem>)
+      const lv = a.side === 0 ? d : blue
+      const r = steer(w, k, a.side, time, ring, lv, rng, mems[k] as ReturnType<typeof newMem>)
       targets.push(r.target)
       dashes.push(r.dash)
     })
@@ -154,5 +157,36 @@ describe('sumo match', () => {
       const r = steer(w, k, side, 1, RING.r, 'hard', rng, mem[k] as ReturnType<typeof newMem>)
       expect(r.target).not.toBeNull()
     }
+  })
+
+  it('hard wins most rounds against easy, and against normal, from either side', () => {
+    for (const weak of ['easy', 'normal'] as const) {
+      let hard = 0
+      let rounds = 0
+      for (let seed = 1; seed <= 12; seed++) {
+        const hs: Side = seed % 2 ? 0 : 1
+        const r = playRound(1, hs === 0 ? 'hard' : weak, seed, hs === 0 ? weak : 'hard')
+        if (r.outs.length !== 1) continue
+        rounds++
+        if (r.outs[0] !== hs) hard++
+      }
+      expect(hard / rounds).toBeGreaterThanOrEqual(weak === 'easy' ? 0.75 : 0.6)
+    }
+  }, 60000)
+})
+
+describe('the flick', () => {
+  it('a harder flick dashes faster; a double tap is the plain dash', () => {
+    const soft = spawn(1)
+    const hard = spawn(1)
+    const plain = spawn(1)
+    const t = (w: Wrestler[]) => [{ x: (w[0] as Wrestler).x, y: (w[0] as Wrestler).y - 300 }, null]
+    step(soft, FRAME, 1, RING.r, t(soft), [0.1, false])
+    step(hard, FRAME, 1, RING.r, t(hard), [1, false])
+    step(plain, FRAME, 1, RING.r, t(plain), [true, false])
+    const v = (w: Wrestler[]) => Math.hypot((w[0] as Wrestler).vx, (w[0] as Wrestler).vy)
+    expect(v(hard)).toBeGreaterThan(v(plain))
+    expect(v(plain)).toBeGreaterThan(v(soft))
+    expect(dashSpeed(7 / 11)).toBeCloseTo(DASH_SPEED, 5)
   })
 })

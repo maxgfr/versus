@@ -1,4 +1,5 @@
 import { floatFor } from '../../core/fx/fx.ts'
+import { lerp } from '../../core/fx/ease.ts'
 import { BaseGame, type MatchSpec, other, type Side } from '../../core/game.ts'
 import { banner, namePill, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
@@ -55,6 +56,8 @@ const DOUBLE_TAP = 0.32
 const REACH = 110
 /** Below this, a held finger is a brake, not a direction. */
 const DEAD = 12
+/** A finger lifted while moving at least this fast (units/s) flicks a dash that way. */
+const FLICK = 2400
 
 class Sumo extends BaseGame<State> {
   private lanes: 1 | 2 = 1
@@ -64,6 +67,8 @@ class Sumo extends BaseGame<State> {
     [-9, -9],
     [-9, -9],
   ]
+  // Cosmetic only (not synced): last step's positions, for interpolation.
+  private prev: { x: number; y: number }[] | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -144,8 +149,9 @@ class Sumo extends BaseGame<State> {
       this.ctx.fx.ring(RING.x, RING.y, C.yellow, RING.r)
     }
     const targets: Target[] = []
-    const dashes: boolean[] = []
+    const dashes: (boolean | number)[] = []
     const taps = this.doubleTaps()
+    const flicks = this.flicks()
     s.w.forEach((a, k) => {
       if (this.isBot(a.side)) {
         const r = steer(
@@ -161,10 +167,19 @@ class Sumo extends BaseGame<State> {
         targets.push(r.target)
         dashes.push(r.dash)
       } else {
-        targets.push(this.stickTarget(a))
-        dashes.push(taps[a.side][this.lanes === 2 ? a.lane : 0] === true)
+        const lane = this.lanes === 2 ? a.lane : 0
+        const flick = flicks[a.side]?.[lane]
+        if (flick) {
+          // A flick: dash the way the finger was flying, as hard as it flew.
+          targets.push({ x: a.x + flick.dx * 200, y: a.y + flick.dy * 200 })
+          dashes.push(flick.power)
+        } else {
+          targets.push(this.stickTarget(a))
+          dashes.push(taps[a.side][lane] === true)
+        }
       }
     })
+    this.prev = s.w.map((a) => ({ x: a.x, y: a.y }))
     const ev: Event[] = []
     const outs = step(s.w, dt, this.time, ring, targets, dashes, ev)
     for (const e of ev) this.juice(e)
@@ -182,6 +197,26 @@ class Sumo extends BaseGame<State> {
       s.w.map(() => null),
       s.w.map(() => false),
     )
+  }
+
+  /** Fingers lifted mid-flick this step, per side and lane: direction and power 0..1. */
+  private flicks(): ({ dx: number; dy: number; power: number } | null)[][] {
+    const out: ({ dx: number; dy: number; power: number } | null)[][] = [
+      [null, null],
+      [null, null],
+    ]
+    for (const side of [0, 1] as Side[]) {
+      for (const p of this.ctx.input.player(side).ups) {
+        const dx = p.x - p.px
+        const dy = p.y - p.py
+        const v = Math.hypot(dx, dy) * 60
+        if (v < FLICK) continue
+        const power = Math.min(1, 0.35 + (v - FLICK) / 3600)
+        const row = out[side] as ({ dx: number; dy: number; power: number } | null)[]
+        row[this.lanes === 2 ? p.lane : 0] = { dx: (dx * 60) / v, dy: (dy * 60) / v, power }
+      }
+    }
+    return out
   }
 
   /** Which wrestlers were double-tapped this step (a dash request). */
@@ -269,10 +304,14 @@ class Sumo extends BaseGame<State> {
         s.hitAmp[i] = Math.min(0.32, 0.08 + e.speed / 2500)
       }
     } else if (e.kind === 'dash') {
-      audio.play('whoosh', 1.05)
+      // The flick's force: pitch, dust, shake and buzz all follow it.
+      const k = e.power
+      audio.play('whoosh', 0.85 + k * 0.4)
+      audio.buzz(Math.round(8 + k * 14))
+      if (k > 0.8) fx.shake(0.12)
       fx.burst(e.x, e.y, C.sand, {
-        count: 16,
-        speed: 380,
+        count: Math.round(10 + k * 14),
+        speed: 280 + k * 260,
         size: 18,
         life: 0.5,
         gravity: 0,
@@ -320,17 +359,26 @@ class Sumo extends BaseGame<State> {
     return 'angry'
   }
 
-  render(g: Draw, _alpha: number): void {
+  render(g: Draw, alpha: number): void {
     const s = this.s
     const t = this.time
+    const prev = this.prev
+    const at = (a: Wrestler, i: number): Wrestler => {
+      const p = prev?.[i]
+      return p && s.phase === 'fight'
+        ? { ...a, x: lerp(p.x, a.x, alpha), y: lerp(p.y, a.y, alpha) }
+        : a
+    }
+    // Online, each phone shows only its own player's stick and dash meter.
+    const mine = (side: Side) => g.viewer === null || g.viewer === side
     const ring = s.phase === 'fight' ? ringAt(t - s.roundAt) : s.phase === 'intro' ? RING.r : s.edge
     backdrop(g)
     drawRing(g, ring, g.t)
     // Bodies sorted by depth so the lower one overlaps the higher one.
     const order = s.w.map((_, i) => i).sort((p, q) => (s.w[p]?.y ?? 0) - (s.w[q]?.y ?? 0))
     for (const i of order) {
-      const a = s.w[i] as Wrestler
-      if (s.phase === 'fight' && !this.isBot(a.side)) drawDashMeter(g, a, t)
+      const a = at(s.w[i] as Wrestler, i)
+      if (s.phase === 'fight' && !this.isBot(a.side) && mine(a.side)) drawDashMeter(g, a, t)
       const since = t - (s.hitAt[i] ?? -9)
       const squash =
         since < 0.6 ? -(s.hitAmp[i] ?? 0) * Math.cos(since * 24) * Math.exp(-since * 7) : 0
@@ -347,7 +395,7 @@ class Sumo extends BaseGame<State> {
     // Floating sticks under human fingers.
     if (s.phase !== 'over')
       for (const a of s.w) {
-        if (this.isBot(a.side)) continue
+        if (this.isBot(a.side) || !mine(a.side)) continue
         const p = this.finger(a)
         if (p) drawStick(g, a.side, p.x0, p.y0, p.x, p.y, REACH)
       }
@@ -391,7 +439,7 @@ class Sumo extends BaseGame<State> {
   /** First-round coaching for each human: how the stick and the dash work. */
   private hints(g: Draw): void {
     for (const side of [0, 1] as Side[]) {
-      if (this.isBot(side)) continue
+      if (this.isBot(side) || (g.viewer !== null && side !== g.viewer)) continue
       const y = side === 0 ? 1530 : 270
       g.forSide(side, W / 2, y, () => {
         g.text('Drag anywhere to push', 0, -26, {
@@ -400,13 +448,18 @@ class Sumo extends BaseGame<State> {
           color: C.white,
           drop: alpha('#000000', 0.45),
         })
-        g.text('Double tap to dash', 0, 30, {
+        g.text('Flick or double tap to dash', 0, 30, {
           size: 34,
           weight: 600,
           color: alpha(C.white, 0.75),
         })
       })
     }
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
   }
 }
 

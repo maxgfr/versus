@@ -43,7 +43,7 @@ export type Target = Pt | null
 
 export type Event =
   | { kind: 'hit'; speed: number; x: number; y: number }
-  | { kind: 'dash'; side: Side; x: number; y: number }
+  | { kind: 'dash'; side: Side; x: number; y: number; power: number }
   | { kind: 'out'; side: Side; x: number; y: number }
 
 /** The ring's radius some seconds into a round. */
@@ -75,10 +75,18 @@ const norm = (x: number, y: number): Pt => {
   return d > 1e-6 ? { x: x / d, y: y / d } : { x: 0, y: 0 }
 }
 
+/** Dash power a plain request (`true`, a double tap) gets: exactly DASH_SPEED. */
+export const DASH_PLAIN = 7 / 11
+
+/** Launch speed of a dash of power 0..1 (a soft flick 65% of DASH_SPEED, a hard one 120%). */
+export const dashSpeed = (power: number): number =>
+  DASH_SPEED * (0.65 + 0.55 * Math.max(0, Math.min(1, power)))
+
 /**
  * Advance the bout by one frame. `targets[i]` steers wrestler i, `dashes[i]`
- * asks it to dash this frame. Returns the sides that had a wrestler leave the
- * ring this frame (any out loses the round for that side).
+ * asks it to dash this frame (true, or a power 0..1 from how hard the flick
+ * was). Returns the sides that had a wrestler leave the ring this frame (any
+ * out loses the round for that side).
  */
 export function step(
   w: Wrestler[],
@@ -86,7 +94,7 @@ export function step(
   time: number,
   ring: number,
   targets: readonly Target[],
-  dashes: readonly boolean[],
+  dashes: readonly (boolean | number)[],
   ev?: Event[],
 ): Side[] {
   const outs: Side[] = []
@@ -105,14 +113,17 @@ export function step(
         a.vx += (u.x * want - a.vx) * f
         a.vy += (u.y * want - a.vy) * f
       }
-      if (i === 0 && dashes[k] && time >= a.cool) {
+      const ask = dashes[k]
+      if (i === 0 && ask && time >= a.cool) {
+        const power = ask === true ? DASH_PLAIN : ask
         // Dash toward the finger if there is one, otherwise where it was going.
         const dir = t ? norm(t.x - a.x, t.y - a.y) : norm(a.vx, a.vy)
         const along = dir.x === 0 && dir.y === 0 ? { x: 0, y: a.side === 0 ? -1 : 1 } : dir
-        a.vx += along.x * DASH_SPEED
-        a.vy += along.y * DASH_SPEED
+        const v = dashSpeed(power)
+        a.vx += along.x * v
+        a.vy += along.y * v
         a.cool = time + DASH_COOL
-        ev?.push({ kind: 'dash', side: a.side, x: a.x, y: a.y })
+        ev?.push({ kind: 'dash', side: a.side, x: a.x, y: a.y, power })
       }
       const g = Math.exp(-GLIDE * h)
       a.vx *= g
