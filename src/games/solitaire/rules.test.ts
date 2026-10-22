@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { chooseAction, clears, PACE, playableDeal } from './bot.ts'
+import { chooseAction, clearIn, clears, dealTier, PACE, playableDeal, tierFor } from './bot.ts'
 import {
   apply,
   canDrop,
@@ -297,6 +297,63 @@ describe('solitaire bot sense', () => {
       expect(clears(d)).toBe(true)
       expect(playableDeal(seed)).toEqual(d)
     }
+  })
+
+  it('deals tougher races on harder levels, and ramps over a match', () => {
+    expect(tierFor('easy', 0)).toBe(0)
+    expect(tierFor('normal', 0)).toBe(1)
+    expect(tierFor('hard', 0)).toBe(2)
+    expect(tierFor('easy', 2)).toBe(1)
+    expect(tierFor('hard', 4)).toBe(2)
+    let easy = 0
+    let hard = 0
+    for (const seed of [5, 50, 500, 5000]) {
+      const e = playableDeal(seed, 0)
+      const h = playableDeal(seed, 2)
+      expect(dealTier(e)).toBe(0)
+      expect(dealTier(h)).toBe(2)
+      easy += clearIn(e)
+      hard += clearIn(h)
+    }
+    // Hard deals take careful play longer to clear.
+    expect(hard).toBeGreaterThan(easy)
+  })
+
+  it('never peeks at the face-down stock', () => {
+    // A king hides in the stock; emptying a column for it is pointless until it shows.
+    const d = mk({
+      tab: [[card(0, 12)], [card(1, 13)]],
+      stock: [card(3, 13)],
+    })
+    // Q♠ onto K♥ empties column 0: worth it only for a king the bot can see.
+    const act = chooseAction(d, 'hard', new Rng(1))
+    expect(act).toEqual({ kind: 'draw' })
+    const seen = mk({ tab: [[card(0, 12)], [card(1, 13)]], waste: [card(3, 13)] })
+    expect(chooseAction(seen, 'hard', new Rng(1))?.kind).toBe('play')
+  })
+
+  it('hard beats easy in a race on the same deal most of the time', () => {
+    /** Seconds to clear (or Infinity), at the level's pace, within the 4-minute cap. */
+    const race = (d: Deal, lv: 'easy' | 'hard', seed: number): [number, number] => {
+      const rng = new Rng(seed)
+      let b = d
+      let t = 0
+      while (t < 240 && home(b) < CARDS) {
+        t += PACE[lv]
+        const a = chooseAction(b, lv, rng)
+        if (!a) break
+        b = a.kind === 'draw' ? (draw(b) ?? b) : apply(b, a.src, a.dst)
+      }
+      return [home(b) === CARDS ? t : Infinity, home(b)]
+    }
+    let hardWins = 0
+    for (let i = 0; i < 10; i++) {
+      const d = playableDeal(i * 53, 1)
+      const [th, hh] = race(d, 'hard', i)
+      const [te, he] = race(d, 'easy', i + 50)
+      if (th < te || (th === te && hh > he)) hardWins++
+    }
+    expect(hardWins).toBeGreaterThanOrEqual(8)
   })
 
   it('plays clearly better on hard than on easy', () => {

@@ -7,7 +7,7 @@ import { store } from '../../core/store.ts'
 import { MID } from '../../core/stage.ts'
 import { fmtTime, newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
 import { toLocal } from '../../engines/runner/frame.ts'
-import { chooseAction, PACE, playableDeal } from './bot.ts'
+import { chooseAction, PACE, playableDeal, tierFor } from './bot.ts'
 import {
   CARD_H,
   CARD_W,
@@ -149,7 +149,8 @@ class Solitaire extends PuzzleRace<State> {
 
   /** Race `round`, dealt at game time `at`: the same (clearable) deal on both phones. */
   private dealRace(round: number, at: number): State {
-    const d = playableDeal(this.ctx.seed + round)
+    // Tougher deals on harder levels, and a step tougher every two rounds of a match.
+    const d = playableDeal(this.ctx.seed + round, tierFor(this.ctx.difficulty, round))
     const board = (): Board => ({
       ...cloneDeal(d),
       botT: 0,
