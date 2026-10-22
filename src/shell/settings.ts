@@ -4,6 +4,7 @@ import { resetScores, save, store } from '../core/store.ts'
 import { h, onTap } from './dom.ts'
 import { icon } from './icons.ts'
 import { ui } from './state.ts'
+import { checkForUpdate } from './updates.ts'
 
 /** Bottom sheet; tap the backdrop or Done to close. */
 export function sheet(
@@ -99,6 +100,32 @@ export function openSettings(parent: HTMLElement, changed: () => void): void {
     reset.textContent = 'Done'
     reset.setAttribute('disabled', '')
   })
+  const version = `v${__APP_VERSION__} · ${__BUILD_ID__}`
+  const updateSub = h('span.sub', version)
+  const update = h(
+    'button.btn.ghost.tile',
+    { style: { minHeight: '44px', fontSize: '16px' } },
+    icon('refresh'),
+    'Update',
+  )
+  onTap(update, async () => {
+    if (update.hasAttribute('disabled')) return
+    update.setAttribute('disabled', '')
+    update.replaceChildren(h('span.spinner'), 'Checking')
+    const r = await checkForUpdate()
+    if (r === 'updating') {
+      update.replaceChildren(h('span.spinner'), 'Updating')
+      return
+    }
+    updateSub.textContent =
+      r === 'latest'
+        ? `${version} · up to date`
+        : r === 'offline'
+          ? 'Offline: try again with a connection'
+          : 'Updates come with the installed app'
+    update.replaceChildren(icon('refresh'), 'Update')
+    update.removeAttribute('disabled')
+  })
   sheet(
     parent,
     'Settings',
@@ -148,6 +175,7 @@ export function openSettings(parent: HTMLElement, changed: () => void): void {
         h('span', 'Scoreboard', h('span.sub', `Red ${store.score[0]} · Blue ${store.score[1]}`)),
         reset,
       ),
+      h('div.row', h('span', 'App version', updateSub), update),
       h(
         'p.fine',
         'versus is free and works offline. No ads, no accounts, no tracking: scores and names stay on this phone. Online play connects the two phones directly. ',
@@ -156,8 +184,7 @@ export function openSettings(parent: HTMLElement, changed: () => void): void {
           { href: 'https://github.com/maxgfr/versus', target: '_blank', rel: 'noopener' },
           'Source code',
         ),
-        ' · MIT licence · v',
-        __APP_VERSION__,
+        ' · MIT licence',
       ),
     ],
     changed,

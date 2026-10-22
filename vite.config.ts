@@ -1,7 +1,17 @@
 /// <reference types="vitest/config" />
 import { defineConfig, type Plugin } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { execSync } from 'node:child_process'
 import pkg from './package.json' with { type: 'json' }
+
+// Short commit of this build, shown in Settings so a phone can tell which one it runs.
+const BUILD_ID = (() => {
+  try {
+    return (process.env.GITHUB_SHA ?? execSync('git rev-parse HEAD').toString()).trim().slice(0, 7)
+  } catch {
+    return 'dev'
+  }
+})()
 
 // Project pages live under https://maxgfr.github.io/versus/, so every asset URL
 // must be prefixed. Routing is hash-based, which keeps deep links working
@@ -42,7 +52,10 @@ const contentSecurityPolicy = (): Plugin => ({
 
 export default defineConfig({
   base: BASE,
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_ID__: JSON.stringify(BUILD_ID),
+  },
   // Dev servers on an explicit port are agents' test servers: many of them edit
   // files at once, and hot reload would restart every probe on every save.
   server: process.argv.includes('--port') ? { hmr: false } : {},

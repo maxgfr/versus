@@ -9,7 +9,7 @@ import { go, route, startRouter } from './shell/router.ts'
 import { Session } from './shell/session.ts'
 import { sheet } from './shell/settings.ts'
 import { ROOM_KEY, ui } from './shell/state.ts'
-import { toast } from './shell/toast.ts'
+import { startUpdates } from './shell/updates.ts'
 import './style.css'
 
 // Self-hosted variable font, registered through the FontFace API so canvas
@@ -127,56 +127,7 @@ if (isIOS && !standalone && !store.iosGuideSeen && !navigator.webdriver) {
 
 // ---------- service worker: precache everything, update itself ----------
 
-// An installed app on iOS resumes from the background without ever asking for
-// a new version, and a tap-to-update toast was easy to miss (any other toast
-// replaced it). So: check whenever the app comes back to the foreground, and
-// apply the update by itself as soon as no game is in progress.
-const UPDATED_KEY = 'versus.updated'
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  void import('virtual:pwa-register').then(({ registerSW }) => {
-    const inGame = () => location.hash.startsWith('#/play/')
-    let pending = false
-    const apply = () => {
-      if (!pending || inGame()) return
-      pending = false
-      try {
-        sessionStorage.setItem(UPDATED_KEY, '1')
-      } catch {
-        // No storage: just no "updated" note.
-      }
-      void update(true)
-    }
-    const update = registerSW({
-      onNeedRefresh() {
-        pending = true
-        apply()
-      },
-      onOfflineReady() {
-        toast('Ready to play offline.')
-      },
-      onRegisteredSW(_url, reg) {
-        if (!reg) return
-        const check = () => {
-          if (navigator.onLine) void reg.update().catch(() => {})
-        }
-        document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') check()
-        })
-        setInterval(check, 30 * 60 * 1000)
-      },
-    })
-    // Never reload under a game: wait until the players leave it.
-    window.addEventListener('hashchange', apply)
-  })
-  try {
-    if (sessionStorage.getItem(UPDATED_KEY)) {
-      sessionStorage.removeItem(UPDATED_KEY)
-      setTimeout(() => toast('Updated to the latest version.'), 600)
-    }
-  } catch {
-    // No storage.
-  }
-}
+if (import.meta.env.PROD && 'serviceWorker' in navigator) startUpdates()
 
 // Keyboard shortcut for desktop testers: Escape goes home from anywhere but a game.
 window.addEventListener('keydown', (e) => {
