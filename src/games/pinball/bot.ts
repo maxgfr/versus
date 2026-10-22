@@ -24,8 +24,8 @@ interface Tuning {
 
 export const TUNING: Record<Difficulty, Tuning> = {
   easy: { react: 0.22, lead: 0.1, miss: 0.22, hold: 0.22 },
-  normal: { react: 0.12, lead: 0.045, miss: 0.07, hold: 0.2 },
-  hard: { react: 0.04, lead: 0.012, miss: 0.015, hold: 0.2 },
+  normal: { react: 0.08, lead: 0.03, miss: 0.04, hold: 0.2 },
+  hard: { react: 0.03, lead: 0.006, miss: 0.004, hold: 0.2 },
 }
 
 /** Per-bot memory carried between steps (host only, not synced). */

@@ -15,6 +15,8 @@ import {
   newWorld,
   PAUSE,
   PIVOT,
+  pullOf,
+  PULL_MAX,
   RAILS,
   REST,
   SLING_KICK,
@@ -293,6 +295,31 @@ describe('bot', () => {
     const r = botMatch('hard', 'normal', 8, 2)
     expect(r.win).not.toBeNull()
     expect(Math.max(...r.w.score)).toBe(2)
+  })
+
+  it('the harder bot scores more: hard over normal and easy, normal over easy', () => {
+    /** Points for `a` minus points for `b`, over seeded matches played from both ends. */
+    const edge = (a: Difficulty, b: Difficulty): number => {
+      let n = 0
+      for (let s = 1; s <= 6; s++) {
+        const x = botMatch(a, b, s, 5).w
+        const y = botMatch(b, a, s, 5).w
+        n += x.score[0] - x.score[1] + (y.score[1] - y.score[0])
+      }
+      return n
+    }
+    expect(edge('hard', 'easy')).toBeGreaterThan(0)
+    expect(edge('hard', 'normal')).toBeGreaterThan(0)
+    expect(edge('normal', 'easy')).toBeGreaterThan(0)
+  })
+
+  it('the table pulls harder as points are scored, up to a cap', () => {
+    const w = playWorld(1)
+    const p0 = pullOf(w)
+    w.score = [3, 2]
+    expect(pullOf(w)).toBeGreaterThan(p0)
+    w.score = [50, 50]
+    expect(pullOf(w)).toBeCloseTo(p0 * PULL_MAX, 5)
   })
 
   it('tunes easy bots to be slower and less accurate than hard ones', () => {

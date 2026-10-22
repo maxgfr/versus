@@ -29,6 +29,9 @@ export const SUB = 10
 export const DRAG = 0.06
 /** Gentle pull (units/s²) toward whichever end the ball is heading. */
 export const PULL = 240
+/** Extra pull per point scored, and its cap (× PULL). */
+export const PULL_RAMP = 0.08
+export const PULL_MAX = 1.8
 /** Below this |vy| the ball is not heading anywhere: the pull goes toward the side it is on. */
 const PULL_MIN_VY = 20
 export const MAX_SPEED = 2400
@@ -248,6 +251,14 @@ export function swing(w: World, dt: number): void {
   }
 }
 
+/**
+ * The table tilts harder as the match goes on: every point scored adds to the
+ * pull toward the ends (capped), so rallies get faster and the finish tense.
+ */
+export function pullOf(w: World): number {
+  return PULL * Math.min(PULL_MAX, 1 + PULL_RAMP * (w.score[0] + w.score[1]))
+}
+
 /** Advance one fixed step. `holds[i]` = flipper i held up. Returns what happened for juice. */
 export function step(w: World, dt: number, holds: readonly boolean[], rng: Rng): Event[] {
   const ev: Event[] = []
@@ -286,7 +297,7 @@ export function step(w: World, dt: number, holds: readonly boolean[], rng: Rng):
     b.vy *= k
     // Heading one way: pulled that way. Nearly still: pulled toward the side it is on.
     const dir = Math.abs(b.vy) > PULL_MIN_VY ? Math.sign(b.vy) : b.y < MID ? -1 : 1
-    b.vy += dir * PULL * h
+    b.vy += dir * pullOf(w) * h
     b.x += b.vx * h
     b.y += b.vy * h
     collide(w, ev)
