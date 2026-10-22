@@ -38,6 +38,17 @@ export const DASH_FADE = 6
 export const DASH_CD = 0.9
 /** The weakest dash a flick can give (a harder flick goes up to 1). */
 export const DASH_MIN = 0.35
+/**
+ * The ramp: this long into a round (after the start grace) the board starts
+ * crumbling from its edges inward, one tile at a time, faster and faster, so a
+ * cautious round still ends in a squeeze (s). At match point it comes sooner.
+ */
+export const QUAKE = 9
+export const QUAKE_MATCH_POINT = 5
+/** First gap between two crumbling tiles, shrinking by QUAKE_FASTER each time down to QUAKE_MIN (s). */
+export const QUAKE_GAP = 0.9
+export const QUAKE_FASTER = 0.9
+export const QUAKE_MIN = 0.25
 
 export const INTACT = 0
 export const CRACK = 1
@@ -80,10 +91,14 @@ export interface Board {
   t: number[]
   /** Red (side 0) then blue (side 1). */
   p: [Body, Body]
+  /** Time the next edge tile crumbles (s). */
+  quake: number
+  /** Edge tiles crumbled so far this round. */
+  quakes: number
 }
 
 export type Ev =
-  | { k: 'crack'; i: number; stand: boolean }
+  | { k: 'crack'; i: number; stand: boolean; edge?: boolean }
   | { k: 'drop'; i: number }
   | { k: 'enter'; side: Side; i: number }
   | { k: 'fall'; side: Side; x: number; y: number }
@@ -122,7 +137,54 @@ export function nearestTile(x: number, y: number): number {
   return best
 }
 
-export function newBoard(now: number): Board {
+/**
+ * Seconds into a round before the quake starts, from the round wins so far:
+ * a second sooner per round won by anyone, and QUAKE_MATCH_POINT as soon as
+ * either player is one round from the match.
+ */
+export function quakeDelay(wins: readonly [number, number], target: number): number {
+  if (Math.max(wins[0], wins[1]) >= target - 1) return QUAKE_MATCH_POINT
+  return Math.max(QUAKE_MATCH_POINT, QUAKE - wins[0] - wins[1])
+}
+
+/**
+ * The order the edges crumble in: outer ring first, inward, each tile followed
+ * by its point-mirror so neither half gets squeezed first. The centre goes last.
+ */
+export const QUAKE_ORDER: readonly number[] = (() => {
+  const n = COLS * ROWS
+  const ring = (i: number): number => {
+    const c = i % COLS
+    const r = Math.floor(i / COLS)
+    return Math.min(c, r, COLS - 1 - c, ROWS - 1 - r)
+  }
+  const angle = (i: number): number => {
+    const c = tileCentre(i)
+    return Math.atan2(c.y - 900, c.x - 500)
+  }
+  const half = Array.from({ length: Math.floor(n / 2) }, (_, i) => i)
+  half.sort((a, b) => ring(a) - ring(b) || angle(a) - angle(b))
+  const out: number[] = []
+  for (const i of half) out.push(i, n - 1 - i)
+  if (n % 2) out.push((n - 1) / 2)
+  return out
+})()
+
+/**
+ * The next tile the quake will take: the first intact tile in QUAKE_ORDER that
+ * holds nobody up (it squeezes the players, it never pulls the floor from
+ * under them). -1 when there is none.
+ */
+export function nextQuake(b: Board): number {
+  for (const i of QUAKE_ORDER) if (b.st[i] === INTACT && !holds(b, i)) return i
+  return -1
+}
+
+/**
+ * A fresh board. `now` is when standing still starts to count; the quake
+ * starts `quakeAfter` seconds after that.
+ */
+export function newBoard(now: number, quakeAfter = QUAKE): Board {
   const n = COLS * ROWS
   const body = (side: Side): Body => {
     const tile = START[side]
@@ -144,6 +206,8 @@ export function newBoard(now: number): Board {
     st: Array.from({ length: n }, (_, i) => (HOLES.includes(i) ? GONE : INTACT)),
     t: Array.from({ length: n }, () => -9),
     p: [body(0), body(1)],
+    quake: now + quakeAfter,
+    quakes: 0,
   }
 }
 
@@ -265,6 +329,17 @@ export function stepBoard(
       const i = tileAt(p.x + dx, p.y + dy)
       if (i >= 0 && b.st[i] === INTACT) crack(b, i, now, true, ev)
     }
+  }
+  // The ramp: the edges crumble inward, faster and faster.
+  if (play && now >= b.quake) {
+    const i = nextQuake(b)
+    if (i >= 0) {
+      crack(b, i, now, false, ev)
+      const last = ev[ev.length - 1]
+      if (last?.k === 'crack') last.edge = true
+    }
+    b.quake = now + Math.max(QUAKE_MIN, QUAKE_GAP * QUAKE_FASTER ** b.quakes)
+    b.quakes++
   }
   // Cracked tiles drop once their time is up.
   for (let i = 0; i < b.st.length; i++) {

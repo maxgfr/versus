@@ -15,6 +15,7 @@ import {
   GONE,
   HOLES,
   INTACT,
+  nextQuake,
   ROWS,
   STAND,
   TILE,
@@ -162,6 +163,10 @@ function tiles(
   since: number,
   owner: (i: number) => Side | -1,
 ): void {
+  // The quake's next victim glows orange just before it goes (its order is public).
+  const lead = b.quake - now
+  const doomed = lead < 0.7 ? nextQuake(b) : -1
+  const doom = doomed >= 0 ? clamp(1 - lead / 0.7, 0, 1) : 0
   for (let i = 0; i < b.st.length; i++) {
     const st = b.st[i]
     if (st === GONE) continue
@@ -200,6 +205,13 @@ function tiles(
               )
               g.alpha(0.18, () =>
                 g.rrect(-TILE / 2 + 5, -TILE / 2 + 5, TILE - 10, TILE - 10, 16, col.main),
+              )
+            }
+            if (i === doomed) {
+              const f = doom * (0.6 + 0.4 * Math.sin(now * 30))
+              g.alpha(f * 0.35, () => g.rrect(-TILE / 2, -TILE / 2, TILE, TILE, 20, C.orange))
+              g.alpha(f, () =>
+                g.rrect(-TILE / 2, -TILE / 2, TILE, TILE, 20, undefined, C.orange, 6),
               )
             }
             if (w > 0) {

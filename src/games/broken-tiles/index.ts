@@ -8,7 +8,16 @@ import { H, MID, W } from '../../core/stage.ts'
 import { roundEnd, roundsNew, roundsStep, type Rounds } from '../../engines/reflex/index.ts'
 import { TileBot } from './bot.ts'
 import { renderBroken, type StickLook } from './render.ts'
-import { type Board, dash, type Ev, newBoard, SPEED, stepBoard, tileCentre } from './rules.ts'
+import {
+  type Board,
+  dash,
+  type Ev,
+  newBoard,
+  quakeDelay,
+  SPEED,
+  stepBoard,
+  tileCentre,
+} from './rules.ts'
 
 export interface State {
   b: Board
@@ -62,7 +71,11 @@ class BrokenTiles extends BaseGame<State> {
     this.bots = ([0, 1] as const).map((side) =>
       ctx.bots[side] ? TileBot.of(ctx.rng.fork(), ctx.difficulty) : null,
     )
-    return { b: newBoard(this.time + GRACE), rounds: roundsNew(this.target), ctl: this.looks() }
+    return {
+      b: newBoard(this.time + GRACE, quakeDelay([0, 0], this.target)),
+      rounds: roundsNew(this.target),
+      ctl: this.looks(),
+    }
   }
 
   private looks(): StickLook[] {
@@ -88,7 +101,8 @@ class BrokenTiles extends BaseGame<State> {
     this.keepPrev()
     this.ev.length = 0
     if (roundsStep(s.rounds, this.time, PAUSE)) {
-      s.b = newBoard(this.time + GRACE)
+      // The ramp: later rounds (and match point) crumble sooner.
+      s.b = newBoard(this.time + GRACE, quakeDelay(s.rounds.wins, this.target))
       this.prev = null
       ctx.audio.play('go')
       return
@@ -236,6 +250,23 @@ class BrokenTiles extends BaseGame<State> {
           colors: ['#f6e6da', '#e7b48f', C.white],
         })
         if (e.stand) fx.ring(c.x, c.y, C.yellow, 90)
+        if (e.edge) {
+          // The quake: a low rumble that grows as it speeds up.
+          const k = Math.min(1, b.quakes / 20)
+          audio.play('thud', 0.45 + k * 0.2)
+          fx.shake(0.04 + k * 0.08)
+          fx.ring(c.x, c.y, C.orange, 110)
+          if (b.quakes === 1)
+            for (const side of [0, 1] as const)
+              fx.float(
+                'The edges crumble!',
+                W / 2,
+                side === 0 ? MID + 300 : MID - 300,
+                C.orange,
+                54,
+                side,
+              )
+        }
         break
       }
       case 'drop': {

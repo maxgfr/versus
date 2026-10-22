@@ -17,6 +17,12 @@ import {
   INTACT,
   nearestTile,
   newBoard,
+  nextQuake,
+  QUAKE,
+  QUAKE_MATCH_POINT,
+  QUAKE_MIN,
+  QUAKE_ORDER,
+  quakeDelay,
   REACH,
   ROWS,
   STAND,
@@ -346,6 +352,92 @@ describe('dash', () => {
   })
 })
 
+describe('quake (the ramp)', () => {
+  /** Both bodies parked in the middle column, out of the quake's way for a while. */
+  function parked(): Board {
+    const b = newBoard(0, 2)
+    place(b, 0, 5 * COLS + 3)
+    place(b, 1, 4 * COLS + 3)
+    b.p[0].tile = 5 * COLS + 3
+    b.p[1].tile = 4 * COLS + 3
+    return b
+  }
+
+  it('crumbles nothing before it starts, then outer-ring tiles in mirrored pairs', () => {
+    const b = parked()
+    const ev: Ev[] = []
+    // Keep the bodies' stand timers fresh so only the quake cracks anything.
+    let t = 0
+    for (; t < 2 - STEP; t += STEP) {
+      b.p[0].since = b.p[1].since = t
+      stepBoard(b, NONE, STEP, t, ev)
+    }
+    expect(ev.filter((e) => e.k === 'crack')).toEqual([])
+    for (; t < 4; t += STEP) {
+      b.p[0].since = b.p[1].since = t
+      stepBoard(b, NONE, STEP, t, ev)
+    }
+    const edges = ev
+      .filter((e) => e.k === 'crack' && e.edge)
+      .map((e) => (e.k === 'crack' ? e.i : -1))
+    expect(edges.length).toBeGreaterThanOrEqual(2)
+    const n = COLS * ROWS
+    // Each crumbling tile is followed by its point-mirror: neither half goes first.
+    expect(edges[1]).toBe(n - 1 - (edges[0] as number))
+    for (const i of edges) {
+      const c = i % COLS
+      const r = Math.floor(i / COLS)
+      expect(Math.min(c, r, COLS - 1 - c, ROWS - 1 - r)).toBe(0)
+    }
+  })
+
+  it('speeds up, but never faster than QUAKE_MIN', () => {
+    const b = parked()
+    const at: number[] = []
+    let t = 0
+    for (; t < 40; t += STEP) {
+      b.p[0].since = b.p[1].since = t
+      const ev: Ev[] = []
+      stepBoard(b, NONE, STEP, t, ev)
+      if (ev.some((e) => e.k === 'crack' && e.edge)) at.push(t)
+    }
+    const gaps = at.slice(1).map((x, i) => x - (at[i] as number))
+    expect(gaps[0]).toBeGreaterThan((gaps[gaps.length - 1] as number) + 0.3)
+    for (const g of gaps) expect(g).toBeGreaterThanOrEqual(QUAKE_MIN - STEP)
+  })
+
+  it('never takes a tile someone stands on, and nothing during the pause', () => {
+    const b = parked()
+    let t = 0
+    for (; t < 60; t += STEP) {
+      b.p[0].since = b.p[1].since = t
+      stepBoard(b, NONE, STEP, t, [])
+    }
+    // Everything else is gone; the two occupied tiles still stand.
+    expect(b.p[0].alive && b.p[1].alive).toBe(true)
+    expect(nextQuake(b)).toBe(-1)
+    const p = newBoard(0, 0)
+    const ev: Ev[] = []
+    for (let i = 0; i < 120; i++) stepBoard(p, NONE, STEP, i * STEP, ev, false)
+    expect(ev.some((e) => e.k === 'crack')).toBe(false)
+  })
+
+  it('takes every tile exactly once in its order', () => {
+    expect([...QUAKE_ORDER].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: COLS * ROWS }, (_, i) => i),
+    )
+  })
+
+  it('comes sooner as the match goes on, and soonest at match point', () => {
+    expect(quakeDelay([0, 0], 3)).toBe(QUAKE)
+    expect(quakeDelay([1, 0], 3)).toBe(QUAKE - 1)
+    expect(quakeDelay([2, 0], 3)).toBe(QUAKE_MATCH_POINT)
+    expect(quakeDelay([0, 1], 2)).toBe(QUAKE_MATCH_POINT)
+    expect(quakeDelay([3, 3], 9)).toBe(QUAKE_MATCH_POINT)
+    expect(newBoard(1, 4).quake).toBe(5)
+  })
+})
+
 describe('bots', () => {
   // Plays one round until somebody falls. Bounded, so a bot that never finishes fails.
   function playRound(seed: number, a: Difficulty, b2: Difficulty) {
@@ -381,7 +473,7 @@ describe('bots', () => {
   }
 
   it('hard clearly beats easy, from either side', () => {
-    expect(score('hard', 'easy', 10)).toBeGreaterThanOrEqual(16)
+    expect(score('hard', 'easy', 10)).toBeGreaterThanOrEqual(17)
   })
 
   it('hard clearly beats normal', () => {
@@ -446,7 +538,7 @@ describe('bots', () => {
   })
 
   it('once cut off, a smart bot makes each tile last instead of burning its island', () => {
-    const b = newBoard(0)
+    const b = newBoard(0, 1e9)
     // A trench across the middle row: red's island is the bottom half.
     const mid = Math.floor(ROWS / 2)
     for (let c = 0; c < COLS; c++) b.st[mid * COLS + c] = GONE

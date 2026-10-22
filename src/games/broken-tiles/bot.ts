@@ -1,6 +1,19 @@
 import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { type Board, COLS, CRACK, INTACT, nearestTile, ROWS, STAND, tileCentre } from './rules.ts'
+import {
+  type Board,
+  COLS,
+  CRACK,
+  INTACT,
+  nearestTile,
+  QUAKE_FASTER,
+  QUAKE_GAP,
+  QUAKE_MIN,
+  QUAKE_ORDER,
+  ROWS,
+  STAND,
+  tileCentre,
+} from './rules.ts'
 
 interface Skill {
   /**
@@ -9,8 +22,10 @@ interface Skill {
    * to first, Tron style); once cut off, take the longest walk left.
    */
   mode: 'room' | 'smart'
-  /** Longest-walk lookahead once cut off (tile steps). */
+  /** Longest-walk lookahead (tile steps). */
   depth: number
+  /** Weight of that walk against territory (tiles). */
+  walk: number
   /** Random wobble on each candidate's score: bigger means worse choices. */
   noise: number
   /** Chance to pick any free neighbour instead of the best one. */
@@ -19,42 +34,60 @@ interface Skill {
   hesitate: number
   /** Chance to dash off a tile that is about to drop. */
   escape: number
-  /** Chance per decision to dash at a nearby rival to win a race for space. */
-  press: number
   /** Once cut off, the share of STAND to spend on each tile (0 = keep rushing). */
   linger: number
+  /** The same while the rival is still reachable but not close (more than 3 steps). */
+  lingerOpen: number
+  /** The same with the rival close (3 steps or fewer), when races for space matter. */
+  lingerNear: number
+  /** How far ahead (s) it reads the quake's public order (0 = ignores it). */
+  quake: number
 }
 
-const SKILL: Record<Difficulty, Skill> = {
+export const SKILL: Record<Difficulty, Skill> = {
+  // Welcoming: short-sighted, hesitant, rushes about burning its own floor, never dashes.
   easy: {
     mode: 'room',
     depth: 1,
+    walk: 0,
     noise: 2.5,
     blunder: 0.15,
-    hesitate: 0.35,
+    hesitate: 0.4,
     escape: 0,
-    press: 0,
     linger: 0,
+    lingerOpen: 0,
+    lingerNear: 0,
+    quake: 0,
   },
+  // A real challenge: plays the territory, makes tiles last away from the rival,
+  // dashes off dropping tiles; still noisy and the odd careless step.
   normal: {
     mode: 'smart',
-    depth: 3,
-    noise: 3,
-    blunder: 0.04,
-    hesitate: 0.12,
-    escape: 0.5,
-    press: 0,
-    linger: 0.6,
+    depth: 4,
+    walk: 4,
+    noise: 2.5,
+    blunder: 0.08,
+    hesitate: 0.15,
+    escape: 1,
+    linger: 0.8,
+    lingerOpen: 1,
+    lingerNear: 0,
+    quake: 0,
   },
+  // Near-optimal: deeper look-ahead, no slack or careless steps, makes every
+  // tile last except in a close race, and reads the quake's order.
   hard: {
     mode: 'smart',
-    depth: 8,
-    noise: 0.1,
+    depth: 6,
+    walk: 4,
+    noise: 0.5,
     blunder: 0,
     hesitate: 0,
     escape: 1,
-    press: 0.25,
     linger: 1,
+    lingerOpen: 1,
+    lingerNear: 0.5,
+    quake: 4,
   },
 }
 
@@ -147,6 +180,7 @@ export class TileBot {
   private leaveAt = 0
   private paused = false
   private seen = new Uint8Array(N)
+  private weights: number[] = Array.from({ length: N }, () => 1)
 
   constructor(
     private rng: Rng,
@@ -175,25 +209,31 @@ export class TileBot {
     }
     // Stay put (centred) while it is worth it, but never on a tile about to drop.
     if (now < this.leaveAt && !onDrop) return { ...aim(me.x, me.y, here), dash: 0 }
-    this.next = this.choose(b, side, here)
+    this.next = this.choose(b, side, here, now)
     if (this.next < 0) return { ...aim(me.x, me.y, here), dash: 0 }
     this.paused = false
-    const press = this.sk.press > 0 && this.near(b, side, 3) && this.rng.chance(this.sk.press)
     const escape = onDrop && this.rng.chance(this.sk.escape)
-    return { ...aim(me.x, me.y, this.next), dash: press || escape ? 1 : 0 }
+    return { ...aim(me.x, me.y, this.next), dash: escape ? 1 : 0 }
   }
 
   /**
    * Seconds after arriving on `here` before stepping on. Every tile left is a
-   * tile lost, so once the two are cut off a smart bot makes each one last,
-   * leaving just before standing would crack it. Easy only hesitates.
+   * tile lost, so a smart bot makes each one last (leaving just before
+   * standing would crack it) once cut off or away from the rival, and hurries
+   * only as much as its skill says in a close race. Easy only hesitates.
    */
   private linger(b: Board, side: Side, here: number): number {
     const rnd = this.rng.range(0, this.sk.hesitate)
     if (this.sk.mode !== 'smart') return rnd
     const foe = b.p[side === 0 ? 1 : 0]
-    const cut = !foe.alive || (distances(b.st, here, -1)[nearestTile(foe.x, foe.y)] ?? -1) < 0
-    return cut ? Math.max(rnd, STAND * this.sk.linger - 0.4) : rnd
+    const foeTile = foe.alive ? nearestTile(foe.x, foe.y) : -1
+    const cut = foeTile < 0 || (distances(b.st, here, -1)[foeTile] ?? -1) < 0
+    const share = cut
+      ? this.sk.linger
+      : this.near(b, side, 3)
+        ? this.sk.lingerNear
+        : this.sk.lingerOpen
+    return Math.max(rnd, STAND * share - 0.4)
   }
 
   /** Arrived on the planned tile's centre. */
@@ -215,7 +255,7 @@ export class TileBot {
   }
 
   /** The next tile to step onto (a free neighbour of `here`), or -1 to stand still. */
-  choose(b: Board, side: Side, here: number): number {
+  choose(b: Board, side: Side, here: number, now: number): number {
     const opts = around(b.st, here)
     if (opts.length === 0) return -1
     if (opts.length === 1 || this.rng.chance(this.sk.blunder))
@@ -224,6 +264,7 @@ export class TileBot {
     const foeTile = foe.alive ? nearestTile(foe.x, foe.y) : -1
     // The rival's distances, with our tile gone (it cracks as we leave).
     const dr = this.sk.mode === 'smart' ? distances(b.st, foeTile, here) : null
+    const doom = this.sk.quake > 0 ? this.doom(b, now) : null
     let best = -1
     let bestScore = -Infinity
     for (const n of opts) {
@@ -239,26 +280,48 @@ export class TileBot {
           const a = dm[j] as number
           const r = dr[j] as number
           if (a >= 0) size++
+          // Tiles the quake takes soon are worth less (its order is public).
+          const w = doom ? (doom[j] as number) : 1
           // We need one more step than the distances from n say.
-          if (a >= 0 && (r < 0 || a + 1 < r)) mine++
-          else if (r >= 0 && (a < 0 || r < a + 1)) theirs++
+          if (a >= 0 && (r < 0 || a + 1 < r)) mine += w
+          else if (r >= 0 && (a < 0 || r < a + 1)) theirs += w
         }
         // Territory (once cut off, simply my island against theirs), but never
         // at the price of a dead end: look a few steps down the walk too.
         this.seen.fill(0)
         this.seen[here] = 1
         const walk = longest(b.st, n, Math.min(this.sk.depth, size), this.seen)
-        score = mine - theirs + 4 * walk
+        score = mine - theirs + this.sk.walk * walk
       }
       score += this.rng.range(-this.sk.noise, this.sk.noise)
-      if ((globalThis as { BTDBG?: boolean }).BTDBG)
-        console.log('LOG choose', side, here, n, score.toFixed(2))
       if (score > bestScore) {
         bestScore = score
         best = n
       }
     }
     return best
+  }
+
+  /**
+   * Per tile, how much it is still worth given the quake: tiles it will take
+   * within the next `sk.quake` seconds weigh less, the sooner the less. Null
+   * while the quake is still far off.
+   */
+  private doom(b: Board, now: number): number[] | null {
+    const horizon = this.sk.quake
+    if (b.quake - now > horizon) return null
+    const w = this.weights
+    w.fill(1)
+    let t = Math.max(0, b.quake - now)
+    let k = b.quakes
+    for (const i of QUAKE_ORDER) {
+      if (b.st[i] !== INTACT) continue
+      if (t > horizon) break
+      w[i] = 0.25 + 0.75 * (t / horizon)
+      t += Math.max(QUAKE_MIN, QUAKE_GAP * QUAKE_FASTER ** k)
+      k++
+    }
+    return w
   }
 
   /** Free tiles within two steps of `n` (not counting `skip`). */
