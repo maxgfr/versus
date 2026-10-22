@@ -4,12 +4,15 @@ import { Fx } from '../../core/fx/fx.ts'
 import { STEP, type Difficulty, type GameContext, type Side } from '../../core/game.ts'
 import { Input } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
-import type { Stage } from '../../core/stage.ts'
+import { MID, type Stage } from '../../core/stage.ts'
 import { SashimiBot } from './bot.ts'
 import factory from './index.ts'
 import {
+  DEAD,
   DECOY_FIRST,
   DECOY_GAP,
+  GRACE,
+  LIVE_MAX,
   TARGET,
   WAIT_MAX,
   WAIT_MIN,
@@ -18,6 +21,7 @@ import {
   reactionRange,
   roundSignal,
   slipChance,
+  tapSide,
 } from './rules.ts'
 
 describe('the last sashimi rules', () => {
@@ -196,15 +200,109 @@ describe('the last sashimi game', () => {
     })
   }
 
+  /** Advance whole steps the way the session does. */
+  const run = (game: ReturnType<typeof factory>, ctx: GameContext, seconds: number) => {
+    for (let i = 0; i < Math.round(seconds / STEP); i++) {
+      ctx.input.setNow(game.time)
+      game.update(STEP)
+      ctx.input.endStep()
+    }
+  }
+  const tap = (game: ReturnType<typeof factory>, ctx: GameContext, side: Side, y: number) => {
+    ctx.input.player(side).press(side * 10 + 1, 300, y)
+    ctx.input.player(side).release(side * 10 + 1)
+    run(game, ctx, STEP)
+  }
+  const twoHumans = (seed = 5) => {
+    const ctx = ctxFor([false, false], 'normal', seed, '2p')
+    const game = factory()
+    game.init(ctx)
+    return { ctx, game }
+  }
+
   it('a human who jumps the bell loses the round to the bot', () => {
     const ctx = ctxFor([false, true], 'normal', 5, '1p')
     const game = factory()
     game.init(ctx)
-    // Tap at once, while the bell is still waiting.
-    ctx.input.player(0).press(1, 300, 1300)
-    game.update(STEP)
-    ctx.input.endStep()
+    // Tap once the round has settled, while the bell is still waiting.
+    run(game, ctx, GRACE + 0.1)
+    tap(game, ctx, 0, 1300)
     expect(game.s.rounds.wins).toEqual([0, 1])
     expect(game.s.rounds.phase).toBe('between')
+  })
+
+  it('a leftover tap as the round opens is not a false start', () => {
+    const { ctx, game } = twoHumans()
+    tap(game, ctx, 0, 1300)
+    expect(game.s.rounds.phase).toBe('play')
+    expect(game.s.rounds.wins).toEqual([0, 0])
+  })
+
+  it('the first tap after the bell takes the round, the ms is the real reaction', () => {
+    const { ctx, game } = twoHumans()
+    run(game, ctx, game.s.sig.at + 0.25)
+    expect(game.s.sig.phase).toBe('live')
+    tap(game, ctx, 1, 400)
+    expect(game.s.took).toBe(1)
+    expect(game.s.rounds.wins).toEqual([0, 1])
+    expect(game.s.reaction).toBeGreaterThan(0.2)
+    expect(game.s.reaction).toBeLessThan(0.32)
+  })
+
+  it('both tapping in the same step after the bell is a draw round', () => {
+    const { ctx, game } = twoHumans()
+    run(game, ctx, game.s.sig.at + 0.3)
+    ctx.input.player(0).press(1, 300, 1300)
+    ctx.input.player(1).press(2, 300, 400)
+    run(game, ctx, STEP)
+    expect(game.s.took).toBe('draw')
+    expect(game.s.rounds.wins).toEqual([0, 0])
+    expect(game.s.rounds.phase).toBe('between')
+  })
+
+  it('both jumping the bell in the same step is a draw round', () => {
+    const { ctx, game } = twoHumans()
+    run(game, ctx, GRACE + 0.1)
+    ctx.input.player(0).press(1, 300, 1300)
+    ctx.input.player(1).press(2, 300, 400)
+    run(game, ctx, STEP)
+    expect(game.s.took).toBe('draw')
+    expect(game.s.early).toEqual([true, true])
+  })
+
+  it('a round nobody grabs is void instead of hanging forever', () => {
+    const { ctx, game } = twoHumans()
+    run(game, ctx, game.s.sig.at + LIVE_MAX + 0.2)
+    expect(game.s.took).toBe('draw')
+    expect(game.s.rounds.phase).toBe('between')
+    // And the next round starts on its own.
+    run(game, ctx, 2.2)
+    expect(game.s.rounds.phase).toBe('play')
+    expect(game.s.rounds.round).toBe(2)
+    expect(game.s.took).toBeNull()
+  })
+
+  it('local 2P: a touch on the midline belongs to nobody, not to the rival', () => {
+    expect(tapSide(MID - 20)).toBeNull()
+    expect(tapSide(MID + 20)).toBeNull()
+    expect(tapSide(MID + DEAD + 1)).toBe(0)
+    expect(tapSide(MID - DEAD - 1)).toBe(1)
+    const { ctx, game } = twoHumans()
+    expect(ctx.input.assign?.(500, MID - 10)).toBeNull()
+    expect(ctx.input.assign?.(500, 1500)).toBe(0)
+    expect(game.s.rounds.phase).toBe('play')
+  })
+
+  it('the match ends at the chosen target with the score, then stays decided', () => {
+    const ctx = { ...ctxFor([false, false], 'normal', 9, '2p'), target: 2 }
+    const game = factory()
+    game.init(ctx)
+    for (let r = 0; r < 2; r++) {
+      run(game, ctx, game.s.sig.at + 0.3)
+      tap(game, ctx, 0, 1300)
+      run(game, ctx, 2.1)
+    }
+    expect(game.s.winner).toBe(0)
+    expect(game.result).toEqual({ winner: 0, score: [2, 0] })
   })
 })

@@ -95,7 +95,15 @@ function dish(g: Draw): void {
 }
 
 /** The piece itself, nigiri seen from above: rice under a salmon top. */
-function piece(g: Draw, x: number, y: number, scale: number, fade: number, angle = 0): void {
+function piece(
+  g: Draw,
+  x: number,
+  y: number,
+  scale: number,
+  fade: number,
+  angle = 0,
+  squash = 0,
+): void {
   if (fade <= 0 || scale <= 0) return
   g.alpha(fade, () =>
     g.at(
@@ -150,8 +158,8 @@ function piece(g: Draw, x: number, y: number, scale: number, fade: number, angle
         }
         g.ellipse(-44, -34, 30, 12, alpha('#ffffff', 0.45), -0.3)
       },
-      scale,
-      scale,
+      scale * (1 + squash),
+      scale * (1 - squash),
     ),
   )
 }
@@ -350,13 +358,19 @@ export function renderSashimi(
       y = TIP.y + (GRAB_Y - TIP.y) * grab + home * carry
       open = 0.9 - grab * 0.75
     } else if (live) {
+      // Anticipation: the sticks gape and coil back a touch, ready to strike.
+      const coil = outCubic(prog(ringAge, 0, 0.18))
       open = 1
+      y = TIP.y + coil * 26 + Math.sin(now * 26 + side) * 4
     }
     return { x: TIP.x, y, open }
   }
   if (took !== null) {
     const t = tipFor(took)
     const w = frame(took, t.x - 0, t.y - 10)
+    // Squeezed by the sticks: a sharper grab squashes harder, then wobbles.
+    const k = s.reaction >= 0 ? Math.max(0.3, Math.min(1, (0.6 - s.reaction) / 0.4)) : 0.4
+    const squash = since >= 0 ? 0.22 * k * Math.exp(-since * 7) * Math.cos(since * 34) : 0
     piece(
       g,
       w.x,
@@ -364,9 +378,13 @@ export function renderSashimi(
       appear * (1 - carry * 0.3),
       1 - prog(since, 0.6, 0.8),
       took === 0 ? 0.25 * grab : -0.25 * grab,
+      squash,
     )
   } else {
-    piece(g, PIECE.x, PIECE.y, appear, 1)
+    // Idle life: the piece breathes on the plate; a void round makes it shiver.
+    const shiver =
+      s.took === 'draw' && since >= 0 ? Math.exp(-since * 4) * Math.sin(since * 40) * 0.06 : 0
+    piece(g, PIECE.x, PIECE.y, appear * (1 + 0.012 * Math.sin(now * 2.4)), 1, 0, shiver)
   }
 
   for (const side of [0, 1] as Side[]) {
