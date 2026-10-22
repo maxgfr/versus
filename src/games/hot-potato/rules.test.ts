@@ -31,6 +31,7 @@ import {
   speedOf,
   tapResult,
   throwPotato,
+  warmth,
 } from './rules.ts'
 
 describe('hot potato rules', () => {
@@ -222,6 +223,23 @@ describe('hot potato rules', () => {
     expect(p.v).toBeLessThanOrEqual(SPEED_MAX * (1 + BOOST))
   })
 
+  it('the match ramps up: match point and deciders start with a warm, faster potato', () => {
+    expect(warmth([0, 0], 3)).toBe(0)
+    expect(warmth([1, 1], 3)).toBe(0)
+    expect(warmth([2, 0], 3)).toBe(2)
+    expect(warmth([1, 2], 3)).toBe(2)
+    expect(warmth([2, 2], 3)).toBe(3)
+    // A single-round match is a decider from the start.
+    expect(warmth([0, 0], 1)).toBe(3)
+    const calm = potatoNew(0, 0)
+    const tense = potatoNew(0, 0, warmth([2, 2], 3))
+    expect(heatOf(tense.throws)).toBeGreaterThan(heatOf(calm.throws))
+    throwPotato(calm, 0, 0)
+    throwPotato(tense, 0, 0)
+    expect(tense.v).toBeGreaterThan(calm.v)
+    expect(tense.v).toBeLessThanOrEqual(SPEED_MAX)
+  })
+
   it('the hidden timer is seeded and lands inside its window', () => {
     for (let seed = 0; seed < 100; seed++) {
       const d = boomDelay(new Rng(seed))
@@ -237,8 +255,9 @@ function botRound(
   bots: [PotatoBot, PotatoBot],
   server: Side,
   boomIn: number,
+  warm = 0,
 ): { loser: Side; held: [number, number]; throws: number } {
-  const p = potatoNew(server, 0)
+  const p = potatoNew(server, 0, warm)
   const lock: [number, number] = [-1, -1]
   const held: [number, number] = [0, 0]
   let t = 0
@@ -362,6 +381,33 @@ describe('hot potato bot', () => {
     expect(normalVsEasy.lost).toBeLessThan(0.5)
     const hardVsNormal = play('hard', 'normal')
     expect(hardVsNormal.heldA).toBeLessThan(hardVsNormal.heldB)
+  })
+
+  it('over seeded best-of-5 matches, hard beats easy most of the time and normal beats easy', () => {
+    const rng = new Rng(11)
+    const matchWins = (a: Difficulty, b: Difficulty): number => {
+      let won = 0
+      const n = 200
+      for (let m = 0; m < n; m++) {
+        const bots: [PotatoBot, PotatoBot] = [
+          new PotatoBot(rng.fork(), a),
+          new PotatoBot(rng.fork(), b),
+        ]
+        const wins: [number, number] = [0, 0]
+        let server = (m % 2) as Side
+        while (wins[0] < TARGET && wins[1] < TARGET) {
+          const { loser } = botRound(bots, server, boomDelay(rng), warmth(wins, TARGET))
+          wins[other(loser)]++
+          server = loser
+        }
+        if (wins[0] === TARGET) won++
+      }
+      return won / n
+    }
+    // The hidden fuse keeps some luck in every round; skill still shows.
+    expect(matchWins('hard', 'easy')).toBeGreaterThan(0.75)
+    expect(matchWins('normal', 'easy')).toBeGreaterThan(0.65)
+    expect(matchWins('hard', 'normal')).toBeGreaterThan(0.5)
   })
 })
 

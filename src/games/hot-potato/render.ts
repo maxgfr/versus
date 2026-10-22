@@ -6,7 +6,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { Rounds } from '../../engines/reflex/index.ts'
-import { canThrow, heatOf, incoming, LIMIT_B, LIMIT_R, type Potato } from './rules.ts'
+import { canThrow, heatOf, incoming, LIMIT_B, LIMIT_R, warmth, type Potato } from './rules.ts'
 import type { State } from './index.ts'
 
 /*
@@ -421,7 +421,21 @@ function roundBanner(g: Draw, r: Rounds, now: number, over: boolean): void {
       if (k > 0) banner(g, side, r.text, p.y, { size: 52, alpha: Math.min(1, k) })
     } else if (r.phase === 'play' && now - r.at < 1.4) {
       const a = 1 - Math.max(0, (now - r.at - 1) / 0.4)
-      banner(g, side, r.round > 1 ? `Round ${r.round}` : 'Hot potato!', p.y, { size: 60, alpha: a })
+      // Tense rounds start with a warm potato: say so.
+      const warm = r.target > 1 ? warmth(r.wins, r.target) : 0
+      const text =
+        warm >= 3
+          ? 'Decider! Hot start'
+          : warm >= 2
+            ? 'Match point! Hot start'
+            : r.round > 1
+              ? `Round ${r.round}`
+              : 'Hot potato!'
+      banner(g, side, text, p.y, {
+        size: 60,
+        alpha: a,
+        ...(warm > 0 ? { color: C.yellow } : {}),
+      })
     }
   }
 }

@@ -28,6 +28,7 @@ import {
   potatoStep,
   tapResult,
   throwPotato,
+  warmth,
   TARGET,
   type Potato,
 } from './rules.ts'
@@ -98,9 +99,10 @@ class HotPotato extends BaseGame<State> {
       ctx.bots[side as Side] ? new PotatoBot(ctx.rng.fork(), ctx.difficulty) : null,
     ) as [PotatoBot | null, PotatoBot | null]
     const server: Side = ctx.rng.chance(0.5) ? 1 : 0
+    const target = ctx.target || match.default
     return {
-      rounds: roundsNew(ctx.target || match.default),
-      pot: potatoNew(server, 0),
+      rounds: roundsNew(target),
+      pot: potatoNew(server, 0, warmth([0, 0], target)),
       boomAt: boomDelay(ctx.rng),
       boomed: -1,
       server,
@@ -116,7 +118,13 @@ class HotPotato extends BaseGame<State> {
   /** A fresh round: the server holds the potato at their catch point, on the hidden timer. */
   private startRound(): void {
     const s = this.s
-    s.pot = potatoNew(s.server, this.time)
+    const warm = warmth(s.rounds.wins, s.rounds.target)
+    s.pot = potatoNew(s.server, this.time, warm)
+    if (warm > 0) {
+      // A tense round: the potato comes out of the oven already sizzling.
+      this.ctx.audio.play('zap', 0.9 + warm * 0.1)
+      this.ctx.fx.puff(W / 2, s.pot.y, 'rgba(255,170,90,0.6)', 6 + warm * 2)
+    }
     s.boomAt = this.time + boomDelay(this.ctx.rng)
     s.boomed = -1
     s.throwAt = -1

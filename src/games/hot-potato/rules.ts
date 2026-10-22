@@ -12,6 +12,9 @@ import { MID } from '../../core/stage.ts'
  * Grabbing too soon burns your fingers: a tap while the potato is coming at
  * you (or sitting in your mitt) but before the catch delay is over is a
  * fumble, and you cannot throw for FUMBLE seconds. Mashing never pays.
+ *
+ * The match ramps up: each throw makes the potato hotter and faster, and a
+ * round played at match point (or a decider) starts with a warm potato.
  */
 
 /** Round wins needed to take the match: best of 5. */
@@ -44,7 +47,7 @@ export interface Potato {
   dir: 1 | -1
   /** Stuck at a catch point, waiting for its holder. */
   held: boolean
-  /** Throws so far this round. */
+  /** Throws so far this round, plus the warmth it started with (drives heat and speed). */
   throws: number
   /** Whose half the potato is in. */
   holder: Side
@@ -60,13 +63,25 @@ export interface Potato {
   by: Side
 }
 
-/** A round's potato, served by `server` (held at their catch point). */
-export function potatoNew(server: Side, now: number): Potato {
+/**
+ * How warm a round's potato starts, in throws' worth of heat and speed: the
+ * match ramps up as the score gets close. Match point adds 2, a decider (both
+ * on match point) 3.
+ */
+export function warmth(wins: readonly [number, number], target: number): number {
+  const mp = target - 1
+  const a = wins[0] >= mp
+  const b = wins[1] >= mp
+  return a && b ? 3 : a || b ? 2 : 0
+}
+
+/** A round's potato, served by `server` (held at their catch point), starting `warm` throws hot. */
+export function potatoNew(server: Side, now: number, warm = 0): Potato {
   return {
     y: server === 0 ? LIMIT_R : LIMIT_B,
     dir: server === 0 ? -1 : 1,
     held: true,
-    throws: 0,
+    throws: warm,
     holder: server,
     enteredAt: now,
     v: 0,

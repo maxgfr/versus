@@ -3,8 +3,15 @@ import type { Rng } from '../../core/rng.ts'
 import { CATCH, FUMBLE, incoming, type Potato } from './rules.ts'
 
 interface Tune {
-  /** Reaction once the potato is catchable, seconds [min, max]. */
+  /**
+   * Delay after the potato becomes catchable, seconds [min, max]. The moment
+   * is predictable (the midline crossing plus the fixed catch delay), so a
+   * sharp player times the tap instead of reacting to it: hard does the same.
+   */
   react: [number, number]
+  /** Chance of a hesitation, and how long it adds [min, max]. */
+  slip: number
+  hesitate: [number, number]
   /** Chance to grab too soon (a fumble) on an incoming potato. */
   fumble: number
   /** Flick force range behind a throw. */
@@ -12,9 +19,30 @@ interface Tune {
 }
 
 export const TUNING: Record<Difficulty, Tune> = {
-  easy: { react: [0.26, 0.5], fumble: 0.2, force: [0, 0.3] },
-  normal: { react: [0.13, 0.27], fumble: 0.07, force: [0.25, 0.65] },
-  hard: { react: [0.04, 0.13], fumble: 0, force: [0.6, 1] },
+  // Welcoming: slow, often hesitant, burns its fingers now and then, soft throws.
+  easy: {
+    react: [0.3, 0.6],
+    slip: 0.15,
+    hesitate: [0.15, 0.35],
+    fumble: 0.2,
+    force: [0, 0.25],
+  },
+  // A real challenge: quick hands and firm flicks, the odd slip.
+  normal: {
+    react: [0.08, 0.18],
+    slip: 0.06,
+    hesitate: [0.1, 0.25],
+    fumble: 0.04,
+    force: [0.5, 0.85],
+  },
+  // Near-optimal: throws as soon as the rules allow, flicks at full force.
+  hard: {
+    react: [0.02, 0.07],
+    slip: 0.02,
+    hesitate: [0.1, 0.2],
+    fumble: 0,
+    force: [0.85, 1],
+  },
 }
 
 /** A bot's touch this step: tap or not, and the flick force behind it. */
@@ -48,8 +76,10 @@ export class PotatoBot {
   }
 
   private reaction(): number {
-    const [lo, hi] = this.tune.react
-    return this.rng.range(lo, hi)
+    const { react, slip, hesitate } = this.tune
+    let t = this.rng.range(react[0], react[1])
+    if (this.rng.chance(slip)) t += this.rng.range(hesitate[0], hesitate[1])
+    return t
   }
 
   /** This step's touch for `side`. `lock` is the game time its fingers are burnt until. */
