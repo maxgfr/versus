@@ -144,3 +144,33 @@ describe('mancala bot', () => {
     }
   })
 })
+
+describe('mancala computer strength', () => {
+  const duel = (a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard', seed: number) => {
+    const rng = new Rng(seed)
+    let p = startPosition((seed % 2) as Side)
+    for (let n = 0; n < 400; n++) {
+      const v = verdict(p)
+      if (v) return v.winner
+      p = apply(p, choose(p, p.turn === 0 ? a : b, rng))
+    }
+    return 'draw'
+  }
+
+  it('hard beats easy and normal beats easy over seeded games, either side opening', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 1; seed <= 6; seed++) {
+      if (duel('hard', 'easy', seed) === 0) hard++
+      if (duel('normal', 'easy', seed) === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(5)
+    expect(normal).toBeGreaterThanOrEqual(5)
+  }, 30000)
+
+  it('hard beats normal more often than not', () => {
+    let hard = 0
+    for (let seed = 1; seed <= 4; seed++) if (duel('hard', 'normal', seed) === 0) hard++
+    expect(hard).toBeGreaterThanOrEqual(3)
+  }, 30000)
+})

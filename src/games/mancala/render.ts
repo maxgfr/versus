@@ -7,8 +7,15 @@ import { MID, W } from '../../core/stage.ts'
 import type { State } from './index.ts'
 import { ownerOf, STORE } from './rules.ts'
 
-/** Seconds between two seeds leaving the same hand. */
+/** Seconds between two seeds leaving the same hand (a short sowing). */
 export const HOP = 0.19
+/** A big handful is sown quicker, down to this. */
+export const HOP_MIN = 0.1
+
+/** Hop time for a hand holding `seeds`: the more seeds, the brisker the sowing. */
+export function hopFor(seeds: number): number {
+  return Math.max(HOP_MIN, HOP - Math.max(0, seeds - 4) * 0.008)
+}
 /** Seconds a captured or swept seed takes to fly home. */
 export const FLY = 0.55
 
@@ -178,7 +185,7 @@ function outbound(s: State, now: number, from: number): number {
 /** Seeds shown in `side`'s store: what has landed so far. */
 export function storeCount(s: State, now: number, side: Side): number {
   const i = STORE[side]
-  const flying = s.lastTo === i && now - s.dropAt < HOP ? 1 : 0
+  const flying = s.lastTo === i && now - s.dropAt < s.hop ? 1 : 0
   return Math.max(0, (s.pits[i] ?? 0) - flying - inbound(s, now, i))
 }
 
@@ -187,7 +194,7 @@ export function renderMancala(g: Draw, s: State, now: number, live: boolean): vo
   plank(g)
 
   const pulse = 0.5 + 0.5 * Math.sin(now * 6)
-  const dropP = prog(now - s.dropAt, 0, HOP)
+  const dropP = prog(now - s.dropAt, 0, s.hop)
   const flying = s.lastTo >= 0 && dropP < 1 ? s.lastTo : -1
   const countOf = (i: number) =>
     Math.max(
@@ -262,8 +269,9 @@ export function renderMancala(g: Draw, s: State, now: number, live: boolean): vo
       )
     }
     // A pit that just received a seed bounces its pile.
-    const hit = i === s.lastTo && dropP >= 1 ? 1 - prog(now - s.dropAt - HOP, 0, 0.25) : 0
-    const squash = 1 + 0.08 * hit
+    const hit = i === s.lastTo && dropP >= 1 ? 1 - prog(now - s.dropAt - s.hop, 0, 0.3) : 0
+    // The pile squashes as the seed lands, then springs back.
+    const squash = 1 + 0.12 * hit * Math.cos((1 - hit) * Math.PI * 1.5)
     for (let k = 0; k < Math.min(n, 40); k++) {
       const [dx, dy] = spot(k, false)
       const m = owner === 0 ? 1 : -1

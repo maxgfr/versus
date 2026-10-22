@@ -4,9 +4,9 @@ import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { TurnGame, tableBackdrop } from '../../engines/board/index.ts'
+import { think, TurnGame, tableBackdrop } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
-import { FLY, HOP, notice, pitAt, pitCentre, renderMancala } from './render.ts'
+import { FLY, HOP, hopFor, notice, pitAt, pitCentre, renderMancala } from './render.ts'
 import {
   isStore,
   opposite,
@@ -47,6 +47,8 @@ export interface State {
   hopAt: number
   /** Game time of the last drop, for the seed in flight. */
   dropAt: number
+  /** Seconds per hop for the sowing running now (big handfuls go quicker). */
+  hop: number
   /** Where the last seed came from and where it landed (-1 before the first drop). */
   lastFrom: number
   lastTo: number
@@ -100,6 +102,7 @@ class Mancala extends TurnGame<State> {
       liftAt: -10,
       hopAt: 0,
       dropAt: -10,
+      hop: HOP,
       lastFrom: -1,
       lastTo: -1,
       flights: [],
@@ -153,13 +156,20 @@ class Mancala extends TurnGame<State> {
       fx.burst(c.x, c.y, C.yellow, { count: 12, speed: 420, size: 8, life: 0.5, kind: 'spark' })
       fx.ring(c.x, c.y, SIDE[win].light, 260)
       fx.flash(SIDE[win].main, 0.2)
+      fx.shake(0.25)
+      fx.stop(4)
       this.ctx.audio.play('score')
+      this.ctx.audio.buzz(25)
     } else this.ctx.audio.play('draw')
     // A single game ends the match as it always did, draws included.
     const decided = win === 'draw' ? this.target <= 1 : s.wins[win] >= this.target
     if (decided) {
       const score: [number, number] =
         this.target > 1 ? [s.wins[0], s.wins[1]] : [s.pits[STORE[0]] ?? 0, s.pits[STORE[1]] ?? 0]
+      if (win !== 'draw') {
+        this.ctx.fx.confetti(win)
+        this.ctx.fx.float('Winner!', W / 2, halfY(win), SIDE[win].light, 72, win)
+      }
       this.finish(win, { score, delay: 1.6 })
       return
     }
@@ -181,6 +191,7 @@ class Mancala extends TurnGame<State> {
     s.liftAt = -10
     s.hopAt = 0
     s.dropAt = -10
+    s.hop = HOP
     s.lastFrom = -1
     s.lastTo = -1
     s.flights = []
@@ -201,8 +212,17 @@ class Mancala extends TurnGame<State> {
       const side = ownerOf(f.to)
       const c = pitCentre(f.to)
       s.storeAt[side] = this.time
-      this.ctx.fx.burst(c.x, c.y, SIDE[side].light, { count: 8 + f.n, speed: 380, size: 10 })
+      // A bigger pile lands harder.
+      const k = Math.min(1, f.n / 12)
+      this.ctx.fx.burst(c.x, c.y, SIDE[side].light, {
+        count: 8 + Math.min(24, f.n * 2),
+        speed: 380 + k * 300,
+        size: 10,
+      })
+      if (f.n >= 4) this.ctx.fx.ring(c.x, c.y, SIDE[side].light, 120 + k * 120)
+      if (f.n >= 6) this.ctx.fx.shake(0.1 + k * 0.15)
       this.ctx.audio.play('coin', 0.9 + Math.min(f.n, 10) * 0.03)
+      if (f.n >= 4) this.ctx.audio.buzz(Math.round(8 + k * 14))
     }
   }
 
@@ -219,8 +239,26 @@ class Mancala extends TurnGame<State> {
     this.start(pit)
   }
 
-  protected botPlay(): void {
-    this.start(choose(this.pos(), this.ctx.difficulty, this.ctx.rng))
+  /** The computer answers briskly; the search itself runs off-thread. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.6 : d === 'normal' ? 0.45 : 0.35) + this.ctx.rng.range(0, 0.25)
+  }
+
+  protected botPlay(): Promise<void> {
+    const pos = this.pos()
+    const seed = this.ctx.rng.int(1, 2 ** 31 - 2)
+    const turn = this.s.turn
+    return think<number>('mancala', pos, this.ctx.difficulty, seed).then((pit) => {
+      const s = this.s
+      if (this.over || s.turn !== turn || s.queue.length > 0 || s.endedAt >= 0) return
+      const legal = (p: number) => ownerOf(p) === turn && (s.pits[p] ?? 0) > 0
+      this.start(
+        typeof pit === 'number' && legal(pit)
+          ? pit
+          : choose(this.pos(), this.ctx.difficulty, this.ctx.rng),
+      )
+    })
   }
 
   /** Lift the seeds from `pit`; they are sown one hop at a time by `drop`. */
@@ -234,6 +272,7 @@ class Mancala extends TurnGame<State> {
     s.lastFrom = pit
     s.lastTo = -1
     s.liftAt = this.time
+    s.hop = hopFor(seeds)
     s.hopAt = this.time + LIFT
     const c = pitCentre(pit)
     this.ctx.audio.play('swish', 1.1)
@@ -249,11 +288,11 @@ class Mancala extends TurnGame<State> {
     s.lastTo = to
     s.dropAt = this.time
     // The seed lands at the end of its hop; the next one leaves right after.
-    s.hopAt = this.time + HOP
+    s.hopAt = this.time + s.hop
     const k = s.queue.length
     // Rising pitch as the hand empties: the last seed sings.
     this.ctx.audio.play('pop', 0.85 + Math.max(0, 8 - k) * 0.05)
-    if (isStore(to)) s.storeAt[ownerOf(to)] = this.time + HOP
+    if (isStore(to)) s.storeAt[ownerOf(to)] = this.time + s.hop
     if (k === 0) this.settle()
   }
 
@@ -266,7 +305,7 @@ class Mancala extends TurnGame<State> {
     const r = settle(s.pits, mover, last)
     s.pits = r.pits
     // Effects land with the last seed, one hop from now.
-    const at = this.time + HOP
+    const at = this.time + s.hop
     s.flights = []
 
     if (r.captured > 0) {
@@ -316,12 +355,14 @@ class Mancala extends TurnGame<State> {
   render(g: Draw): void {
     const s = this.s
     tableBackdrop(g)
+    // Online, only the player to move sees their pits pulse.
     const live =
       !this.over &&
       s.endedAt < 0 &&
       s.queue.length === 0 &&
       !s.flights.some((f) => !f.done) &&
-      !this.isBot(s.turn)
+      !this.isBot(s.turn) &&
+      (g.viewer === null || g.viewer === s.turn)
     renderMancala(g, s, this.time, live)
     this.drawTurns(g, undefined, s.endedAt < 0)
     if (this.target > 1) {
