@@ -350,6 +350,8 @@ export interface PanelView {
   nopeAt: number
   recycleAt: number
   hint: boolean
+  /** This phone belongs to the board's player (online, the rival's cues are not drawn). */
+  own: boolean
   /** Game time the board ran out of moves, or -1. */
   stuckAt: number
   now: number
@@ -574,7 +576,7 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
   }
 
   // Dragging: every legal place glows, the one under the card brightest.
-  if (dr && dr.moved) {
+  if (dr && dr.moved && v.own) {
     const hover = dropAt(h, d, dr.src, dr.x + CARD_W / 2, dr.y + CARD_H / 2)
     const first = run(d, dr.src)[0] ?? 0
     for (let p = -1; p < 7; p++) {

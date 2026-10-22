@@ -587,6 +587,8 @@ class Solitaire extends PuzzleRace<State> {
   protected renderPanel(g: Draw, side: Side, w: number, h: number): void {
     const b = this.s.boards[side]
     const tv = tableView(w, h)
+    // Online, each phone shows only its own player's cues.
+    const own = g.viewer === null || g.viewer === side
     g.at(
       tv.tx,
       tv.ty,
@@ -604,7 +606,8 @@ class Solitaire extends PuzzleRace<State> {
           nopeKey: b.nopeKey,
           nopeAt: b.nopeAt,
           recycleAt: b.recycleAt,
-          hint: !this.isBot(side) && b.taps === 0 && this.time - this.s.roundAt < 12,
+          hint: own && !this.isBot(side) && b.taps === 0 && this.time - this.s.roundAt < 12,
+          own,
           stuckAt: b.stuck ? b.stuckAt : -1,
           now: this.time,
         }),
