@@ -1,8 +1,8 @@
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import type { MatchSpec, Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
-import type { ShotParams } from '../../engines/aim/index.ts'
 import { TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
 import { hud, render } from './render.ts'
@@ -11,6 +11,9 @@ import {
   BAR,
   type Event,
   fire,
+  type Kick,
+  LOFT_HIGH,
+  LOFT_LOW,
   forwardY,
   goalY,
   GOAL_X,
@@ -21,6 +24,7 @@ import {
   result,
   spotOf,
   type State,
+  type Swing,
   WIND_MAX,
 } from './rules.ts'
 import { Swipe } from './swipe.ts'
@@ -45,7 +49,10 @@ class GolfFootball extends TurnGame<State> {
 
   private swipes: [Swipe, Swipe] = [new Swipe(0), new Swipe(1)]
   /** The computer plans its kick when its turn starts, then swings toward it while "thinking". */
-  private botShot: ShotParams | null = null
+  private botShot: Swing | null = null
+  // Cosmetic only (not synced): the ball's previous step for interpolation, points pulses.
+  private prev: Kick | null = null
+  private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
 
   protected setup(): State {
     // The player whose turn it is may swipe anywhere on the pitch.
@@ -63,34 +70,42 @@ class GolfFootball extends TurnGame<State> {
   }
 
   protected override step(dt: number): void {
+    this.prev = this.s.kick ? { ...this.s.kick } : null
     for (const e of advance(this.s, dt, () => this.rollWind())) this.juice(e)
     const winner = result(this.s)
     if (winner !== null) {
-      this.s.endAt = this.time
+      const s = this.s
+      s.endAt = this.time
+      const early = s.kicks[0] !== s.kicks[1] || s.kicks[0] < s.regular
       this.finish(winner, {
-        score: [this.s.points[0], this.s.points[1]],
-        note: this.s.sudden
+        score: [s.points[0], s.points[1]],
+        note: s.sudden
           ? 'Sudden death decided it'
-          : `Most points after ${this.target} ${this.target === 1 ? 'kick' : 'kicks'} each`,
+          : early
+            ? 'Out of reach before the last kick'
+            : `Most points after ${this.target} ${this.target === 1 ? 'kick' : 'kicks'} each`,
         delay: 2.8,
       })
       this.ctx.fx.confetti(winner)
-      this.ctx.fx.flash(SIDE[winner].light, 0.2)
+      this.ctx.fx.flash(SIDE[winner].light, 0.3)
+      this.ctx.fx.shake(0.3)
+      this.pulse[winner].kick(16)
       return
     }
     super.step(dt)
   }
 
-  /** The ball keeps bouncing through the ending. */
+  /** The ball keeps bouncing through the ending (but no new turn is handed over). */
   protected override afterEnd(dt: number): void {
-    // The final score is level on kicks, so the beat never hands over a new turn.
+    if (this.s.phase !== 'beat' || this.s.beat <= dt) return
+    this.prev = this.s.kick ? { ...this.s.kick } : null
     for (const e of advance(this.s, dt, () => this.s.wind)) if (e.kind === 'bounce') this.juice(e)
   }
 
-  protected stepTurn(): void {
+  protected stepTurn(dt: number): void {
     const side = this.s.turn
     const sw = this.swipes[side]
-    sw.update(this.ctx.input.player(side))
+    sw.update(this.ctx.input.player(side), dt)
     this.s.aiming = sw.aim
     if (sw.shot) this.kick(sw.shot)
   }
@@ -100,20 +115,25 @@ class GolfFootball extends TurnGame<State> {
     this.botShot = null
   }
 
-  private kick(shot: ShotParams): void {
+  private kick(shot: Swing): void {
     const side = this.s.turn
     const spot = spotOf(this.s, side)
     fire(this.s, shot)
     this.s.kickAt = this.time
     for (const sw of this.swipes) sw.cancel()
     const { fx, audio } = this.ctx
-    audio.play('slap', 0.8)
-    audio.play('whoosh', 0.8 + shot.power * 0.4)
-    fx.ring(spot.x, spot.y, C.white, 90)
-    fx.puff(spot.x, spot.y, 'rgba(255,255,255,0.8)', 10)
+    // The boot meets the ball as hard as the swipe: a driven kick cracks, a floater thumps.
+    const drive = Math.min(1, Math.max(0, ((shot.loft ?? 1) - LOFT_HIGH) / (LOFT_LOW - LOFT_HIGH)))
+    const k = shot.power
+    audio.play('slap', 0.7 + 0.3 * drive + 0.1 * k)
+    audio.play('whoosh', 0.75 + k * 0.35 + drive * 0.2)
+    audio.buzz(Math.round(8 + 14 * k + 8 * drive))
+    fx.ring(spot.x, spot.y, C.white, 60 + 50 * k + 30 * drive)
+    fx.puff(spot.x, spot.y, 'rgba(255,255,255,0.8)', Math.round(5 + 8 * k))
+    if (k * (0.6 + 0.4 * drive) > 0.8) fx.stop(2)
     fx.burst(spot.x, spot.y, C.grass, {
-      count: 10,
-      speed: 320,
+      count: Math.round(5 + 10 * k),
+      speed: 220 + 200 * k,
       size: 10,
       life: 0.5,
       gravity: 0,
@@ -143,21 +163,26 @@ class GolfFootball extends TurnGame<State> {
       return
     }
     if (e.kind === 'bounce') {
-      audio.play('bounce', 0.7 + Math.min(0.5, e.speed / 1200))
-      fx.puff(e.x, e.y, 'rgba(255,255,255,0.5)', 4)
+      const k = Math.min(1, e.speed / 700)
+      audio.play('bounce', 0.7 + 0.5 * k)
+      fx.puff(e.x, e.y, 'rgba(255,255,255,0.5)', Math.round(2 + 5 * k))
+      if (k > 0.5) fx.shake(0.05 * k)
       return
     }
     this.s.outAt = this.time
     const goal = goalY(e.side)
     // Where the ball crosses the plane on screen (heights stand up away from the kicker).
     const sy = goal + forwardY(e.side) * e.z * 0.6
+    // A long kick is a bigger moment than a chip from close in.
+    const far = Math.min(1, spotOf(this.s, e.side).d / 1000)
     if (e.outcome === 'good') {
-      audio.play('score')
+      audio.play('score', 1.1 - 0.15 * far)
       audio.play('coin', 1.2)
-      audio.buzz(30)
+      audio.buzz(Math.round(20 + 25 * far))
+      this.pulse[e.side].kick(10 + 6 * far)
       fx.burst(e.x, sy, C.yellow, {
-        count: 34,
-        speed: 520,
+        count: Math.round(24 + 20 * far),
+        speed: 420 + 200 * far,
         size: 14,
         life: 0.9,
         gravity: 0,
@@ -167,9 +192,9 @@ class GolfFootball extends TurnGame<State> {
       })
       fx.ring(e.x, sy, SIDE[e.side].light, 260)
       fx.ring(GOAL_X, goal + forwardY(e.side) * BAR * 0.6, C.yellow, 200)
-      fx.flash(SIDE[e.side].light, 0.25)
-      fx.shake(0.4)
-      fx.stop(6)
+      fx.flash(SIDE[e.side].light, 0.18 + 0.15 * far)
+      fx.shake(0.25 + 0.25 * far)
+      fx.stop(4 + Math.round(4 * far))
       floatFor(fx, e.side, LABEL.good)
       return
     }
@@ -195,8 +220,9 @@ class GolfFootball extends TurnGame<State> {
     floatFor(fx, e.side, LABEL[e.outcome])
   }
 
-  render(g: Draw): void {
+  render(g: Draw, frac: number): void {
     const s = this.s
+    for (const p of this.pulse) p.update(1 / 60)
     let aim: Parameters<typeof render>[2]['aim'] = null
     if (s.phase === 'aim' && !this.over) {
       const side = s.turn
@@ -205,27 +231,46 @@ class GolfFootball extends TurnGame<State> {
       } else if (this.isBot(side) && this.botShot) {
         // Swing the line toward the planned kick while thinking.
         const k = Math.min(1, this.thinking / 0.5)
-        const planned = { dx: this.botShot.dx, dy: this.botShot.dy, power: this.botShot.power * k }
+        const planned = { ...this.botShot, power: this.botShot.power * k }
         aim = { power: planned.power, preview: previewOf(s, side, planned) }
       }
     }
+    // The ball drawn between steps.
+    const p = this.prev
+    const k = s.kick
+    const view =
+      k && p
+        ? {
+            ...s,
+            kick: {
+              ...k,
+              x: lerp(p.x, k.x, frac),
+              y: lerp(p.y, k.y, frac),
+              z: lerp(p.z, k.z, frac),
+            },
+          }
+        : s
     render(
       g,
-      s,
+      view,
       {
         aim,
-        hint:
-          s.phase === 'aim' &&
-          !this.isBot(s.turn) &&
-          s.kicks[0] === 0 &&
-          s.kicks[1] === 0 &&
-          !s.aiming,
+        // Each human gets the hint before their own first kick, not only whoever kicks first.
+        hint: s.phase === 'aim' && !this.isBot(s.turn) && s.kicks[s.turn] === 0 && !s.aiming,
       },
       this.time,
     )
-    for (const side of [0, 1] as Side[]) this.swipes[side].render(g)
-    hud(g, s)
+    for (const side of [0, 1] as Side[]) {
+      // Online, each phone shows only its own player's swipe.
+      if (g.viewer === null || side === g.viewer) this.swipes[side].render(g)
+    }
+    hud(g, s, [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)])
     this.drawTurns(g, undefined, s.phase === 'aim')
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
   }
 }
 

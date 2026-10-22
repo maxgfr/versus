@@ -13,7 +13,11 @@ import {
 /**
  * Pure field goals: two posts at the far ends of one pitch, kicks alternate and
  * walk back from the posts. A kick is good when it crosses the goal line between
- * the posts, above the bar and below the ceiling. No DOM.
+ * the posts, above the bar and below the ceiling. Like a shoot-out, the regular
+ * kicks stop as soon as one side cannot catch up; level after them is sudden
+ * death. The swipe's length sets the power, its speed the loft: a slow swipe
+ * floats a high kick, a snappy one drives it low and fast (less time in the
+ * wind). No DOM.
  */
 
 export const KICKS = 5
@@ -39,6 +43,28 @@ export const POST_R = 14
 export const BAR_R = 12
 
 export type Outcome = 'good' | 'low' | 'over' | 'wide' | 'short' | 'post' | 'bar'
+
+/** A kick: direction and power, plus its loft (1 = neutral, higher floats, lower drives). */
+export interface Swing extends ShotParams {
+  loft?: number
+}
+
+export const LOFT_HIGH = 1.35
+export const LOFT_LOW = 0.8
+/** Swipe speeds (world units/s) at the two ends of the loft range. */
+export const SWIPE_SLOW = 700
+export const SWIPE_FAST = 3400
+
+/** The loft a swipe of this speed gives: slow floats, fast drives. */
+export function loftOf(speed: number): number {
+  const k = Math.min(1, Math.max(0, (speed - SWIPE_SLOW) / (SWIPE_FAST - SWIPE_SLOW)))
+  return LOFT_HIGH + (LOFT_LOW - LOFT_HIGH) * k
+}
+
+/** The kick's flight for a loft: range goes as v² · elev, so speed scales by 1/√loft to keep the range. */
+export function ballOf(loft = 1): Ballistics {
+  return { ...BALL, elev: BALL.elev * loft, vmax: BALL.vmax / Math.sqrt(loft) }
+}
 
 export interface Spot {
   x: number
@@ -66,7 +92,7 @@ export interface State {
   log: [boolean[], boolean[]]
   beat: number
   wind: number
-  aiming: ShotParams | null
+  aiming: Swing | null
   /** Render stamps (game time), so the online guest replays the same animations. */
   kickAt: number
   outAt: number
@@ -132,9 +158,9 @@ export function spotOf(s: State, side: Side): Spot {
   return (list[Math.min(s.kicks[side], list.length - 1)] ?? { x: GOAL_X, y: 0, d: 0 }) as Spot
 }
 
-export function fire(s: State, shot: ShotParams): void {
+export function fire(s: State, shot: Swing): void {
   const spot = spotOf(s, s.turn)
-  s.kick = { ...launch(spot.x, spot.y, shot, BALL), side: s.turn, py: spot.y }
+  s.kick = { ...launch(spot.x, spot.y, shot, ballOf(shot.loft)), side: s.turn, py: spot.y }
   s.aiming = null
   s.phase = 'fly'
 }
@@ -143,10 +169,10 @@ export function fire(s: State, shot: ShotParams): void {
 export function previewOf(
   s: State,
   side: Side,
-  shot: ShotParams,
+  shot: Swing,
 ): { x: number; y: number; z: number }[] {
   const spot = spotOf(s, side)
-  return trace(spot.x, spot.y, shot, BALL, s.wind, 0.6)
+  return trace(spot.x, spot.y, shot, ballOf(shot.loft), s.wind, 0.6)
 }
 
 /** Two substeps per frame so a fast kick cannot skip the goal line. */
@@ -175,11 +201,11 @@ export function stepKick(k: Kick, wind: number): Outcome | null {
 export function runKick(
   s: State,
   side: Side,
-  shot: ShotParams,
+  shot: Swing,
   wind: number,
 ): { outcome: Outcome; x: number; z: number } {
   const spot = spotOf(s, side)
-  const k: Kick = { ...launch(spot.x, spot.y, shot, BALL), side, py: spot.y }
+  const k: Kick = { ...launch(spot.x, spot.y, shot, ballOf(shot.loft)), side, py: spot.y }
   for (let i = 0; i < 60 * 6; i++) {
     const outcome = stepKick(k, wind)
     if (outcome) return { outcome, x: k.x, z: k.z }
@@ -237,8 +263,17 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
   return ev
 }
 
-/** Over when both sides have kicked the same number of times (the match length each, then sudden death) and the points differ. Points tied after a round means sudden death. */
+/**
+ * The winner once decided. During the regular kicks, as soon as one side leads
+ * by more than the other has kicks left. After them (and in sudden death),
+ * when both have kicked as often and the points differ.
+ */
 export function result(s: State): Side | null {
+  if (!s.sudden && s.kicks[0] <= s.regular && s.kicks[1] <= s.regular) {
+    const left: [number, number] = [s.regular - s.kicks[0], s.regular - s.kicks[1]]
+    if (s.points[0] > s.points[1] + left[1]) return 0
+    if (s.points[1] > s.points[0] + left[0]) return 1
+  }
   if (s.kicks[0] !== s.kicks[1] || s.kicks[0] < s.regular) return null
   if (s.points[0] === s.points[1]) return null
   return s.points[0] > s.points[1] ? 0 : 1

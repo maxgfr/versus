@@ -10,6 +10,9 @@ import {
   GOAL_X,
   isOver,
   KICKS,
+  LOFT_HIGH,
+  LOFT_LOW,
+  loftOf,
   newState,
   result,
   runKick,
@@ -133,8 +136,9 @@ describe('field goal game', () => {
     const r = game(9, 'normal', 'normal', 2)
     expect(isOver(r.s)).toBe(true)
     expect(r.steps).toBeLessThan(60 * 60 * 30)
-    expect(r.s.kicks[0]).toBe(r.s.kicks[1])
-    expect(r.s.kicks[0]).toBeGreaterThanOrEqual(2)
+    // Decided early when out of reach: the kick counts differ by one at most.
+    expect(Math.abs(r.s.kicks[0] - r.s.kicks[1])).toBeLessThanOrEqual(1)
+    expect(Math.max(...r.s.kicks)).toBeGreaterThanOrEqual(2)
   })
 
   it('the side with more points after five kicks each wins', () => {
@@ -165,5 +169,52 @@ describe('field goal game', () => {
       if (result(r.s) === 0) wins++
     }
     expect(wins).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('field goals: out of reach, loft', () => {
+  it('the regular kicks stop as soon as one side cannot catch up', () => {
+    const s = newState(new Rng(6), 0, 0)
+    s.kicks = [3, 2]
+    s.points = [3, 0]
+    // Blue still has three kicks: three all is possible.
+    expect(result(s)).toBeNull()
+    s.kicks = [3, 3]
+    // Blue has two left and trails by three.
+    expect(result(s)).toBe(0)
+    s.kicks = [4, 3]
+    s.points = [1, 3]
+    // Red has one left and trails by two.
+    expect(result(s)).toBe(1)
+  })
+
+  it('a slow swipe floats the kick, a snappy one drives it; the drive drifts less in the wind', () => {
+    const slow = swipeShot(0, 0, -250, 400)
+    const fast = swipeShot(0, 0, -250, 5000)
+    if (!slow || !fast) throw new Error('no kick')
+    expect(slow.loft).toBeGreaterThan(1)
+    expect(fast.loft).toBeLessThan(1)
+    expect(loftOf(0)).toBe(LOFT_HIGH)
+    expect(loftOf(1e6)).toBe(LOFT_LOW)
+    const s = newState(new Rng(2), 0, 0)
+    s.kicks = [4, 4]
+    const shot = { dx: 0, dy: -1, power: 0.9 }
+    const drift = (loft: number) =>
+      Math.abs(runKick(s, 0, { ...shot, loft }, 100).x - runKick(s, 0, { ...shot, loft }, 0).x)
+    expect(drift(LOFT_LOW)).toBeLessThan(drift(LOFT_HIGH))
+  })
+
+  it('the hard computer converts long kicks far more often than the easy one', () => {
+    const rate = (d: Difficulty) => {
+      const rng = new Rng(3)
+      let good = 0
+      for (let i = 0; i < 10; i++) {
+        const s = newState(rng, 0, rng.range(-100, 100))
+        s.kicks = [4, 0]
+        if (runKick(s, 0, choose(s, 0, d, rng), s.wind).outcome === 'good') good++
+      }
+      return good
+    }
+    expect(rate('hard')).toBeGreaterThan(rate('easy') + 2)
   })
 })

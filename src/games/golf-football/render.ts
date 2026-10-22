@@ -268,7 +268,9 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
   }
 
   // Preview: the first part of the arc, lifted the same way the ball is.
-  if (look.aim) {
+  // Online, it is the kicker's own control: only their phone shows it.
+  const own = g.viewer === null || g.viewer === s.turn
+  if (look.aim && own) {
     const side = s.turn
     const pts = look.aim.preview
     pts.forEach((p, i) => {
@@ -346,7 +348,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       ),
     )
   }
-  if (look.hint) {
+  if (look.hint && own) {
     const side = s.turn
     banner(g, side, 'Swipe up to kick', side === 0 ? MID + 420 : MID - 420, {
       size: 40,
@@ -360,12 +362,12 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 }
 
 /** HUD: points big at the edge; each kick as a pip (filled = good, crossed = missed). */
-export function hud(g: Draw, s: State): void {
+export function hud(g: Draw, s: State, pulse: [number, number] = [0, 0]): void {
   // A longer match shrinks the row so it still fits the edge (full size up to KICKS).
   const n = s.regular
   const k = Math.min(1, KICKS / n)
   for (const side of [0, 1] as const) {
-    bigScore(g, side, s.points[side], { x: 130, size: 64 })
+    bigScore(g, side, s.points[side], { x: 130, size: 64 * (1 + pulse[side] * 0.35) })
     const log = s.log[side]
     const shown = log.length > n ? log.slice(log.length - n) : log
     const y = hudY(g, side)
