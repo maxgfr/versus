@@ -1,6 +1,6 @@
 import { Joystick } from '../../core/controls.ts'
 import { floatFor } from '../../core/fx/fx.ts'
-import { Spring } from '../../core/fx/ease.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -30,6 +30,8 @@ class KingOfTheHill extends BaseGame<State> {
   private squash: [Spring, Spring] = [new Spring(1, 360, 11), new Spring(1, 360, 11)]
   private lastHit = -1
   private pulse: [Spring, Spring] = [new Spring(0, 260, 12), new Spring(0, 260, 12)]
+  /** Last step's blob positions, for interpolation (cosmetic). */
+  private prev: [number, number, number, number] | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -56,6 +58,8 @@ class KingOfTheHill extends BaseGame<State> {
 
   protected step(dt: number): void {
     const w = this.s.w
+    const [a, b] = w.blobs
+    this.prev = [a.x, a.y, b.x, b.y]
     const targets: Targets = [this.aim(w, 0, dt), this.aim(w, 1, dt)]
     const events = step(w, dt, targets, this.ctx.rng)
     for (const e of events) this.juice(e)
@@ -156,6 +160,25 @@ class KingOfTheHill extends BaseGame<State> {
           glyph: '💫',
         })
         break
+      case 'dash': {
+        // A charge: a burst of dust kicked back and a squash-stretch.
+        const b = w.blobs[e.side]
+        const sp = Math.hypot(b.vx, b.vy) || 1
+        audio.play('whoosh', 1.25)
+        audio.buzz(10)
+        fx.burst(e.x, e.y, 'rgba(255,248,239,0.7)', {
+          count: 10,
+          speed: 380,
+          size: 16,
+          life: 0.45,
+          gravity: -40,
+          drag: 3,
+          spread: 1.2,
+          dir: Math.atan2(-b.vy / sp, -b.vx / sp),
+        })
+        this.squash[e.side].kick(5)
+        break
+      }
       case 'wall':
         audio.play('wall', 1)
         fx.puff(e.x, e.y, 'rgba(255,248,239,0.5)', 4)
@@ -192,9 +215,30 @@ class KingOfTheHill extends BaseGame<State> {
     }
   }
 
-  render(g: Draw, _alpha: number): void {
+  render(g: Draw, alpha: number): void {
     for (const sp of this.squash) sp.update(1 / 60)
     for (const sp of this.pulse) sp.update(1 / 60)
+    const w = this.s.w
+    const pv = this.prev
+    // Blobs drawn between the last two steps (a copy: the state is never touched).
+    const view: World =
+      pv && !this.s.end
+        ? {
+            ...w,
+            blobs: [
+              {
+                ...w.blobs[0],
+                x: lerp(pv[0], w.blobs[0].x, alpha),
+                y: lerp(pv[1], w.blobs[0].y, alpha),
+              },
+              {
+                ...w.blobs[1],
+                x: lerp(pv[2], w.blobs[1].x, alpha),
+                y: lerp(pv[3], w.blobs[1].y, alpha),
+              },
+            ],
+          }
+        : w
     const look: Look = {
       names: this.ctx.names,
       target: this.target,
@@ -203,7 +247,12 @@ class KingOfTheHill extends BaseGame<State> {
       squash: [this.squash[0].value, this.squash[1].value],
       pulse: [Math.max(0, this.pulse[0].value / 10), Math.max(0, this.pulse[1].value / 10)],
     }
-    render(g, this.s.w, look)
+    render(g, view, look)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
   }
 }
 

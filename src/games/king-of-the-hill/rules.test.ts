@@ -6,8 +6,14 @@ import { decide, newMemory } from './bot.ts'
 import {
   ARENA,
   BLOB_R,
+  DASH_COOL,
+  DASH_TIME,
   inZone,
   LIMIT,
+  MAX_SPEED,
+  surge,
+  ZONE_FAST,
+  zoneEvery,
   newWorld,
   type Targets,
   step,
@@ -177,17 +183,74 @@ describe('king of the hill bots', () => {
     expect(winner(w)).not.toBeNull()
   })
 
-  it('the harder bot usually wins', () => {
-    let hard = 0
-    for (let s = 1; s <= 4; s++) if (winner(botMatch('hard', 'easy', s).w) === 0) hard++
-    expect(hard).toBeGreaterThanOrEqual(2)
+  it('the harder bot usually wins, on either side', () => {
+    const wins = (a: Difficulty, b: Difficulty): number => {
+      let n = 0
+      for (let s = 1; s <= 6; s++) {
+        if (winner(botMatch(a, b, s).w) === 0) n++
+        if (winner(botMatch(b, a, s).w) === 1) n++
+      }
+      return n
+    }
+    expect(wins('hard', 'easy')).toBeGreaterThanOrEqual(10)
+    expect(wins('hard', 'normal')).toBeGreaterThanOrEqual(8)
+    expect(wins('normal', 'easy')).toBeGreaterThanOrEqual(9)
+  })
+
+  it('a flick from rest is a charge: faster, once per flick, after a cooldown', () => {
+    const w = newWorld(15)
+    place(w, [500, 1300], [500, 400])
+    const rng = new Rng(1)
+    const far = { x: 500, y: 300 }
+    step(w, STEP, NONE, rng)
+    const ev = step(w, STEP, [far, null], rng)
+    expect(ev.some((e) => e.kind === 'dash' && e.side === 0)).toBe(true)
+    expect(surge(w.blobs[0], w.t)).toBeGreaterThan(1.5)
+    let top = 0
+    let dashes = 1
+    for (let i = 0; i < 30; i++) {
+      for (const e of step(w, STEP, [far, null], rng)) if (e.kind === 'dash') dashes++
+      top = Math.max(top, Math.hypot(w.blobs[0].vx, w.blobs[0].vy))
+    }
+    expect(top).toBeGreaterThan(MAX_SPEED * 1.1)
+    expect(dashes).toBe(1)
+    // A slow ramp from rest is a push, not a charge.
+    const v = newWorld(15)
+    place(v, [500, 1300], [500, 400])
+    let any = false
+    for (let i = 0; i <= 30; i++) {
+      const tgt = { x: 500, y: 1300 - (i / 30) * 120 }
+      for (const e of step(v, STEP, [tgt, null], rng)) if (e.kind === 'dash') any = true
+    }
+    expect(any).toBe(false)
+    expect(DASH_COOL).toBeGreaterThan(DASH_TIME)
+  })
+
+  it('the crown hops sooner as the leader closes in on the target', () => {
+    const w = newWorld(20)
+    expect(zoneEvery(w)).toBe(ZONE_EVERY)
+    w.crown = [18, 3]
+    expect(zoneEvery(w)).toBeLessThan(ZONE_EVERY)
+    expect(zoneEvery(w)).toBeGreaterThanOrEqual(ZONE_FAST)
+  })
+
+  it('a sharp bot heads for the telegraphed next spot before the hop', () => {
+    const w = newWorld(15)
+    place(w, [500, 1300], [500, 400])
+    w.zone.t = 0.5
+    w.next = { x: 300, y: 1400 }
+    const hard = decide(w, 0, 'hard', new Rng(1), newMemory(), STEP)
+    const easy = decide(w, 0, 'easy', new Rng(1), newMemory(), STEP)
+    expect(Math.hypot(hard.x - 300, hard.y - 1400)).toBeLessThan(
+      Math.hypot(easy.x - 300, easy.y - 1400),
+    )
   })
 
   it('a bot heads for the crown when nobody holds it', () => {
     const w = newWorld(15)
     place(w, [W / 2 - 400, 1400], [W / 2, 400])
     const rng = new Rng(7)
-    const aim = decide(w, 0, 'hard', rng, { wait: 0, aim: null }, STEP)
+    const aim = decide(w, 0, 'hard', rng, newMemory(), STEP)
     const d0 = Math.hypot(w.blobs[0].x - w.zone.x, w.blobs[0].y - w.zone.y)
     const d1 = Math.hypot(aim.x - w.zone.x, aim.y - w.zone.y)
     expect(d1).toBeLessThan(d0)
@@ -196,7 +259,7 @@ describe('king of the hill bots', () => {
   it('blue plays the crown too', () => {
     const w = newWorld(15)
     place(w, [W / 2, 1400], [W / 2 - 300, 400])
-    const aim = decide(w, 1, 'normal', new Rng(8), { wait: 0, aim: null }, STEP)
+    const aim = decide(w, 1, 'normal', new Rng(8), newMemory(), STEP)
     expect(Math.hypot(aim.x - w.zone.x, aim.y - w.zone.y)).toBeLessThan(
       Math.hypot(w.blobs[1].x - w.zone.x, w.blobs[1].y - w.zone.y),
     )

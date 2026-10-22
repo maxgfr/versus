@@ -4,7 +4,7 @@ import { banner, bigScore, hudY, namePill } from '../../core/hud.ts'
 import type { Draw, Mood } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
-import { ARENA, BLOB_R, inZone, type World, ZONE_EVERY, ZONE_R } from './rules.ts'
+import { ARENA, BLOB_R, DASH_TIME, inZone, type World, ZONE_EVERY, ZONE_R } from './rules.ts'
 
 export interface Stick {
   bx: number
@@ -146,7 +146,7 @@ function drawZone(g: Draw, w: World): void {
   g.ring(zx, zy, r, contested ? (p > 0.5 ? C.white : C.yellow) : col, 12)
   g.ring(zx, zy, r * 0.62, alpha(col, 0.35), 5)
   // Timer: the yellow arc runs down to the next jump.
-  const left = clamp01(w.zone.t / ZONE_EVERY)
+  const left = clamp01(w.zone.t / (w.every || ZONE_EVERY))
   g.arc(zx, zy, r + 28, 0, Math.PI * 2, alpha(C.white, 0.1), 10)
   g.arc(
     zx,
@@ -210,7 +210,17 @@ function drawCrown(g: Draw, w: World, end: Look['end']): void {
 function drawBlob(g: Draw, w: World, side: Side, look: Look): void {
   const b = w.blobs[side]
   const sp = Math.hypot(b.vx, b.vy)
-  const k = Math.min(0.16, sp / 5000)
+  // Stretch along its run; a charge stretches it further and leaves a streak.
+  const k = Math.min(0.26, sp / 4000)
+  const charge = Math.max(0, 1 - (w.t - b.dashAt) / DASH_TIME)
+  if (charge > 0 && sp > 1) {
+    const ux = b.vx / sp
+    const uy = b.vy / sp
+    g.alpha(charge * 0.6, () => {
+      for (let i = 1; i <= 3; i++)
+        g.circle(b.x - ux * i * 46, b.y - uy * i * 46, BLOB_R * (1 - i * 0.2), SIDE[side].light)
+    })
+  }
   const sq = look.squash[side] ?? 1
   const z = w.zone
   const lx = z.x - b.x
@@ -286,7 +296,9 @@ function meter(
 export function render(g: Draw, w: World, look: Look): void {
   drawArena(g)
   drawZone(g, w)
-  for (const side of [0, 1] as Side[]) drawStick(g, side, look.sticks[side])
+  // Online, each phone draws only its own player's stick.
+  for (const side of [0, 1] as Side[])
+    if (g.viewer === null || g.viewer === side) drawStick(g, side, look.sticks[side])
   // Draw the blob further from the viewer's light first (top of the table), then the other.
   const order: Side[] = w.blobs[0].y < w.blobs[1].y ? [0, 1] : [1, 0]
   // Unclaimed, the crown sits on the pad under the blobs; claimed, it rides on a head.

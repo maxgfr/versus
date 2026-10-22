@@ -20,10 +20,22 @@ import {
 export const ARENA = rink({ x0: 60, y0: 170, x1: W - 60, y1: 1630, corner: 150, goal: 0 })
 export const BLOB_R = 66
 export const ZONE_R = 170
-/** Seconds between the crown jumping to a new spot. */
+/** Seconds between the crown jumping to a new spot; it hops quicker as the leader closes in. */
 export const ZONE_EVERY = 8
-const MAX_SPEED = 780
-const STEER_GAIN = 6
+export const ZONE_FAST = 5
+/**
+ * A charge: flick the stick from rest to full in a blink and the blob surges
+ * (top speed × (1 + DASH_BOOST), fading over DASH_TIME), so a wind-up and a
+ * snap hits much harder than a steady push. Once per flick, after DASH_COOL.
+ */
+export const DASH_BOOST = 0.75
+export const DASH_TIME = 0.4
+export const DASH_COOL = 1.4
+export const FLICK = 0.18
+/** The charge's instant kick, as a fraction of top speed. */
+export const DASH_KICK = 0.9
+export const MAX_SPEED = 780
+export const STEER_GAIN = 6
 const STEER_RATE = 8
 const DRAG = 1.6
 const E_BLOB = 0.85
@@ -40,11 +52,17 @@ export interface Blob extends Disc {
   side: Side
   /** Seconds left reeling from a shove: no steering until it wears off. */
   stun: number
+  /** How hard it was steered last step (0..1), when that was last near rest, and its last charge. */
+  mag: number
+  lowAt: number
+  dashAt: number
 }
 
 export interface World {
   blobs: [Blob, Blob]
   zone: { x: number; y: number; t: number }
+  /** Seconds the current crown spot lasts in all (for the countdown arc). */
+  every: number
   /** Where the crown jumps next (telegraphed before the move), once picked. */
   next: { x: number; y: number } | null
   /** Where the crown jumped from, and when: drives the hop animation. */
@@ -65,6 +83,7 @@ export type Event =
   | { kind: 'wall'; x: number; y: number; speed: number }
   | { kind: 'zone'; x: number; y: number }
   | { kind: 'tick'; side: Side; x: number; y: number; n: number }
+  | { kind: 'dash'; side: Side; x: number; y: number }
 
 /** Where each blob is steered this step (world), or null to coast. */
 export type Targets = [{ x: number; y: number } | null, { x: number; y: number } | null]
@@ -72,10 +91,22 @@ export type Targets = [{ x: number; y: number } | null, { x: number; y: number }
 export function newWorld(target: number): World {
   return {
     blobs: [
-      { side: 0, x: W / 2, y: 1400, vx: 0, vy: 0, r: BLOB_R, stun: 0 },
-      { side: 1, x: W / 2, y: 400, vx: 0, vy: 0, r: BLOB_R, stun: 0 },
+      {
+        side: 0,
+        x: W / 2,
+        y: 1400,
+        vx: 0,
+        vy: 0,
+        r: BLOB_R,
+        stun: 0,
+        mag: 0,
+        lowAt: 0,
+        dashAt: -9,
+      },
+      { side: 1, x: W / 2, y: 400, vx: 0, vy: 0, r: BLOB_R, stun: 0, mag: 0, lowAt: 0, dashAt: -9 },
     ],
     zone: { x: W / 2, y: MID, t: ZONE_EVERY },
+    every: ZONE_EVERY,
     next: null,
     from: { x: W / 2, y: MID, at: -10 },
     crown: [0, 0],
@@ -119,9 +150,26 @@ export function step(w: World, dt: number, targets: Targets, rng: Rng): Event[] 
     w.next = pickZone(rng, z)
     w.zone.x = z.x
     w.zone.y = z.y
-    w.zone.t = ZONE_EVERY
+    w.every = zoneEvery(w)
+    w.zone.t = w.every
     events.push({ kind: 'zone', x: z.x, y: z.y })
   }
+
+  // Charges: a steer that snaps from rest to full is a flick.
+  w.blobs.forEach((b, i) => {
+    const tgt = b.stun > 0 ? null : targets[i]
+    const m = tgt ? Math.min(1, (Math.hypot(tgt.x - b.x, tgt.y - b.y) * STEER_GAIN) / MAX_SPEED) : 0
+    if (tgt && m >= 0.9 && b.mag < 0.9 && w.t - b.lowAt <= FLICK && w.t - b.dashAt >= DASH_COOL) {
+      b.dashAt = w.t
+      // The snap itself: an instant shove forward on top of the higher top speed.
+      const d = Math.hypot(tgt.x - b.x, tgt.y - b.y) || 1
+      b.vx += ((tgt.x - b.x) / d) * MAX_SPEED * DASH_KICK
+      b.vy += ((tgt.y - b.y) / d) * MAX_SPEED * DASH_KICK
+      events.push({ kind: 'dash', side: b.side, x: b.x, y: b.y })
+    }
+    if (m < 0.3) b.lowAt = w.t
+    b.mag = m
+  })
 
   const h = dt / SUB
   for (let s = 0; s < SUB; s++) {
@@ -131,7 +179,8 @@ export function step(w: World, dt: number, targets: Targets, rng: Rng): Event[] 
         const dx = tgt.x - b.x
         const dy = tgt.y - b.y
         const d = Math.hypot(dx, dy)
-        const want = Math.min(MAX_SPEED, d * STEER_GAIN)
+        const top = MAX_SPEED * surge(b, w.t)
+        const want = Math.min(top, d * STEER_GAIN * (top / MAX_SPEED))
         const wx = d > 1e-6 ? (dx / d) * want : 0
         const wy = d > 1e-6 ? (dy / d) * want : 0
         const k = Math.min(1, STEER_RATE * h)
@@ -182,6 +231,17 @@ export function step(w: World, dt: number, targets: Targets, rng: Rng): Event[] 
     }
   }
   return events
+}
+
+/** Top-speed multiplier from a blob's last charge at time t. */
+export function surge(b: Blob, t: number): number {
+  return 1 + DASH_BOOST * Math.max(0, 1 - (t - b.dashAt) / DASH_TIME)
+}
+
+/** How long the next crown spot lasts: shorter as the leader nears the target. */
+export function zoneEvery(w: World): number {
+  const lead = Math.max(w.crown[0], w.crown[1]) / Math.max(1, w.target)
+  return ZONE_EVERY + (ZONE_FAST - ZONE_EVERY) * Math.min(1, Math.max(0, lead))
 }
 
 /** The side that has the crown seconds to win, or null. */
