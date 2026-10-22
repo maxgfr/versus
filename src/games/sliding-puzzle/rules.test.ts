@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { botTap, PACE } from './bot.ts'
+import { botPlan, botTap, PACE } from './bot.ts'
 import {
   CELLS,
   distance,
+  foldPlan,
+  MIN_DISTANCE,
   isSolved,
   neighbours,
   progress,
@@ -45,6 +47,42 @@ describe('sliding puzzle: scramble', () => {
       const sc = scramble(new Rng(seed))
       let tiles = sc.tiles
       for (const cell of solvePlan(sc.path)) {
+        const r = slide(tiles, cell)
+        expect(r).not.toBeNull()
+        tiles = r?.tiles as number[]
+      }
+      expect(isSolved(tiles)).toBe(true)
+    }
+  })
+})
+
+describe('sliding puzzle: scramble size', () => {
+  it('never deals a puzzle that is nearly solved', () => {
+    for (let seed = 0; seed < 300; seed++)
+      expect(distance(scramble(new Rng(seed)).tiles)).toBeGreaterThanOrEqual(MIN_DISTANCE)
+  })
+})
+
+describe('sliding puzzle: folded plans', () => {
+  it('slides a straight run of the gap in one tap', () => {
+    // Gap at 15; the plan walks it left along the bottom row to 12, then up to 8.
+    expect(foldPlan(15, [14, 13, 12, 8])).toEqual([12, 8])
+    // Up the last column, then left: two runs.
+    expect(foldPlan(15, [11, 7, 6, 5])).toEqual([7, 5])
+  })
+
+  it('does not fold across the end of a row', () => {
+    // Gap at 4 (row 1, col 0): 3 is index-adjacent to 4 but on the row above.
+    expect(foldPlan(4, [5, 1, 0])).toEqual([5, 1, 0])
+  })
+
+  it('a folded plan still solves the scramble, in fewer taps', () => {
+    for (const seed of [1, 5, 9, 40]) {
+      const sc = scramble(new Rng(seed))
+      const plan = botPlan(sc.path, 'hard')
+      expect(plan.length).toBeLessThan(botPlan(sc.path, 'easy').length)
+      let tiles = sc.tiles
+      for (const cell of plan) {
         const r = slide(tiles, cell)
         expect(r).not.toBeNull()
         tiles = r?.tiles as number[]
@@ -123,7 +161,7 @@ describe('sliding puzzle: bot', () => {
         const sc = scramble(new Rng(seed))
         const rng = new Rng(seed + 1)
         let tiles = sc.tiles
-        let plan = solvePlan(sc.path)
+        let plan = botPlan(sc.path, d)
         let taps = 0
         while (!isSolved(tiles) && taps < 400) {
           const m = botTap(tiles, plan, d, rng)

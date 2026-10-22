@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { GameContext } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import game, { match } from './index.ts'
+import { slide, solvedBoard } from './rules.ts'
 
 /** Effects and sound do nothing; both sides are bots on hard, so the races play themselves out. */
 function ctx(target?: number): GameContext {
@@ -51,5 +52,31 @@ describe('sliding puzzle match length', () => {
     expect(g.result?.winner).toBe(score?.[0] === 2 ? 0 : 1)
     // The first race was decided and a fresh one dealt before the match ended.
     expect((g.snapshot() as { s: { round: number } }).s.round).toBeGreaterThanOrEqual(1)
+  })
+
+  it('two boards solved in the same step are a dead heat, not a win for red', () => {
+    const g = game()
+    g.init(ctx())
+    const snap = g.snapshot() as {
+      s: { boards: { tiles: number[]; plan: number[]; botT: number }[] }
+    }
+    // One tap from solved on both sides, both bots about to tap.
+    const near = slide(solvedBoard(), 11)?.tiles as number[]
+    for (const b of snap.s.boards) {
+      b.tiles = near.slice()
+      b.plan = [15]
+      b.botT = 0.001
+    }
+    g.restore(JSON.parse(JSON.stringify(snap)))
+    playToResult(g)
+    expect(g.result?.winner).toBe('draw')
+  })
+
+  it('keeps the state plain JSON', () => {
+    const g = game()
+    g.init(ctx(3))
+    for (let i = 0; i < 900; i++) g.update(1 / 60)
+    const snap = g.snapshot()
+    expect(JSON.parse(JSON.stringify(snap))).toEqual(snap)
   })
 })

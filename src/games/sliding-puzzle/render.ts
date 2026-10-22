@@ -1,12 +1,9 @@
 import type { Side } from '../../core/game.ts'
-import { lerp, outBack, outCubic, prog } from '../../core/fx/ease.ts'
+import { outBack, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { HEADER } from '../../engines/puzzle/index.ts'
 import { CELLS, colOf, rowOf, SIZE } from './rules.ts'
-
-/** How long a slide takes to glide into place (s). */
-export const SLIDE_TIME = 0.15
 
 export interface Layout {
   x0: number
@@ -56,11 +53,23 @@ export function tileColor(side: Side, value: number): string {
   return t < 0.5 ? mix(a, b, t * 2) : mix(b, c, (t - 0.5) * 2)
 }
 
+/**
+ * Where each tile (by value) is drawn this frame, in cell units, with its
+ * speed (cells/s), the axis it last moved on (0 row, 1 column) and its squash
+ * spring. Cosmetic: the game eases these toward the state every frame.
+ */
+export interface TileVis {
+  x: Float32Array
+  y: Float32Array
+  speed: Float32Array
+  axis: Uint8Array
+  squash: number[]
+}
+
 export interface BoardView {
   side: Side
   tiles: readonly number[]
-  from: readonly number[]
-  movedAt: number
+  vis: TileVis
   /** Cells of a row / column that just fell into place, and when. */
   glow: readonly number[]
   glowAt: number
@@ -178,28 +187,36 @@ export function drawBoard(g: Draw, l: Layout, v: BoardView): void {
   }
 
   const gapCell = v.tiles.indexOf(0)
-  const t = prog(v.now - v.movedAt, 0, SLIDE_TIME)
-  const e = outCubic(t)
-  // The tiles that just arrived squash a touch as they hit the stop.
-  const land = prog(v.now - v.movedAt, SLIDE_TIME * 0.7, SLIDE_TIME + 0.16)
-  const squash = land > 0 && land < 1 ? Math.sin(land * Math.PI) * 0.07 : 0
+  // The empty socket breathes faintly: the eye finds the gap.
+  if (gapCell >= 0 && v.doneAt === null) {
+    const p = cellCentre(l, gapCell)
+    const b = 0.5 + 0.5 * Math.sin(v.now * 2.4)
+    g.rrect(
+      p.x - c / 2,
+      p.y - c / 2,
+      c,
+      c,
+      c * 0.18,
+      undefined,
+      alpha(col.light, 0.08 + 0.1 * b),
+      4,
+    )
+  }
   const pulse = 0.5 + 0.5 * Math.sin(v.now * 7)
   for (let i = 0; i < CELLS; i++) {
     const value = v.tiles[i] as number
     if (!value) continue
-    const from = v.from[i] as number
-    const moved = from !== i
-    const fx = moved ? lerp(colOf(from), colOf(i), e) : colOf(i)
-    const fy = moved ? lerp(rowOf(from), rowOf(i), e) : rowOf(i)
-    let x = x0 + fx * pitch
-    let y = y0 + fy * pitch
-    let sx = 1
-    let sy = 1
-    if (moved && squash > 0) {
-      const horiz = rowOf(from) === rowOf(i)
-      sx = horiz ? 1 - squash : 1 + squash * 0.6
-      sy = horiz ? 1 + squash * 0.6 : 1 - squash
-    }
+    const vx = v.vis.x[value] as number
+    const vy = v.vis.y[value] as number
+    const moving = vx !== colOf(i) || vy !== rowOf(i)
+    let x = x0 + vx * pitch
+    let y = y0 + vy * pitch
+    // Squash on the hit, stretch while it flies: both along the way it travels.
+    const sq = (v.vis.squash[value] as number) - 1
+    const st = Math.min(0.1, (v.vis.speed[value] as number) * 0.006)
+    const horiz = v.vis.axis[value] === 0
+    let sx = horiz ? 1 + st + sq : 1 - st * 0.6 - sq * 0.6
+    let sy = horiz ? 1 - st * 0.6 - sq * 0.6 : 1 + st + sq
     if (i === v.nope) {
       const k = prog(v.now - v.nopeAt, 0, 0.3)
       if (k < 1) x += Math.sin(k * Math.PI * 6) * 10 * (1 - k)
@@ -211,14 +228,21 @@ export function drawBoard(g: Draw, l: Layout, v: BoardView): void {
       y -= hop * c * 0.16
       sx = sy = 1 + hop * 0.06
     }
-    if (v.hint && !moved && gapCell >= 0 && isNext(i, gapCell)) {
+    if (v.hint && !moving && gapCell >= 0 && isNext(i, gapCell)) {
       g.alpha(0.35 + 0.5 * pulse, () =>
         g.rrect(x - 7, y - 7, c + 14, c + 14, c * 0.22, undefined, C.yellow, 7),
       )
     }
-    const home = value === i + 1 && (!moved || t >= 1)
-    if (sx !== 1 || sy !== 1) {
-      g.at(x + c / 2, y + c, 0, () => tileBlock(g, -c / 2, -c, c, value, v.side, home), sx, sy)
+    const home = value === i + 1 && !moving
+    if (Math.abs(sx - 1) > 0.002 || Math.abs(sy - 1) > 0.002) {
+      g.at(
+        x + c / 2,
+        y + c / 2,
+        0,
+        () => tileBlock(g, -c / 2, -c / 2, c, value, v.side, home),
+        sx,
+        sy,
+      )
     } else tileBlock(g, x, y, c, value, v.side, home)
   }
 }
@@ -228,6 +252,45 @@ function isNext(a: number, b: number): boolean {
     (rowOf(a) === rowOf(b) && Math.abs(colOf(a) - colOf(b)) === 1) ||
     (colOf(a) === colOf(b) && Math.abs(rowOf(a) - rowOf(b)) === 1)
   )
+}
+
+/**
+ * Races won, as pips down the margin left of the board (clear of the pause
+ * button, which sits at the stage's edge on the midline). The newest pops in
+ * with a ring `since` seconds after the win.
+ */
+export function drawWins(
+  g: Draw,
+  l: Layout,
+  side: Side,
+  wins: number,
+  target: number,
+  since: number,
+): void {
+  const size = (l.c + l.gap) * SIZE - l.gap
+  const x = (l.x0 - 28) / 2
+  const gap = 58
+  const y0 = l.y0 + size / 2 - ((target - 1) * gap) / 2
+  const col = SIDE[side]
+  const pop = prog(since, 0, 0.5)
+  for (let i = 0; i < target; i++) {
+    const y = y0 + i * gap
+    const on = i < wins
+    const fresh = on && i === wins - 1 && pop < 1
+    g.circle(x, y, 17, alpha(C.white, 0.14))
+    if (!on) continue
+    if (fresh) g.alpha(1 - pop, () => g.ring(x, y, 17 + pop * 44, col.light, 6))
+    g.at(
+      x,
+      y,
+      0,
+      () => {
+        g.circle(0, 0, 17, col.main)
+        g.circle(-5, -5, 5, alpha(C.white, 0.6))
+      },
+      fresh ? outBack(pop) : 1,
+    )
+  }
 }
 
 /** A small chip (move count, best time) under the board, with an optional emoji. */

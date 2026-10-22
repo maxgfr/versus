@@ -1,12 +1,21 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { neighbours } from './rules.ts'
+import { CELLS, foldPlan, neighbours, solvePlan } from './rules.ts'
 
-/** Seconds between the computer's taps. */
-export const PACE: Record<Difficulty, number> = { easy: 1.3, normal: 0.8, hard: 0.45 }
+/** Seconds between the computer's taps (each one varies a little, like a person's). */
+export const PACE: Record<Difficulty, number> = { easy: 1.3, normal: 0.8, hard: 0.5 }
 
 /** Chance that a tap is a slip (an adjacent tile moved for nothing, undone on the next tap). */
 export const SLIP: Record<Difficulty, number> = { easy: 0.1, normal: 0.03, hard: 0 }
+
+/**
+ * The computer's taps for a scramble: the walk undone step by step, and on
+ * hard with every straight run slid in one tap.
+ */
+export function botPlan(path: readonly number[], d: Difficulty): number[] {
+  const plan = solvePlan(path)
+  return d === 'hard' ? foldPlan(path[path.length - 1] ?? CELLS - 1, plan) : plan
+}
 
 /**
  * The computer's next tap. It follows its plan (the scramble undone move by

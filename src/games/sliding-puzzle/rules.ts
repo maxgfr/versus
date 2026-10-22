@@ -8,6 +8,12 @@ import { Rng } from '../../core/rng.ts'
 export const SIZE = 4
 export const CELLS = SIZE * SIZE
 export const SCRAMBLE_MOVES = 60
+/**
+ * A random walk can wander back near home: a 60-step walk lands anywhere from
+ * 12 to 42 tile steps from solved. Walks closer than this are redrawn, so every
+ * race (and every round of a match) is a real puzzle of similar size.
+ */
+export const MIN_DISTANCE = 22
 
 export const rowOf = (i: number): number => Math.floor(i / SIZE)
 export const colOf = (i: number): number => i % SIZE
@@ -38,6 +44,16 @@ export interface Scramble {
  * Same seed → same board on both halves.
  */
 export function scramble(rng: Rng, moves = SCRAMBLE_MOVES): Scramble {
+  let best = walk(rng, moves)
+  // A few redraws at most; keep the farthest walk if none reaches the bar.
+  for (let k = 0; k < 40 && distance(best.tiles) < Math.min(MIN_DISTANCE, moves); k++) {
+    const next = walk(rng, moves)
+    if (distance(next.tiles) > distance(best.tiles)) best = next
+  }
+  return best
+}
+
+function walk(rng: Rng, moves: number): Scramble {
   const tiles = solvedBoard()
   let gap = CELLS - 1
   let came = -1
@@ -59,6 +75,34 @@ export function scramble(rng: Rng, moves = SCRAMBLE_MOVES): Scramble {
  */
 export function solvePlan(path: readonly number[]): number[] {
   return path.slice(0, -1).reverse()
+}
+
+/**
+ * The same plan with straight runs folded into one tap: when the gap would walk
+ * two or more steps the same way along a row or column, tapping the far cell
+ * slides the whole run at once (as a quick player does). `gap` is where the
+ * gap is before the first tap.
+ */
+export function foldPlan(gap: number, plan: readonly number[]): number[] {
+  const out: number[] = []
+  let g = gap
+  let i = 0
+  while (i < plan.length) {
+    let to = plan[i] as number
+    const step = to - g
+    let j = i + 1
+    while (j < plan.length) {
+      const next = plan[j] as number
+      const inLine = Math.abs(step) === 1 ? rowOf(next) === rowOf(g) : true
+      if (next - to !== step || !inLine) break
+      to = next
+      j++
+    }
+    out.push(to)
+    g = to
+    i = j
+  }
+  return out
 }
 
 export interface Slid {
