@@ -17,6 +17,22 @@ export interface SceneView {
   kick: [number, number]
   /** Seconds since each player's kick last connected. */
   hitAge: [number, number]
+  /** Power 0..1 of each player's last connecting kick. */
+  power: [number, number]
+  /** Wind-up of each player's current kick, and whether it is still growing. */
+  charge: [number, number]
+  winding: [boolean, boolean]
+  /** Seconds since each player's last hop and landing; how hard that landing was. */
+  hopAge: [number, number]
+  landAge: [number, number]
+  landK: [number, number]
+  /** Seconds since the ball's last hard knock and how hard (0..1). */
+  bumpAge: number
+  bumpK: number
+  /** Ball squash spring (1 = round), cosmetic. */
+  squash: number
+  /** Recent ball positions, oldest first, while it flies fast. */
+  trail: readonly { x: number; y: number }[]
   /** Ball velocity, per step. */
   bv: [number, number]
   time: number
@@ -307,22 +323,37 @@ function ball(g: Draw, b: BodySnap, v: SceneView): void {
   const speed = Math.hypot(vx, vy)
   const f = clamp((PITCH.ground - BALL_R - y) / 320, 0, 1)
   g.shadow(x, PITCH.ground + 6, BALL_R * 1.15 * (1 - f * 0.5), 9, 0.4 * (1 - f * 0.6))
-  // A fresh kick: the ball is the one active thing, ringed in yellow.
-  const hit = Math.min(v.hitAge[0], v.hitAge[1])
+  // A fresh kick: the ball is the one active thing, ringed in yellow; a harder kick rings wider.
+  const kicker = v.hitAge[0] < v.hitAge[1] ? 0 : 1
+  const hit = v.hitAge[kicker]
+  const power = v.power[kicker]
   if (hit < 0.45) {
     const t = hit / 0.45
-    g.alpha(1 - t, () => g.ring(x, y, BALL_R + 10 + outCubic(t) * 40, C.yellow, 10 * (1 - t) + 2))
-  }
-  if (speed > 9) {
-    const n = 4
-    for (let i = n; i >= 1; i--) {
-      const k = i * 0.9
-      g.alpha(0.16 * (1 - i / (n + 1)) * clamp((speed - 9) / 8, 0, 1) * 2, () =>
-        g.circle(x - vx * k, y - vy * k, BALL_R * (1 - i * 0.08), '#fff8ef'),
+    g.alpha(1 - t, () =>
+      g.ring(
+        x,
+        y,
+        BALL_R + 10 + outCubic(t) * (30 + power * 60),
+        C.yellow,
+        (6 + power * 8) * (1 - t) + 2,
+      ),
+    )
+    // A full-power strike flashes a star at the contact for a few frames.
+    if (power > 0.7 && hit < 0.12)
+      g.alpha(1 - hit / 0.12, () =>
+        g.star(x, y, BALL_R * (1.4 + power), alpha(C.white, 0.85), 6, 0.42, hit * 6),
       )
-    }
   }
-  const stretch = 1 + clamp((speed - 6) / 30, 0, 0.18)
+  // Motion trail: fading ghosts along the real path, wider and brighter the faster it flies.
+  const fast = clamp((speed - 9) / 14, 0, 1)
+  const tr = v.trail
+  for (let i = 0; i < tr.length; i++) {
+    const p = tr[i] as { x: number; y: number }
+    const f = (i + 1) / (tr.length + 1)
+    g.alpha(0.32 * f * fast, () => g.circle(p.x, p.y, BALL_R * (0.55 + 0.4 * f), '#fff8ef'))
+  }
+  // Stretched along its flight, squashed by the last knock (spring).
+  const stretch = (1 + clamp((speed - 6) / 30, 0, 0.18)) * v.squash
   const dir = Math.atan2(vy, vx)
   g.at(
     x,
@@ -374,67 +405,104 @@ function player(
   const airborne = clamp((PITCH.ground - BODY.h / 2 - 8 - body.y) / 60, 0, 1)
   shadow(g, body.x, body.y)
   const q = kick > 0 ? 1 - kick / KICK_TIME : 0
-  g.at(body.x, body.y, body.a, () => {
-    const hipY = BODY.h / 2 - 10
-    const shoulderY = -BODY.h / 2 + 26
-    // Back arm, behind the shirt.
-    const flail = airborne * Math.sin(v.time * 16 + side) * 0.5
-    const armA = (s: number) => s * (0.35 + airborne * 1.4) + flail * s
-    const arm = (s: number) => {
-      const t = armA(s)
-      const ax = s * (BODY.w / 2 - 4)
-      const hx = ax + Math.sin(t) * 46
-      const hy = shoulderY + Math.cos(t) * 46
-      g.line(ax, shoulderY, hx, hy, shade(col, -0.15), 18)
-      g.circle(hx, hy, 11, SKIN)
-    }
-    arm(-dir)
-    // Kicking leg swings forward over the hop, reaching out as the player comes down.
-    if (kick > 0) {
-      const th = dir * (0.3 + 1.15 * q)
-      const lx = Math.sin(th) * 76
-      const ly = hipY + Math.cos(th) * 76
-      g.line(0, hipY, lx * 0.55, hipY + (ly - hipY) * 0.55, shade(col, -0.35), 26)
-      g.line(lx * 0.55, hipY + (ly - hipY) * 0.55, lx, ly, '#f3eefa', 20)
-      g.ellipse(lx + dir * 9, ly + 2, 19, 12, BOOT, th)
-      g.alpha(0.6, () => g.ellipse(lx + dir * 4, ly - 2, 7, 3, '#ffffff', th))
-    }
-    // Standing legs: socks and boots under the shorts.
-    for (const sx of kick > 0 ? [-dir * 14] : [-15, 15]) {
-      g.line(sx, hipY, sx, BODY.h / 2 + 4, '#f3eefa', 20)
-      g.ellipse(sx + dir * 6, BODY.h / 2 + 8, 16, 10, BOOT)
-    }
-    // Shirt: a lipped, glossy block in the owner's colour.
-    const w = BODY.w
-    const h = BODY.h
-    g.rrect(-w / 2, -h / 2 + 7, w, h - 8, BODY.r, shade(col, -0.4))
-    g.rrect(
-      -w / 2,
-      -h / 2,
-      w,
-      h - 8,
-      BODY.r,
-      g.lin(-w / 2, 0, w / 2, 0, [
-        [0, shade(col, 0.15)],
-        [0.6, col],
-        [1, shade(col, -0.2)],
-      ]),
-    )
-    // Collar and a sash in the team's light tone.
-    g.arc(0, -h / 2 + 6, 14, 0.15 * Math.PI, 0.85 * Math.PI, SIDE[side].light, 6)
-    // Shorts.
-    g.rrect(-w / 2 + 1, 12, w - 2, h / 2 - 16, 16, '#f3eefa')
-    g.rrect(-w / 2 + 1, 12, w - 2, 8, 4, alpha('#000000', 0.12))
-    // Team mark on the chest: red circle, blue square.
-    g.sideMark(side, 0, -12, 12, C.white)
-    g.alpha(0.45, () => g.ellipse(-w * 0.22, -h * 0.3, w * 0.13, h * 0.09, '#ffffff', -0.5))
-    arm(dir)
-  })
-  let mood: Mood = kick > 0 ? 'wow' : 'happy'
+  // Squash & stretch: tall and thin off the launch, squat on a landing (harder = squatter),
+  // and a slow breath while standing.
+  const ha = v.hopAge[side]
+  const la = v.landAge[side]
+  const launch = ha < 0.25 ? Math.sin((ha / 0.25) * Math.PI) * 0.14 : 0
+  const land =
+    la < 0.32
+      ? -Math.sin((la / 0.32) * Math.PI) * (0.08 + v.landK[side] * 0.16) * (1 - la / 0.32 / 2)
+      : 0
+  const breathe = airborne < 0.1 && kick <= 0 ? Math.sin(v.time * 3 + side * 1.7) * 0.025 : 0
+  const sq = 1 + launch + land + breathe
+  // Keep the feet planted while squashing: scale about the soles, not the middle.
+  const foot = (BODY.h / 2) * (1 - sq)
+  // The wind-up: the kicking leg draws back while the finger is held, and snaps through on contact.
+  const wound = kick > 0 && v.hitAge[side] > ha ? v.charge[side] : 0
+  g.at(
+    body.x,
+    body.y + foot,
+    body.a,
+    () => {
+      const hipY = BODY.h / 2 - 10
+      const shoulderY = -BODY.h / 2 + 26
+      // Back arm, behind the shirt.
+      const flail = airborne * Math.sin(v.time * 16 + side) * 0.5
+      const armA = (s: number) => s * (0.35 + airborne * 1.4) + flail * s
+      const arm = (s: number) => {
+        const t = armA(s)
+        const ax = s * (BODY.w / 2 - 4)
+        const hx = ax + Math.sin(t) * 46
+        const hy = shoulderY + Math.cos(t) * 46
+        g.line(ax, shoulderY, hx, hy, shade(col, -0.15), 18)
+        g.circle(hx, hy, 11, SKIN)
+      }
+      arm(-dir)
+      // Kicking leg swings forward over the hop, reaching out as the player comes down.
+      if (kick > 0) {
+        // Right after contact the leg follows through high, harder kicks higher.
+        const ft =
+          v.hitAge[side] < 0.25 ? (1 - v.hitAge[side] / 0.25) * (0.4 + v.power[side] * 0.6) : 0
+        const th = dir * (0.3 + 1.15 * q - wound * 1.5 + ft)
+        const lx = Math.sin(th) * 76
+        const ly = hipY + Math.cos(th) * 76
+        g.line(0, hipY, lx * 0.55, hipY + (ly - hipY) * 0.55, shade(col, -0.35), 26)
+        g.line(lx * 0.55, hipY + (ly - hipY) * 0.55, lx, ly, '#f3eefa', 20)
+        // A wound-up boot glows: the more power held, the hotter.
+        if (wound > 0.15)
+          g.circle(
+            lx + dir * 9,
+            ly + 2,
+            24 + wound * 20,
+            g.rad(lx + dir * 9, ly + 2, 4, 24 + wound * 20, [
+              [0, alpha(C.yellow, 0.35 + wound * 0.45)],
+              [1, alpha(C.yellow, 0)],
+            ]),
+          )
+        g.ellipse(lx + dir * 9, ly + 2, 19, 12, BOOT, th)
+        g.alpha(0.6, () => g.ellipse(lx + dir * 4, ly - 2, 7, 3, '#ffffff', th))
+      }
+      // Standing legs: socks and boots under the shorts.
+      for (const sx of kick > 0 ? [-dir * 14] : [-15, 15]) {
+        g.line(sx, hipY, sx, BODY.h / 2 + 4, '#f3eefa', 20)
+        g.ellipse(sx + dir * 6, BODY.h / 2 + 8, 16, 10, BOOT)
+      }
+      // Shirt: a lipped, glossy block in the owner's colour.
+      const w = BODY.w
+      const h = BODY.h
+      g.rrect(-w / 2, -h / 2 + 7, w, h - 8, BODY.r, shade(col, -0.4))
+      g.rrect(
+        -w / 2,
+        -h / 2,
+        w,
+        h - 8,
+        BODY.r,
+        g.lin(-w / 2, 0, w / 2, 0, [
+          [0, shade(col, 0.15)],
+          [0.6, col],
+          [1, shade(col, -0.2)],
+        ]),
+      )
+      // Collar and a sash in the team's light tone.
+      g.arc(0, -h / 2 + 6, 14, 0.15 * Math.PI, 0.85 * Math.PI, SIDE[side].light, 6)
+      // Shorts.
+      g.rrect(-w / 2 + 1, 12, w - 2, h / 2 - 16, 16, '#f3eefa')
+      g.rrect(-w / 2 + 1, 12, w - 2, 8, 4, alpha('#000000', 0.12))
+      // Team mark on the chest: red circle, blue square.
+      g.sideMark(side, 0, -12, 12, C.white)
+      g.alpha(0.45, () => g.ellipse(-w * 0.22, -h * 0.3, w * 0.13, h * 0.09, '#ffffff', -0.5))
+      arm(dir)
+    },
+    1 / sq,
+    sq,
+  )
+  let mood: Mood = wound > 0.5 ? 'angry' : kick > 0 ? 'wow' : 'happy'
   if (v.phase === 'goal') mood = v.scorer === side ? 'grin' : 'sad'
   if (v.winner !== null) mood = v.winner === side ? 'grin' : 'sad'
   // The head squashes as the kick connects.
-  const squash = 1 + 0.14 * clamp(1 - v.hitAge[side] / 0.2, 0, 1)
+  const squash =
+    1 + (0.08 + v.power[side] * 0.1) * clamp(1 - v.hitAge[side] / 0.2, 0, 1) - land * 0.6
   g.blob(head.x, head.y, HEAD_R, SKIN, {
     mood,
     look: [dir * 0.8, 0.1],

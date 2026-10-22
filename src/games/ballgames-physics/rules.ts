@@ -44,8 +44,29 @@ export const HOME_X: readonly [number, number] = [300, 700]
 export const HOP_V = 15
 /** Largest sideways speed a hop can carry a player toward the ball. */
 export const HOP_MAX_X = 7
-/** Ball speed given by a connecting kick, per step. */
-export const KICK_SPEED = 22
+/** Ball speed given by a connecting kick, per step: a soft poke to a full-power strike. */
+export const KICK_MIN = 14
+export const KICK_MAX = 30
+/** Speed of an average kick (half power). */
+export const KICK_SPEED = (KICK_MIN + KICK_MAX) / 2
+/**
+ * Hard cap on the ball's speed per step. Under the crossbar's thickness plus the
+ * ball's diameter, so no step can carry the ball through any static wall.
+ */
+export const MAX_BALL = 34
+/** Seconds of holding the finger down after a hop to wind the leg up fully. */
+export const CHARGE_TIME = 0.4
+/** Gravity in world units per step² (matter: 1 × 0.0012 × (1000/60)²). */
+export const GRAV = 0.0012 * (1000 / 60) ** 2
+/** The ball's air drag per step, as in sim.ts. */
+export const BALL_AIR = 0.008
+/** The ball's bounce off the grass and the walls, as in sim.ts. */
+export const BALL_BOUNCE = 0.65
+/**
+ * Steps a player must sit still (off the grass, on the ball, the rival or a
+ * crossbar) before it counts as standing and may hop again.
+ */
+export const REST_STEPS = 6
 /**
  * Seconds a hop stays a kick: the whole airtime, so the landing is where the
  * ball gets hit. The leg swings forward over it and the body leans to the ball.
@@ -81,6 +102,21 @@ export function grounded(bodyY: number): boolean {
 }
 
 /**
+ * May a player hop? On the grass, or perched still on something (a crossbar,
+ * the ball, the rival's head) for a few steps: otherwise a player who lands on
+ * top of the goal would be stuck there for the rest of the match.
+ */
+export function canHop(bodyY: number, restSteps: number): boolean {
+  return grounded(bodyY) || restSteps >= REST_STEPS
+}
+
+/** Count of consecutive still steps off the grass (`vy` per step). */
+export function restCount(prev: number, bodyY: number, vy: number): number {
+  if (grounded(bodyY)) return 0
+  return Math.abs(vy) < 0.25 ? prev + 1 : 0
+}
+
+/**
  * Sideways speed of a hop toward the ball. A hop lasts about 70 steps, so this
  * carries the player most of the way to the ball's x by the time it lands.
  */
@@ -95,18 +131,128 @@ export function leanFor(bodyX: number, ballX: number): number {
 }
 
 /**
+ * How hard the kicker runs into the ball, per step: the kicker's velocity minus
+ * the ball's, along the line from the kicker to the ball. Negative = parting.
+ */
+export function closingSpeed(
+  from: { x: number; y: number },
+  fromV: { x: number; y: number },
+  ball: { x: number; y: number },
+  ballV: { x: number; y: number },
+): number {
+  const dx = ball.x - from.x
+  const dy = ball.y - from.y
+  const m = Math.hypot(dx, dy)
+  if (m === 0) return 0
+  return ((fromV.x - ballV.x) * dx + (fromV.y - ballV.y) * dy) / m
+}
+
+/**
+ * Kick power 0..1: the wind-up (how long the finger was held, 0..1) and the
+ * momentum of the hop into the ball both count. A quick tap on a soft hop is a
+ * poke; a held press while flying into the ball is a rocket.
+ */
+export function kickPower(charge: number, closing: number): number {
+  const c = Math.max(0, Math.min(1, charge))
+  const m = Math.max(0, Math.min(1, closing / 18))
+  return Math.max(0, Math.min(1, 0.2 + c * 0.5 + m * 0.4))
+}
+
+/** Ball speed per step for a kick of `power` 0..1. */
+export const kickSpeed = (power: number): number =>
+  KICK_MIN + (KICK_MAX - KICK_MIN) * Math.max(0, Math.min(1, power))
+
+/**
  * Velocity a connecting kick gives the ball. It is aimed from the kicker
- * toward the ball, biased toward the goal the kicker attacks and up a little.
+ * toward the ball, biased toward the goal the kicker attacks and up a little;
+ * its speed grows with `power`.
  */
 export function kickVelocity(
   from: { x: number; y: number },
   ball: { x: number; y: number },
   side: Side,
+  power = 0.5,
 ): { x: number; y: number } {
   const dx = ball.x - from.x + attackDir(side) * 160
   const dy = ball.y - from.y - 110
   const m = Math.hypot(dx, dy) || 1
-  return { x: (dx / m) * KICK_SPEED, y: (dy / m) * KICK_SPEED }
+  const v = kickSpeed(power)
+  return { x: (dx / m) * v, y: (dy / m) * v }
+}
+
+/** Scale a velocity down to at most `max` per step. */
+export function capped(v: { x: number; y: number }, max = MAX_BALL): { x: number; y: number } {
+  const m = Math.hypot(v.x, v.y)
+  return m <= max ? v : { x: (v.x / m) * max, y: (v.y / m) * max }
+}
+
+/** A body has somehow left the pitch box (squeezed through a wall): put it back. */
+export function escaped(x: number, y: number): boolean {
+  return (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    x < PITCH.left - 20 ||
+    x > PITCH.right + 20 ||
+    y < PITCH.ceil - 60 ||
+    y > PITCH.ground + 40
+  )
+}
+
+/**
+ * Where the ball will be over the next steps: plain flight with gravity and
+ * drag, bouncing off the grass, the ceiling and the back walls (crossbars and
+ * players ignored). Writes `n` points into `out` as x0, y0, x1, y1… and
+ * returns it. Bots read the future here; humans' hops lead the ball with it.
+ */
+export function ballPath(
+  x: number,
+  y: number,
+  vx: number,
+  vy: number,
+  n: number,
+  out: number[] = [],
+): number[] {
+  out.length = n * 2
+  const lo = PITCH.left + BALL_R
+  const hi = PITCH.right - BALL_R
+  const top = PITCH.ceil + BALL_R
+  const floor = PITCH.ground - BALL_R
+  for (let i = 0; i < n; i++) {
+    vx *= 1 - BALL_AIR
+    vy = vy * (1 - BALL_AIR) + GRAV
+    x += vx
+    y += vy
+    if (y > floor) {
+      y = floor
+      vy = vy > 0 ? -vy * BALL_BOUNCE : vy
+      if (Math.abs(vy) < 1) vy = 0
+    }
+    if (y < top) {
+      y = top
+      vy = Math.abs(vy) * BALL_BOUNCE
+    }
+    if (x < lo) {
+      x = lo
+      vx = Math.abs(vx) * BALL_BOUNCE
+    }
+    if (x > hi) {
+      x = hi
+      vx = -Math.abs(vx) * BALL_BOUNCE
+    }
+    out[i * 2] = x
+    out[i * 2 + 1] = y
+  }
+  return out
+}
+
+/** Steps a hop's aim leads the ball by: about when a hop meets it. */
+export const LEAD_STEPS = 18
+
+/** Where a hop should aim: the ball's x a moment from now. */
+export function leadX(x: number, y: number, vx: number, vy: number, steps = LEAD_STEPS): number {
+  if (steps <= 0) return x
+  const p = ballPath(x, y, vx, vy, steps)
+  return p[(steps - 1) * 2] ?? x
 }
 
 /** Where the ball is put for a kick-off: the centre spot, a little dropped and jittered by `jitter`. */

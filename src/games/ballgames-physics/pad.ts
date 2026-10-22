@@ -33,6 +33,8 @@ export interface PadView {
   labelColor?: string
   /** 0..1 recharge; 1 = ready to go. */
   ready: number
+  /** 0..1 wind-up held for the current kick (0 hides the power ring). */
+  charge?: number
   /** Seconds since the last tap (large when never). */
   pressAge: number
   time: number
@@ -104,6 +106,20 @@ export function drawPad(g: Draw, p: PadView): void {
           alpha(ready ? col.light : col.main, glow),
           12,
         )
+      }
+      // Power ring: the wind-up held for this kick, yellow, inside the recharge ring.
+      const charge = clamp(p.charge ?? 0, 0, 1)
+      if (charge > 0) {
+        g.arc(
+          0,
+          by,
+          R + 8,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * charge,
+          alpha(C.yellow, 0.55 + charge * 0.45),
+          10 + charge * 8,
+        )
+        if (charge >= 1) g.ring(0, by, R + 40 + Math.sin(p.time * 30) * 4, alpha(C.yellow, 0.5), 5)
       }
       // Press: sink into the lip, then spring back.
       const t = p.pressAge
