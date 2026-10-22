@@ -30,8 +30,17 @@ export const LEAP_T = 0.44
 export const SHOVE_T = 0.3
 /** A tap made this close to landing is kept and played on touchdown. */
 export const BUFFER_T = 0.16
-/** Landings on a pad before it sinks (once nobody is standing on it). */
+/** Landings on a pad before it sinks (once nobody is standing on it), early in a round. */
 export const SINK_AT = 3
+/**
+ * The pond weakens as a round drags on: from `ramp[0]` s pads sink after two
+ * landings; from `ramp[1]` s after one, and the pond shrinks from its rim (a
+ * mirrored pair of empty pads every SHRINK_T s) so sitting still cannot last.
+ * A deciding round (both one win away) weakens sooner.
+ */
+export const RAMP: [number, number] = [20, 36]
+export const RAMP_DECIDER: [number, number] = [12, 24]
+export const SHRINK_T = 1.4
 /** A frog with no pad in reach for this long sinks. */
 export const STRANDED_T = 1.2
 /** Reach of a hop, in pads (Chebyshev distance). */
@@ -75,6 +84,10 @@ export interface World {
   frogs: Frog[]
   /** Seconds since the round began. */
   t: number
+  /** Round times at which pads start sinking after two landings, then after one. */
+  ramp: [number, number]
+  /** World time the rim next loses a pair of pads (once the pond shrinks). */
+  shrinkT: number
 }
 
 export type Ev =
@@ -96,6 +109,8 @@ export type Ev =
   | { k: 'clash'; x: number; y: number }
   | { k: 'fall'; x: number; y: number; side: Side; stranded: boolean }
   | { k: 'sink'; x: number; y: number }
+  /** The pond just weakened: pads now sink after `n` landings. */
+  | { k: 'ramp'; n: number }
 
 export const padIdx = (c: number, r: number): number => r * COLS + c
 export const padCol = (i: number): number => i % COLS
@@ -115,7 +130,7 @@ export function padDist(a: number, b: number): number {
 }
 
 /** Spawns: red at the bottom middle, blue at the top middle (point mirror images). */
-export function newWorld(): World {
+export function newWorld(ramp: [number, number] = RAMP): World {
   const frogs: Frog[] = ([0, 1] as Side[]).map((side) => {
     const pad = side === 0 ? padIdx(2, ROWS - 1) : padIdx(2, 0)
     return {
@@ -141,7 +156,14 @@ export function newWorld(): World {
     sunkT: Array.from({ length: COLS * ROWS }, () => -1),
     frogs,
     t: 0,
+    ramp: [ramp[0], ramp[1]],
+    shrinkT: ramp[1],
   }
+}
+
+/** Landings a pad takes before it sinks, at the pond's current age. */
+export function sinkAt(w: World, t = w.t): number {
+  return t >= w.ramp[1] ? 1 : t >= w.ramp[0] ? 2 : SINK_AT
 }
 
 /** A frog stands on or is flying to this pad (so it cannot sink). */
@@ -284,6 +306,18 @@ export function stepWorld(
   const over = decided(w)
   // 1. Landings. Two frogs touching down on one pad together clash and bounce back.
   const landing = w.frogs.filter((f) => f.fellT < 0 && f.air && w.t >= landsAt(f) - 1e-9)
+  // The shrinking rim can take a pad out from under a frog in the air: splash.
+  for (let k = landing.length - 1; k >= 0; k--) {
+    const f = landing[k] as Frog
+    if (w.sunk[f.pad] !== 1) continue
+    landing.splice(k, 1)
+    const p = padXY(f.pad)
+    f.air = false
+    f.queue = -1
+    f.fellT = w.t
+    f.stranded = false
+    ev.push({ k: 'fall', x: p.x, y: p.y, side: f.side, stranded: false })
+  }
   const clash = landing.length === 2 && landing[0]?.pad === landing[1]?.pad
   if (clash) {
     const p = padXY(landing[0]?.pad ?? 0)
@@ -331,17 +365,65 @@ export function stepWorld(
         }
       } else f.stuck = 0
     }
+  const limit = sinkAt(w)
   // 4. Pads sink once they have been landed on enough and nobody is on (or flying to) them.
   for (let i = 0; i < COLS * ROWS; i++) {
     if (w.sunk[i] === 1) continue
-    if ((w.uses[i] ?? 0) >= SINK_AT && !occupied(w, i)) {
+    if ((w.uses[i] ?? 0) >= limit && !occupied(w, i)) {
       w.sunk[i] = 1
       w.sunkT[i] = w.t
       const p = padXY(i)
       ev.push({ k: 'sink', x: p.x, y: p.y })
     }
   }
+  // 5. Late in a round the pond shrinks from the rim: the outermost empty pad
+  // and its mirror image go together, so neither side loses ground first.
+  if (w.t >= w.shrinkT - 1e-9 && !decided(w)) {
+    w.shrinkT += SHRINK_T
+    const i = rimPad(w)
+    if (i >= 0)
+      for (const j of [i, COLS * ROWS - 1 - i]) {
+        if (w.sunk[j] === 1 || standing(w, j)) continue
+        w.sunk[j] = 1
+        w.sunkT[j] = w.t
+        const p = padXY(j)
+        ev.push({ k: 'sink', x: p.x, y: p.y })
+      }
+  }
   w.t += dt
+  const next = sinkAt(w)
+  if (next !== limit) ev.push({ k: 'ramp', n: next })
+}
+
+/** How far out a pad sits: 0 at the centre, about 1.41 in the corners. */
+export function rimDist(i: number): number {
+  return Math.hypot(
+    (2 * padCol(i) - (COLS - 1)) / (COLS - 1),
+    (2 * padRow(i) - (ROWS - 1)) / (ROWS - 1),
+  )
+}
+
+/** A frog is standing (not flying) on this pad. */
+export function standing(w: World, i: number): boolean {
+  return w.frogs.some((f) => f.fellT < 0 && !f.air && f.pad === i)
+}
+
+/**
+ * The outermost pad afloat with nobody standing on it (lowest index on ties),
+ * or -1. A frog only flying to it does not save it.
+ */
+export function rimPad(w: World): number {
+  let best = -1
+  let bd = -1
+  for (let i = 0; i < COLS * ROWS; i++) {
+    if (w.sunk[i] === 1 || standing(w, i)) continue
+    const d = rimDist(i)
+    if (d > bd + 1e-9) {
+      bd = d
+      best = i
+    }
+  }
+  return best
 }
 
 /** The side that stays on the pond, 'draw' if both are gone together, null while both are on it. */

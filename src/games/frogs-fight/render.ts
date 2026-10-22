@@ -22,6 +22,7 @@ import {
   ROWS,
   shoveDest,
   SINK_AT,
+  sinkAt,
   type World,
 } from './rules.ts'
 
@@ -125,12 +126,22 @@ function padDip(w: World, i: number, now: number): number {
  * A lily pad: glossy green leaf with a notch and veins. It yellows, cracks and
  * starts to bob as it is landed on; a doomed pad bubbles under its frog.
  */
-function pad(g: Draw, i: number, uses: number, now: number, scale = 1, fade = 1, dip = 0): void {
+function pad(
+  g: Draw,
+  i: number,
+  uses: number,
+  now: number,
+  scale = 1,
+  fade = 1,
+  dip = 0,
+  warn = 0,
+): void {
   const p = padXY(i)
   const wear = Math.min(uses, SINK_AT)
   const bob = wear >= SINK_AT - 1 ? Math.sin(now * (wear >= SINK_AT ? 9 : 5) + i) : 0
   const x = p.x
-  const y = p.y + bob * (wear >= SINK_AT ? 3 : 1.5) + dip * 9
+  const y =
+    p.y + bob * (wear >= SINK_AT ? 3 : 1.5) + dip * 9 + Math.sin(now * 15 + i * 1.3) * warn * 3
   const r = PAD_R * scale * (1 - wear * 0.03) * (1 - dip * 0.05)
   if (r <= 0) return
   const rot = -0.9 + ((i * 1.7) % 1.2)
@@ -524,6 +535,10 @@ export function renderPond(g: Draw, s: State, now: number, v: View): void {
   water(g, t)
   bank(g, 1)
   bank(g, 0)
+  const limit = sinkAt(w, t)
+  // The pond trembles in the two seconds before it weakens.
+  const nextRamp = t < w.ramp[0] ? w.ramp[0] : t < w.ramp[1] ? w.ramp[1] : Infinity
+  const warn = r.phase === 'play' && nextRamp - t < 2 ? 1 - (nextRamp - t) / 2 : 0
   // From round 2, pads pop up from the middle out and the frogs drop in.
   const fresh = r.round > 1 && r.phase === 'play'
   for (let i = 0; i < COLS * ROWS; i++) {
@@ -536,7 +551,8 @@ export function renderPond(g: Draw, s: State, now: number, v: View): void {
       const delay = Math.abs(padRow(i) - (ROWS - 1) / 2) * 0.05 + (i % COLS) * 0.015
       sc = outBack(clamp01((t - delay) / 0.32))
     }
-    pad(g, i, w.uses[i] ?? 0, t, sc, 1, padDip(w, i, t))
+    // Wear shows landings left before it sinks, so pads yellow as the pond weakens.
+    pad(g, i, (w.uses[i] ?? 0) + SINK_AT - limit, t, sc, 1, padDip(w, i, t), warn)
   }
   if (r.phase === 'play' && !v.over) hints(g, w, t, v.hints)
   // The round's survivor cheers until the next round (and through the ending).

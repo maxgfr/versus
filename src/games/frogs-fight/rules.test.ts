@@ -13,10 +13,15 @@ import {
   LEAP_T,
   newWorld,
   padIdx,
+  RAMP,
+  RAMP_DECIDER,
+  rimDist,
   roundWinner,
   ROWS,
   SHOVE_T,
+  SHRINK_T,
   shoveDest,
+  sinkAt,
   STRANDED_T,
   stepWorld,
   type World,
@@ -348,14 +353,96 @@ describe('frog bot', () => {
     })
   }
 
-  it('hard beats easy most of the time, on either side', () => {
-    let hard = 0
-    const n = 12
+  /** Rounds the stronger bot wins out of `n`, sides alternating. */
+  const wins = (strong: Difficulty, weak: Difficulty, n: number): number => {
+    let won = 0
     for (let seed = 0; seed < n; seed++) {
       const swap = seed % 2 === 1
-      const w = round(seed * 7 + 1, swap ? ['easy', 'hard'] : ['hard', 'easy'])
-      if (w === (swap ? 1 : 0)) hard++
+      const w = round(seed * 7 + 1, swap ? [weak, strong] : [strong, weak])
+      if (w === (swap ? 1 : 0)) won++
     }
-    expect(hard).toBeGreaterThanOrEqual(n * 0.75)
+    return won
+  }
+
+  it('hard beats easy, on either side', () => {
+    expect(wins('hard', 'easy', 12)).toBeGreaterThanOrEqual(11)
+  })
+
+  it('hard beats normal most of the time, on either side', () => {
+    expect(wins('hard', 'normal', 24)).toBeGreaterThanOrEqual(17)
+  })
+
+  it('normal beats easy most of the time, on either side', () => {
+    expect(wins('normal', 'easy', 12)).toBeGreaterThanOrEqual(10)
+  })
+})
+
+describe('the pond weakens as a round drags on', () => {
+  it('pads take three landings, then two, then one', () => {
+    const w = newWorld()
+    expect(sinkAt(w)).toBe(3)
+    expect(sinkAt(w, RAMP[0])).toBe(2)
+    expect(sinkAt(w, RAMP[1])).toBe(1)
+    // A deciding round weakens sooner.
+    const d = newWorld(RAMP_DECIDER)
+    expect(RAMP_DECIDER[0]).toBeLessThan(RAMP[0])
+    expect(sinkAt(d, RAMP_DECIDER[0])).toBe(2)
+  })
+
+  it('a twice-landed pad sinks once the pond has weakened, and the change is announced', () => {
+    const [w] = stage([2, 7], [4, 0])
+    const a = padIdx(2, 5)
+    w.uses[a] = 2
+    run(w, 3)
+    expect(w.sunk[a]).toBe(0)
+    w.t = RAMP[0] - STEP / 2
+    const ev: Ev[] = []
+    run(w, 2, [], ev)
+    expect(ev.some((e) => e.k === 'ramp' && e.n === 2)).toBe(true)
+    expect(w.sunk[a]).toBe(1)
+  })
+
+  it('late on, the rim sinks in mirrored pairs, never under a frog', () => {
+    const [w, red, blue] = stage([0, 0], [4, 7])
+    w.t = RAMP[1]
+    const ev: Ev[] = []
+    run(w, 1, [], ev)
+    const sunk = ev.filter((e) => e.k === 'sink')
+    // The corners not under a frog: (4, 0) and its mirror (0, 7).
+    expect(sunk.length).toBe(2)
+    expect(w.sunk[padIdx(4, 0)]).toBe(1)
+    expect(w.sunk[padIdx(0, 7)]).toBe(1)
+    expect(w.sunk[red.pad]).toBe(0)
+    expect(w.sunk[blue.pad]).toBe(0)
+    // Every SHRINK_T another pair goes, outermost first.
+    run(w, Math.ceil(SHRINK_T / STEP))
+    expect(w.sunk.filter((v) => v === 1).length).toBe(4)
+    const afloat = w.sunk.map((v, i) =>
+      v === 1 || i === red.pad || i === blue.pad ? 0 : rimDist(i),
+    )
+    const gone = w.sunk.map((v, i) => (v === 1 ? rimDist(i) : 9))
+    expect(Math.max(...afloat)).toBeLessThanOrEqual(Math.min(...gone))
+  })
+
+  it('a frog in the air loses its landing pad to the rim and splashes in', () => {
+    const [w, red] = stage([1, 6], [2, 0])
+    // The other corners are gone: red leaps for the last one just as the rim starts to go.
+    for (const i of [padIdx(0, 0), padIdx(4, 0), padIdx(4, 7)]) w.sunk[i] = 1
+    w.t = RAMP[1] - 0.1
+    w.shrinkT = RAMP[1]
+    stepWorld(w, [padIdx(0, 7), undefined], STEP, [])
+    settle(w)
+    expect(red.fellT).toBeGreaterThanOrEqual(0)
+    expect(roundWinner(w)).toBe(1)
+  })
+
+  it('two frogs that never move still get a result', () => {
+    const w = newWorld()
+    let n = 0
+    while (roundWinner(w) === null && n < 60 * 120) {
+      stepWorld(w, [], STEP, [])
+      n++
+    }
+    expect(roundWinner(w)).not.toBeNull()
   })
 })

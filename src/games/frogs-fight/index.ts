@@ -16,7 +16,9 @@ import {
   padXY,
   ROWS,
   roundWinner,
-  SINK_AT,
+  RAMP,
+  RAMP_DECIDER,
+  sinkAt,
   stepWorld,
   type World,
 } from './rules.ts'
@@ -79,14 +81,18 @@ class Frogs extends BaseGame<State> {
       })
       return reach.length === 1 ? (reach[0] as Side) : half
     }
-    return { w: newWorld(), rounds: roundsNew(this.target) }
+    // A single-round match is its own decider.
+    return { w: newWorld(this.target === 1 ? RAMP_DECIDER : RAMP), rounds: roundsNew(this.target) }
   }
 
   protected step(dt: number): void {
     const s = this.s
     const { ctx } = this
     if (roundsStep(s.rounds, this.time, 1.8)) {
-      s.w = newWorld()
+      // A deciding round (both one win away) weakens the pond sooner.
+      const w = s.rounds.wins
+      const decider = w[0] === this.target - 1 && w[1] === this.target - 1
+      s.w = newWorld(decider ? RAMP_DECIDER : RAMP)
       ctx.audio.play('go')
       return
     }
@@ -191,7 +197,7 @@ class Frogs extends BaseGame<State> {
       case 'land': {
         const k = e.shoved ? 0.6 : e.d >= 2 ? 1 : 0.45
         audio.play('tap', 1.05 - k * 0.3 + rng.next() * 0.1)
-        if (e.n >= SINK_AT) audio.play('slide', 0.7)
+        if (e.n >= sinkAt(this.s.w)) audio.play('slide', 0.7)
         fx.ring(e.x, e.y, SIDE[e.side].light, 70 + k * 60)
         fx.burst(e.x, e.y, '#d8fbff', {
           count: Math.round(6 + k * 10),
@@ -270,6 +276,16 @@ class Frogs extends BaseGame<State> {
         fx.flash('#bff6ff', 0.2)
         fx.shake(0.55)
         fx.stop(8)
+        break
+      case 'ramp':
+        // The pond weakens: a rumble, a cold flash and a warning for both players.
+        audio.play('slide', e.n === 1 ? 0.55 : 0.75)
+        audio.play('splash', 0.6)
+        audio.buzz(40)
+        fx.flash('#9fe6ff', 0.18)
+        fx.shake(0.3)
+        for (const side of [0, 1] as Side[])
+          floatFor(fx, side, e.n === 1 ? 'The pond shrinks!' : 'Pads weaken!')
         break
       case 'sink':
         audio.play('splash', 1.5)
