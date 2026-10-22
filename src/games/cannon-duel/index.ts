@@ -318,7 +318,8 @@ class CannonDuel extends TurnGame<State> {
       this.time,
     )
     for (const side of [0, 1] as Side[]) {
-      this.aims[side].render(g)
+      // Online, each phone shows only its own player's drag band.
+      if (g.viewer === null || side === g.viewer) this.aims[side].render(g)
       // The keep's pips jolt when it takes a hit.
       const y = hudY(g, side, 160)
       const x = side === 0 ? W - 150 : 150

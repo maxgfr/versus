@@ -270,10 +270,12 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       s.turn === side ? look.fired : 1,
     )
   }
-  if (look.aim && s.phase === 'aim') drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
+  // The flight preview is the shooter's control: online, only their own phone shows it.
+  const own = g.viewer === null || g.viewer === s.turn
+  if (look.aim && s.phase === 'aim' && own) drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
   drawFlight(g, look.shell, look.trail)
   for (const side of [0, 1] as Side[]) {
-    if (!look.hint[side]) continue
+    if (!look.hint[side] || (g.viewer !== null && side !== g.viewer)) continue
     const y = side === 0 ? MID + 330 : MID - 330
     banner(g, side, 'Pull back anywhere, let go to fire', y, {
       size: 38,
