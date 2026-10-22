@@ -14,8 +14,12 @@ import {
 
 export const TANK_R = 34
 export const SPEED = 250
+/** How fast the hull reaches the stick's speed (1/s): snappy, but with a little weight. */
+export const ACCEL = 14
 export const TURN = 4.4
 export const SHELL_SPEED = 640
+/** Share of the hull's forward speed a fired shell inherits: a charging tank shoots harder. */
+export const INHERIT = 0.5
 export const SHELL_R = 10
 export const MAX_BOUNCES = 2
 export const SHELL_LIFE = 3.6
@@ -83,10 +87,20 @@ export interface Drive {
 }
 
 export type Ev =
-  | { k: 'shot'; x: number; y: number; a: number; side: Side }
-  | { k: 'bounce'; x: number; y: number }
-  | { k: 'hit'; x: number; y: number; side: Side; vx: number; vy: number }
-  | { k: 'kill'; x: number; y: number; side: Side }
+  | { k: 'shot'; x: number; y: number; a: number; side: Side; id: number }
+  | { k: 'bounce'; x: number; y: number; sp: number }
+  | {
+      k: 'hit'
+      x: number
+      y: number
+      side: Side
+      vx: number
+      vy: number
+      /** Tank id that was hit, and the shell's ricochets before it landed. */
+      id: number
+      bounces: number
+    }
+  | { k: 'kill'; x: number; y: number; side: Side; vx: number; vy: number; id: number }
   | { k: 'clash'; x: number; y: number }
   | { k: 'fizz'; x: number; y: number }
 
@@ -148,7 +162,7 @@ export function stepWorld(
     if (!t.alive) continue
     const d = drives[i]
     t.cd = Math.max(0, t.cd - dt)
-    let speed = 0
+    let want = 0
     if (d) {
       const m = Math.min(1, Math.hypot(d.jx, d.jy))
       if (m > 0.12) {
@@ -156,15 +170,28 @@ export function stepWorld(
         const turn = Math.max(-TURN * dt, Math.min(TURN * dt, diff))
         t.a += turn
         const align = Math.max(0, Math.cos(diff))
-        speed = SPEED * m * align * align
+        // How far the stick is pushed is how fast the tank goes.
+        want = SPEED * m * align * align
       }
     }
+    // Forward speed eases toward the stick's: the hull has a little weight.
+    const cur = t.vx * Math.cos(t.a) + t.vy * Math.sin(t.a)
+    const speed = want + (Math.max(0, cur) - want) * Math.exp(-ACCEL * dt)
     t.vx = Math.cos(t.a) * speed
     t.vy = Math.sin(t.a) * speed
+    const ox = t.x
+    const oy = t.y
     t.x += t.vx * dt
     t.y += t.vy * dt
     t.tread += speed * dt
-    collideCircle(grid, t, TANK_R)
+    if (collideCircle(grid, t, TANK_R)) {
+      // Grinding into a wall bleeds the speed it could not use.
+      const real = Math.hypot(t.x - ox, t.y - oy) / dt
+      if (real < speed) {
+        t.vx = Math.cos(t.a) * real
+        t.vy = Math.sin(t.a) * real
+      }
+    }
     if (d?.fire && t.cd <= 0) {
       const mine = w.shells.filter((s) => s.owner === t.id).length
       const tx = t.x + Math.cos(t.a) * (TANK_R + 18)
@@ -175,14 +202,15 @@ export function stepWorld(
         ev.push({ k: 'fizz', x: tx, y: ty })
         continue
       }
+      const muzzle = SHELL_SPEED + Math.max(0, speed) * INHERIT
       w.shells.push({
         id: w.nextId++,
         owner: t.id,
         side: t.side,
         x: tx,
         y: ty,
-        vx: Math.cos(t.a) * SHELL_SPEED,
-        vy: Math.sin(t.a) * SHELL_SPEED,
+        vx: Math.cos(t.a) * muzzle,
+        vy: Math.sin(t.a) * muzzle,
         bounces: 0,
         born: w.t,
       })
@@ -190,7 +218,7 @@ export function stepWorld(
       t.x -= Math.cos(t.a) * 6
       t.y -= Math.sin(t.a) * 6
       collideCircle(grid, t, TANK_R)
-      ev.push({ k: 'shot', x: tx, y: ty, a: t.a, side: t.side })
+      ev.push({ k: 'shot', x: tx, y: ty, a: t.a, side: t.side, id: t.id })
     }
   }
   // Tanks bump each other.
@@ -203,8 +231,9 @@ export function stepWorld(
         collideCircle(grid, b, TANK_R)
       }
     }
-  // Shells fly, bounce and hit.
+  // Shells fly, bounce and hit. Where each started the step, for the clash test.
   const dead = new Set<number>()
+  const from = w.shells.map((s) => ({ x: s.x, y: s.y }))
   for (const s of w.shells) {
     const n = moveBouncing(grid, s, dt)
     if (n) {
@@ -214,7 +243,7 @@ export function stepWorld(
         ev.push({ k: 'fizz', x: s.x, y: s.y })
         continue
       }
-      ev.push({ k: 'bounce', x: s.x, y: s.y })
+      ev.push({ k: 'bounce', x: s.x, y: s.y, sp: Math.hypot(s.vx, s.vy) })
     }
     if (w.t - s.born > SHELL_LIFE) {
       dead.add(s.id)
@@ -232,21 +261,35 @@ export function stepWorld(
       t.x += s.vx * k
       t.y += s.vy * k
       collideCircle(grid, t, TANK_R)
-      ev.push({ k: 'hit', x: s.x, y: s.y, side: t.side, vx: s.vx, vy: s.vy })
+      ev.push({
+        k: 'hit',
+        x: s.x,
+        y: s.y,
+        side: t.side,
+        vx: s.vx,
+        vy: s.vy,
+        id: t.id,
+        bounces: s.bounces,
+      })
       if (t.hp <= 0) {
         t.alive = false
-        ev.push({ k: 'kill', x: t.x, y: t.y, side: t.side })
+        t.vx = t.vy = 0
+        ev.push({ k: 'kill', x: t.x, y: t.y, side: t.side, vx: s.vx, vy: s.vy, id: t.id })
       }
       break
     }
   }
-  // Shells cancel each other out.
+  // Shells cancel each other out. Two shells meeting head-on close ~22 units a
+  // step, more than their size: test the closest approach over the whole step
+  // so they can't pass through each other.
   for (let i = 0; i < w.shells.length; i++)
     for (let j = i + 1; j < w.shells.length; j++) {
       const a = w.shells[i] as Shell
       const b = w.shells[j] as Shell
       if (dead.has(a.id) || dead.has(b.id)) continue
-      if ((a.x - b.x) ** 2 + (a.y - b.y) ** 2 < (SHELL_R * 2) ** 2) {
+      const fa = from[i] as { x: number; y: number }
+      const fb = from[j] as { x: number; y: number }
+      if (closest(fa.x - fb.x, fa.y - fb.y, a.x - b.x, a.y - b.y) < (SHELL_R * 2) ** 2) {
         dead.add(a.id)
         dead.add(b.id)
         ev.push({ k: 'clash', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
@@ -254,6 +297,17 @@ export function stepWorld(
     }
   if (dead.size) w.shells = w.shells.filter((s) => !dead.has(s.id))
   w.t += dt
+}
+
+/** Squared distance to the origin of the closest point on the segment p0 → p1. */
+function closest(x0: number, y0: number, x1: number, y1: number): number {
+  const dx = x1 - x0
+  const dy = y1 - y0
+  const l2 = dx * dx + dy * dy
+  const t = l2 < 1e-9 ? 0 : Math.max(0, Math.min(1, -(x0 * dx + y0 * dy) / l2))
+  const x = x0 + dx * t
+  const y = y0 + dy * t
+  return x * x + y * y
 }
 
 /** The side still standing, 'draw' if nobody is, null while both fight on. */

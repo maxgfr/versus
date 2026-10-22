@@ -10,8 +10,19 @@ import {
   reachable,
   solidCell,
 } from '../../engines/arena/index.ts'
-import { TankBot } from './bot.ts'
-import { type Drive, type Ev, HP, MAPS, newWorld, roundWinner, stepWorld, TANK_R } from './rules.ts'
+import { bankShot, TankBot } from './bot.ts'
+import {
+  type Drive,
+  type Ev,
+  HP,
+  MAPS,
+  newWorld,
+  roundWinner,
+  SHELL_SPEED,
+  SPEED,
+  stepWorld,
+  TANK_R,
+} from './rules.ts'
 
 describe('arena maps', () => {
   it('are point-symmetric, fully connected and have every spawn', () => {
@@ -74,6 +85,99 @@ describe('tanks', () => {
     for (let i = 0; i < 40; i++) stepWorld(w, grid, i === 0 ? drives : [], STEP, ev)
     expect(ev.some((e) => e.k === 'shot')).toBe(true)
     expect(blue.hp).toBe(HP - 1)
+  })
+
+  it('two shells crossing at speed cancel out instead of slipping past', () => {
+    const grid = parseMap(['..........', '..........', '..........'])
+    const w = newWorld(grid, false)
+    w.tanks.length = 0
+    // Closing 21.3 units a step on lines 17 apart: their overlap window is only
+    // ~21 units long, so checking positions at whole steps alone would miss it.
+    const close = (SHELL_SPEED * 2) / 60
+    for (const [id, x, y, vx] of [
+      [1, 100, 450, SHELL_SPEED],
+      [2, 100 + 10.6 + close * 38, 467, -SHELL_SPEED],
+    ] as const)
+      w.shells.push({ id, owner: 9, side: 0, x, y, vx, vy: 0, bounces: 0, born: 0 })
+    const ev: Ev[] = []
+    for (let i = 0; i < 60 && w.shells.length; i++) stepWorld(w, grid, [], STEP, ev)
+    expect(ev.some((e) => e.k === 'clash')).toBe(true)
+    expect(w.shells.length).toBe(0)
+  })
+
+  const open = parseMap([
+    '....B.....',
+    ...Array.from({ length: 10 }, () => '..........'),
+    '....R.....',
+  ])
+  it('a charging tank fires a faster shell than a parked one', () => {
+    const grid = open
+    const fire = (drive: boolean): number => {
+      const w = newWorld(grid, false)
+      const red = w.tanks[0] as (typeof w.tanks)[number]
+      red.x = 450
+      red.y = 1250
+      red.a = -Math.PI / 2
+      red.cd = 9
+      for (let i = 0; i < 30; i++)
+        stepWorld(w, grid, [{ jx: 0, jy: drive ? -1 : 0, fire: false }], STEP, [])
+      red.cd = 0
+      stepWorld(w, grid, [{ jx: 0, jy: drive ? -1 : 0, fire: true }], STEP, [])
+      const sh = w.shells[0]
+      if (!sh) throw new Error('no shell')
+      return Math.hypot(sh.vx, sh.vy)
+    }
+    expect(fire(false)).toBeCloseTo(SHELL_SPEED, 0)
+    expect(fire(true)).toBeGreaterThan(SHELL_SPEED + SPEED * 0.4)
+  })
+
+  it('the stick eases the hull up to speed instead of teleporting to it', () => {
+    const grid = open
+    const w = newWorld(grid, false)
+    const red = w.tanks[0] as (typeof w.tanks)[number]
+    red.x = 450
+    red.y = 1250
+    red.a = -Math.PI / 2
+    stepWorld(w, grid, [{ jx: 0, jy: -1, fire: false }], STEP, [])
+    const first = Math.hypot(red.vx, red.vy)
+    expect(first).toBeGreaterThan(0)
+    expect(first).toBeLessThan(SPEED * 0.5)
+    for (let i = 0; i < 30; i++) stepWorld(w, grid, [{ jx: 0, jy: -1, fire: false }], STEP, [])
+    expect(Math.hypot(red.vx, red.vy)).toBeGreaterThan(SPEED * 0.95)
+  })
+
+  it('the bot finds a bank shot around a wall and the real physics agrees', () => {
+    const grid = parseMap(['..........', '..........', '....#.....', '..........', '..........'])
+    const w = newWorld(grid, false)
+    w.tanks.length = 0
+    const mk = (id: number, side: 0 | 1, x: number, y: number) => ({
+      id,
+      side,
+      lane: 0 as const,
+      x,
+      y,
+      a: 0,
+      vx: 0,
+      vy: 0,
+      hp: HP,
+      alive: true,
+      cd: 0,
+      tread: 0,
+      hitT: -9,
+      fireT: -9,
+    })
+    const me = mk(0, 0, 450, 750)
+    const foe = mk(1, 1, 450, 350)
+    w.tanks.push(me, foe)
+    expect(lineOfSight(grid, me.x, me.y, foe.x, foe.y)).toBe(false)
+    const a = bankShot(grid, me, foe, 2)
+    expect(a).not.toBeNull()
+    me.a = a as number
+    const ev: Ev[] = []
+    for (let i = 0; i < 200 && foe.hp === HP; i++)
+      stepWorld(w, grid, i === 0 ? [{ jx: 0, jy: 0, fire: true }] : [], STEP, ev)
+    expect(foe.hp).toBe(HP - 1)
+    expect(me.hp).toBe(HP)
   })
 
   it('tanks never end up inside walls', () => {

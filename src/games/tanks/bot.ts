@@ -1,7 +1,23 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { angleTo, bfsNext, type Grid, lineOfSight, threat } from '../../engines/arena/index.ts'
-import { type Drive, SAFE, SHELL_R, SHELL_SPEED, TANK_R, type Tank, type World } from './rules.ts'
+import {
+  angleTo,
+  bfsNext,
+  type Grid,
+  lineOfSight,
+  moveBouncing,
+  threat,
+} from '../../engines/arena/index.ts'
+import {
+  type Drive,
+  MAX_BOUNCES,
+  SAFE,
+  SHELL_R,
+  SHELL_SPEED,
+  TANK_R,
+  type Tank,
+  type World,
+} from './rules.ts'
 
 interface Skill {
   /** Seconds of clear sight before the first shot. */
@@ -16,12 +32,14 @@ interface Skill {
   lead: boolean
   /** Driving speed multiplier. */
   pace: number
+  /** Wall bounces it will plan a trick shot through when it has no clear line (0 = never). */
+  bank: number
 }
 
 const SKILL: Record<Difficulty, Skill> = {
-  easy: { react: 0.75, aim: 0.22, tol: 0.22, dodge: 0.2, lead: false, pace: 0.7 },
-  normal: { react: 0.42, aim: 0.1, tol: 0.12, dodge: 0.5, lead: false, pace: 0.9 },
-  hard: { react: 0.22, aim: 0.035, tol: 0.07, dodge: 0.85, lead: true, pace: 1 },
+  easy: { react: 0.75, aim: 0.22, tol: 0.22, dodge: 0.2, lead: false, pace: 0.7, bank: 0 },
+  normal: { react: 0.42, aim: 0.1, tol: 0.12, dodge: 0.5, lead: false, pace: 0.9, bank: 1 },
+  hard: { react: 0.22, aim: 0.035, tol: 0.07, dodge: 0.85, lead: true, pace: 1, bank: 2 },
 }
 
 /**
@@ -42,6 +60,10 @@ export class TankBot {
   private wy = 0
   private lastX = 0
   private lastY = 0
+  /** A planned bank shot: heading to fire along, and when the plan goes stale. */
+  private bankA: number | null = null
+  private bankT = 0
+  private planT = 0
   private skill: Skill
 
   constructor(
@@ -108,6 +130,28 @@ export class TankBot {
     }
     this.seeT = Math.max(0, this.seeT - dt * 2)
 
+    // No clear line: look for a shot off the walls every so often, and take it
+    // from where it stands (turn on the spot, fire when lined up).
+    if (sk.bank > 0) {
+      this.planT -= dt
+      if (this.planT <= 0) {
+        this.planT = 0.35
+        this.bankA = bankShot(grid, me, target, sk.bank)
+        this.bankT = 1.2
+      }
+      if (this.bankA !== null) {
+        this.bankT -= dt
+        if (this.bankT <= 0) this.bankA = null
+      }
+      if (this.bankA !== null && me.cd <= 0) {
+        const diff = angleTo(me.a, this.bankA)
+        const fire = Math.abs(diff) < sk.tol * 0.5
+        if (fire) this.bankA = null
+        // A tiny push just turns the hull (the speed falls off with the misalignment).
+        return { jx: Math.cos(me.a + diff) * 0.2, jy: Math.sin(me.a + diff) * 0.2, fire }
+      }
+    }
+
     // Unstick: if barely moved for a while, wiggle in a random direction.
     if (this.wiggleT > 0) {
       this.wiggleT -= dt
@@ -131,4 +175,41 @@ export class TankBot {
     const m = Math.hypot(dx, dy) || 1
     return { jx: (dx / m) * sk.pace, jy: (dy / m) * sk.pace, fire: false }
   }
+}
+
+/**
+ * Trace a shell fired from `me` along a few dozen headings with the real
+ * bounce physics and return the heading of the best one that reaches `foe`
+ * after 1..`maxBounces` ricochets without coming back through `me`; null if
+ * there is none.
+ */
+export function bankShot(grid: Grid, me: Tank, foe: Tank, maxBounces: number): number | null {
+  const N = 72
+  const hit2 = (TANK_R + SHELL_R - 6) ** 2
+  const self2 = (TANK_R + SHELL_R + 12) ** 2
+  const p = { x: 0, y: 0, vx: 0, vy: 0 }
+  const dt = 1 / 30
+  let best: number | null = null
+  let bestT = Infinity
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2
+    p.x = me.x + Math.cos(a) * (TANK_R + 18)
+    p.y = me.y + Math.sin(a) * (TANK_R + 18)
+    p.vx = Math.cos(a) * SHELL_SPEED
+    p.vy = Math.sin(a) * SHELL_SPEED
+    let bounces = 0
+    for (let t = 0; t < 2.2; t += dt) {
+      bounces += moveBouncing(grid, p, dt, 4)
+      if (bounces > Math.min(maxBounces, MAX_BOUNCES)) break
+      if (t > SAFE && (p.x - me.x) ** 2 + (p.y - me.y) ** 2 < self2) break
+      if ((p.x - foe.x) ** 2 + (p.y - foe.y) ** 2 < hit2) {
+        if (bounces > 0 && t < bestT) {
+          bestT = t
+          best = a
+        }
+        break
+      }
+    }
+  }
+  return best
 }

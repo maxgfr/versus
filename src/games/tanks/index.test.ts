@@ -3,7 +3,7 @@ import { STEP, type GameContext, type Side } from '../../core/game.ts'
 import { PlayerInput } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
 import { H, W, type Stage } from '../../core/stage.ts'
-import createGame, { match } from './index.ts'
+import createGame, { match, type State } from './index.ts'
 
 /** Computer vs computer: no touches, and sound and sparks are no-ops. */
 function botContext(target?: number): GameContext {
@@ -48,5 +48,20 @@ describe('tanks: match length', () => {
 
   it('defaults to the spec length', () => {
     expect(match.default).toBe(2)
+  })
+
+  it('no shell is left flying once a round is decided', () => {
+    const game = createGame()
+    game.init(botContext(3))
+    const st = () => (game as unknown as { s: State }).s
+    let between = 0
+    while (game.result === null && game.time < 900) {
+      game.update(STEP)
+      if (st().rounds.phase === 'between') {
+        between++
+        expect(st().w.shells.length).toBe(0)
+      }
+    }
+    expect(between).toBeGreaterThan(0)
   })
 })
