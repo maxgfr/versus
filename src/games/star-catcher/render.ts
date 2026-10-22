@@ -13,6 +13,12 @@ export interface View {
   over: boolean
   /** Game time the match ended (-1 while playing). */
   endAt: number
+  /** Seconds since the last fixed step: falling things are drawn that far back. */
+  lag?: number
+  /** Interpolated basket spots. */
+  basket?: [number, number]
+  /** Which sides are people (they get the drag hint). */
+  human?: [boolean, boolean]
 }
 
 const GOLD_COL = '#ffc93c'
@@ -50,10 +56,13 @@ export function renderSky(g: Draw, skies: [Sky, Sky], now: number, v: View): voi
   g.vignette(0.4)
   for (const side of [0, 1] as Side[]) {
     const sky = skies[side]
+    const lag = v.lag ?? 0
+    const bx = v.basket?.[side] ?? sky.basket
+    const mine = (v.human?.[side] ?? true) && (g.viewer === null || g.viewer === side)
     inFrame(g, side, () => {
-      for (const it of sky.items) item(g, it, now)
-      basket(g, side, sky, now)
-      if (!v.over && now < 3.5) hint(g, side, sky, now)
+      for (const it of sky.items) item(g, lag > 0 ? { ...it, y: it.y - it.vy * lag } : it, now)
+      basket(g, side, sky, now, bx)
+      if (!v.over && now < 3.5 && mine) hint(g, side, sky, now)
     })
   }
   g.rect(view.x, MID - 2, view.w, 4, alpha(C.white, 0.15))
@@ -218,12 +227,14 @@ function item(g: Draw, it: Item, now: number): void {
   }
 }
 
-function basket(g: Draw, side: Side, sky: Sky, now: number): void {
-  const x = sky.basket
+function basket(g: Draw, side: Side, sky: Sky, now: number, x = sky.basket): void {
+  // The basket leans into its slide and its catch bounce grows with the points.
+  const lean = Math.max(-0.22, Math.min(0.22, (sky.bv ?? 0) / 6000))
   const y = BASKET_Y
   const col = SIDE[side]
   const age = now - sky.hitAt
-  const bounce = age < 0.3 ? Math.sin((age / 0.3) * Math.PI) : 0
+  const pts = KINDS[sky.hitKind]?.points ?? 1
+  const bounce = age < 0.3 ? Math.sin((age / 0.3) * Math.PI) * (0.8 + 0.2 * pts) : 0
   const glow = age < 0.5 ? 1 - age / 0.5 : 0
   const gcol = sky.hitKind === GOLD ? GOLD_COL : sky.hitKind === COMET ? '#bfefff' : STAR_COL
   const fill = clamp(sky.score / 60, 0, 1)
@@ -242,7 +253,7 @@ function basket(g: Draw, side: Side, sky: Sky, now: number): void {
   g.at(
     x,
     y - 34,
-    0,
+    lean,
     () => {
       // The catch so far glows inside the bowl.
       if (fill > 0) {

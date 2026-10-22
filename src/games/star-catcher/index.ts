@@ -1,6 +1,7 @@
 import { frame } from '../../core/frame.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { floatFor } from '../../core/fx/fx.ts'
+import { lerp } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C } from '../../core/render/palette.ts'
 import { StarBot } from './bot.ts'
@@ -13,6 +14,7 @@ import {
   type Ev,
   GOLD,
   LIMIT,
+  SHOWER,
   STAR,
   type Sky,
   schedule,
@@ -37,6 +39,8 @@ class StarCatcher extends BaseGame<State> {
   private sched: Drop[] = []
   private bots: [StarBot | null, StarBot | null] = [null, null]
   private lastSec = -1
+  // Cosmetic only (not synced): last step's basket spots, for interpolation.
+  private prevBasket: [number, number] | null = null
 
   /** Match length chosen on the ready screen, in seconds. */
   private limit(): number {
@@ -59,6 +63,15 @@ class StarCatcher extends BaseGame<State> {
       this.lastSec = sec
       if (sec > 0 && sec <= 5) ctx.audio.play('tick', 1 + (5 - sec) * 0.06)
     }
+    // The star shower starts: tell both players.
+    const shower = this.limit() * (1 - SHOWER)
+    if (this.time - dt < shower && this.time >= shower) {
+      ctx.audio.play('powerup', 0.8)
+      ctx.audio.buzz(20)
+      ctx.fx.flash('#fff3b8', 0.15)
+      for (const side of [0, 1] as Side[]) floatFor(ctx.fx, side, 'Star shower!')
+    }
+    this.prevBasket = [s.skies[0].basket, s.skies[1].basket]
     if (this.time >= this.limit()) {
       const [a, b] = s.skies
       const w = winnerOf([a.score, b.score])
@@ -104,8 +117,24 @@ class StarCatcher extends BaseGame<State> {
     for (const ev of evs) {
       if (ev.k === 'drop') continue
       const p = frame(side, ev.x, ev.y)
+      if (ev.k === 'miss') {
+        // Only the valuable ones get a groan; plain stars just fade.
+        if (ev.kind !== STAR) {
+          ctx.audio.play('swish', 0.7)
+          fx.puff(p.x, p.y, 'rgba(255,255,255,0.35)', 4)
+        }
+        continue
+      }
+      // The chime climbs with the streak; every fifth in a row gets a call-out.
+      const up = Math.min(0.6, ev.streak * 0.04)
+      if (ev.streak >= 5 && ev.streak % 5 === 0) {
+        fx.float(`${ev.streak} in a row!`, p.x, towardMid(side, p.y, 320), '#fff3b8', 48, side)
+        ctx.audio.play('coin', 1.8)
+        fx.ring(p.x, p.y, C.yellow, 240)
+      }
+      ctx.audio.buzz(Math.round(6 + ev.points * 6))
       if (ev.kind === GOLD) {
-        ctx.audio.play('powerup', 1.05 + Math.random() * 0.1)
+        ctx.audio.play('powerup', 1.05 + up)
         fx.burst(p.x, p.y, '#ffd23f', {
           count: 24,
           speed: 520,
@@ -120,11 +149,12 @@ class StarCatcher extends BaseGame<State> {
         fx.ring(p.x, p.y, '#ffd23f', 200)
       } else if (ev.kind === COMET) {
         ctx.audio.play('whoosh', 1.2)
-        ctx.audio.play('coin', 1.5)
+        ctx.audio.play('coin', 1.5 + up)
+        fx.shake(0.1)
         fx.burst(p.x, p.y, '#bfefff', { count: 20, speed: 480, size: 12, life: 0.6, gravity: 120 })
         fx.ring(p.x, p.y, C.cyan, 160)
       } else if (ev.kind === STAR) {
-        ctx.audio.play('coin', 1.35 + Math.random() * 0.1)
+        ctx.audio.play('coin', 1.3 + up)
         fx.burst(p.x, p.y, '#fff3b8', {
           count: 12,
           speed: 340,
@@ -146,14 +176,25 @@ class StarCatcher extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha: number): void {
     const { s, ctx } = this
+    const pb = this.prevBasket
     renderSky(g, s.skies, this.time, {
       names: ctx.names,
       sec: Math.max(0, Math.ceil(this.limit() - this.time)),
       over: this.over,
       endAt: s.endAt,
+      lag: (1 - alpha) / 60,
+      basket: pb
+        ? [lerp(pb[0], s.skies[0].basket, alpha), lerp(pb[1], s.skies[1].basket, alpha)]
+        : [s.skies[0].basket, s.skies[1].basket],
+      human: [!this.isBot(0), !this.isBot(1)],
     })
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prevBasket = null
   }
 }
 

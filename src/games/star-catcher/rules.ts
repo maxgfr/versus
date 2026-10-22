@@ -53,6 +53,8 @@ export interface Item {
   vy: number
   /** Twinkle / spin phase. */
   rot: number
+  /** Fell past the basket (reported once, then fades). */
+  missed?: boolean
 }
 
 export interface Sky {
@@ -67,11 +69,16 @@ export interface Sky {
   /** Game time and kind of the last catch, for the basket's bounce. */
   hitAt: number
   hitKind: number
+  /** Catches in a row (a miss resets it): the catch chime climbs with it. */
+  streak: number
+  /** Basket velocity last step (units/s), for its lean. */
+  bv: number
 }
 
 export type Ev =
   | { k: 'drop'; kind: number; x: number; y: number }
-  | { k: 'catch'; kind: number; points: number; x: number; y: number }
+  | { k: 'catch'; kind: number; points: number; x: number; y: number; streak: number }
+  | { k: 'miss'; kind: number; x: number; y: number }
 
 export const skyNew = (): Sky => ({
   score: 0,
@@ -82,20 +89,29 @@ export const skyNew = (): Sky => ({
   caught: [0, 0, 0],
   hitAt: -10,
   hitKind: STAR,
+  streak: 0,
+  bv: 0,
 })
 
-/** The shared pattern. Volleys now and then; comets and golden stars grow more common late. */
+/** Share of the match at the end that is a star shower: more volleys, more gold. */
+export const SHOWER = 0.2
+
+/**
+ * The shared pattern. Volleys now and then; stars come faster and comets more
+ * often as the match goes on, and the last stretch is a shower.
+ */
 export function schedule(seed: number, limit = LIMIT): Drop[] {
   const rng = new Rng(seed)
   const out: Drop[] = []
   let t = 1
   while (t < limit) {
     const k = t / limit
-    const n = rng.chance(0.15) ? 2 : 1
+    const shower = k >= 1 - SHOWER
+    const n = rng.chance(shower ? 0.4 : 0.15) ? 2 : 1
     for (let i = 0; i < n; i++) {
       const roll = rng.next()
       const cometP = 0.08 + 0.06 * k
-      const goldP = 0.12
+      const goldP = shower ? 0.18 : 0.12
       const kind = roll < cometP ? COMET : roll < cometP + goldP ? GOLD : STAR
       out.push({
         t: t + i * 0.14,
@@ -138,10 +154,12 @@ export function skyStep(
     })
     out.push({ k: 'drop', kind: d.kind, x: d.x, y: SPAWN_Y })
   }
+  const b0 = s.basket
   if (target !== null) {
     const dx = clampBasket(target) - s.basket
     s.basket += Math.sign(dx) * Math.min(Math.abs(dx), speed * dt)
   }
+  s.bv = dt > 0 ? (s.basket - b0) / dt : 0
   const kept: Item[] = []
   for (const it of s.items) {
     it.y += it.vy * dt
@@ -153,8 +171,21 @@ export function skyStep(
       s.hitAt = time
       s.hitKind = it.kind
       s.caught[it.kind] = (s.caught[it.kind] ?? 0) + kind.points
-      out.push({ k: 'catch', kind: it.kind, points: kind.points, x: it.x, y: it.y })
+      s.streak = (s.streak ?? 0) + 1
+      out.push({
+        k: 'catch',
+        kind: it.kind,
+        points: kind.points,
+        x: it.x,
+        y: it.y,
+        streak: s.streak,
+      })
       continue
+    }
+    if (!it.missed && it.y > BASKET_Y + 40) {
+      it.missed = true
+      s.streak = 0
+      out.push({ k: 'miss', kind: it.kind, x: it.x, y: it.y })
     }
     // Past the basket: it fades out of the sky.
     if (it.y > BASKET_Y + 90) continue

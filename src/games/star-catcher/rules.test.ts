@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { StarBot } from './bot.ts'
+import { route, StarBot } from './bot.ts'
 import {
   BASKET_HALF,
   BASKET_SPEED,
@@ -15,6 +15,7 @@ import {
   STAR,
   type Sky,
   schedule,
+  SHOWER,
   skyNew,
   skyStep,
   winnerOf,
@@ -169,5 +170,42 @@ describe('star catcher bot vs bot', () => {
       if (play(600 + seed, 'hard', 'easy').winner === 0) hard++
     }
     expect(hard).toBeGreaterThanOrEqual(12)
+  })
+
+  it('hard catchers beat normal ones most of the time', () => {
+    let hard = 0
+    for (let seed = 0; seed < 12; seed++) {
+      const r = play(700 + seed, seed % 2 ? 'hard' : 'normal', seed % 2 ? 'normal' : 'hard')
+      if (r.winner === (seed % 2 ? 0 : 1)) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(8)
+  })
+
+  it('the planner skips a plain star for a golden one it cannot catch both of', () => {
+    const star: Item = { id: 1, kind: STAR, x: 150, y: BASKET_Y - 300, vy: 300, rot: 0 }
+    const gold: Item = { id: 2, kind: GOLD, x: 850, y: BASKET_Y - 330, vy: 300, rot: 0 }
+    expect(route([star, gold], 500, 1500)?.id).toBe(2)
+    // With time to catch both, it takes the first one first.
+    const late: Item = { ...gold, y: BASKET_Y - 1200 }
+    expect(route([star, late], 500, 1500)?.id).toBe(1)
+  })
+})
+
+describe('streaks and the shower', () => {
+  it('catches build a streak; a star that falls past breaks it, once', () => {
+    const s = skyWith(STAR, 500, BASKET_Y - 10)
+    skyStep(s, STEP, 1, NONE, null)
+    expect(s.streak).toBe(1)
+    s.items.push({ id: 9, kind: STAR, x: 900, y: BASKET_Y + 35, vy: 600, rot: 0 })
+    const ev = [...skyStep(s, STEP, 1.1, NONE, null), ...skyStep(s, STEP, 1.2, NONE, null)]
+    expect(ev.filter((e) => e.k === 'miss')).toHaveLength(1)
+    expect(s.streak).toBe(0)
+  })
+
+  it('the last stretch rains harder than the start', () => {
+    const sched = schedule(3, 60)
+    const early = sched.filter((d) => d.t < 60 * SHOWER).length
+    const late = sched.filter((d) => d.t >= 60 * (1 - SHOWER)).length
+    expect(late).toBeGreaterThan(early * 1.3)
   })
 })
