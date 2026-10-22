@@ -11,6 +11,26 @@ test('home shows the scoreboard and game cards without errors', async ({ page })
   expect(errors).toEqual([])
 })
 
+test('swiping across a game card scrolls instead of opening it', async ({ page }) => {
+  await page.goto('./')
+  const card = page.locator('.card').nth(2)
+  await expect(card).toBeVisible()
+  // The finger lands on a card, slides 40 px, lifts still on the card.
+  await card.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const x = r.x + r.width / 2
+    const y = r.y + r.height / 2
+    const o = { pointerId: 20, bubbles: true, pointerType: 'touch', clientX: x }
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...o, clientY: y + 20 }))
+    el.dispatchEvent(new PointerEvent('pointerup', { ...o, clientY: y - 20 }))
+  })
+  await page.waitForTimeout(300)
+  await expect(page).not.toHaveURL(/#\/play\//)
+  // A real tap still opens it.
+  await card.tap()
+  await expect(page).toHaveURL(/#\/play\//)
+})
+
 test('landscape asks to rotate the phone', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 380 })
   await page.goto('./')
