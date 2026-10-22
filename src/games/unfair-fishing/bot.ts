@@ -1,7 +1,7 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import { MashBot } from '../../engines/reflex/index.ts'
-import { FISH, NO_TAPS, POND, type Phase, type Rod, type Taps } from './rules.ts'
+import { FISH, NO_TAPS, POND, type Phase, type Rod, SURGE_MUL, type Taps } from './rules.ts'
 
 /**
  * Computer angler. It casts after a short pause, hooks a bite after a reaction
@@ -11,7 +11,7 @@ import { FISH, NO_TAPS, POND, type Phase, type Rod, type Taps } from './rules.ts
  */
 
 /** Hardest mash rate (taps per second) by difficulty. */
-const MAX_RATE: Record<Difficulty, number> = { easy: 6, normal: 7.4, hard: 9.2 }
+const MAX_RATE: Record<Difficulty, number> = { easy: 6, normal: 7.9, hard: 9.4 }
 /** Reaction to a bite, seconds. */
 const REACT: Record<Difficulty, [number, number]> = {
   easy: [0.5, 0.8],
@@ -37,7 +37,10 @@ export class FishBot {
   act(r: Rod, dt: number): Taps {
     if (r.phase !== this.prev) {
       this.prev = r.phase
-      if (r.phase === 'idle') this.cool = this.rng.range(0.7, 1.5)
+      // Easy dawdles between casts; hard casts again straight away.
+      if (r.phase === 'idle')
+        this.cool =
+          this.rng.range(0.7, 1.5) * (this.d === 'hard' ? 0.4 : this.d === 'normal' ? 0.7 : 1)
       if (r.phase === 'bite') {
         const [a, b] = REACT[this.d]
         this.react = this.rng.range(a, b)
@@ -65,7 +68,9 @@ export class FishBot {
         const s = (FISH[r.kind] as (typeof FISH)[number]).strength
         // Near snapping, mash harder (that slackens the line); when slack, ease off.
         const err = r.tension - 0.5
-        const want = Math.min(MAX_RATE[this.d], 6 * s * (1 + 1.2 * err))
+        // Hard reads a surge: the fish pulls SURGE_MUL harder, so it mashes harder to match.
+        const surge = this.d === 'hard' && r.surge > 0 ? SURGE_MUL : 1
+        const want = Math.min(MAX_RATE[this.d], 6 * s * surge * (1 + 1.2 * err))
         this.mash.rate = Math.max(0.5, want)
         return { n: this.mash.step(dt), at: null }
       }

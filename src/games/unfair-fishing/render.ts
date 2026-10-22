@@ -227,8 +227,10 @@ function lane(g: Draw, side: Side, rod: Rod, now: number): void {
     if (rod.phase !== 'lost' || rod.t < 0.2) bobber(g, side, rod, fl, now)
     rodPole(g, side, rod, tip, now)
     if (rod.phase === 'won') landed(g, rod, fl)
-    if (rod.phase === 'reel') meter(g, side, rod, now)
-    else status(g, side, rod, now)
+    // Online, the tap prompts are only for the angler's own phone.
+    const mine = g.viewer === null || g.viewer === side
+    if (rod.phase === 'reel') meter(g, side, rod, now, mine)
+    else if (mine) status(g, side, rod, now)
   })
 }
 
@@ -381,7 +383,7 @@ function landed(g: Draw, rod: Rod, p: P): void {
 }
 
 /** Tension bar and reel progress: both upright for the angler. */
-function meter(g: Draw, side: Side, rod: Rod, now: number): void {
+function meter(g: Draw, side: Side, rod: Rod, now: number, prompt = true): void {
   const { x0, x1, y } = BAR
   const w = x1 - x0
   const angle = textAngle(g, side)
@@ -415,6 +417,7 @@ function meter(g: Draw, side: Side, rod: Rod, now: number): void {
   g.text('slack', x0 + 44, y - 60, { size: 34, weight: 600, color: alpha(C.white, 0.6), angle })
   g.text('snap', x1 - 40, y - 60, { size: 34, weight: 600, color: alpha(C.white, 0.6), angle })
   const p = mashPulse(rod.mash, now, 0.12)
+  if (!prompt) return
   // Beside the pier on the bank, not over its planks.
   g.text('MASH!', 205, y - 132, {
     size: 64 * (1 + p * 0.12),

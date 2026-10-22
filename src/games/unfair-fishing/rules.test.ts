@@ -9,6 +9,7 @@ import {
   LIMIT,
   NO_TAPS,
   POND,
+  frenzyOf,
   pickFish,
   type Rod,
   rodNew,
@@ -125,6 +126,19 @@ describe('unfair fishing rules', () => {
     expect(counts[2]!).toBeGreaterThan(counts[3]!)
   })
 
+  it('in the feeding frenzy big fish bite more often', () => {
+    const count = (late: number) => {
+      const rng = new Rng(9)
+      let big = 0
+      for (let i = 0; i < 4000; i++) if (pickFish(rng, late) >= 2) big++
+      return big
+    }
+    expect(count(1)).toBeGreaterThan(count(0) * 1.5)
+    expect(frenzyOf(0, 60)).toBe(0)
+    expect(frenzyOf(40, 60)).toBe(0)
+    expect(frenzyOf(60, 60)).toBe(1)
+  })
+
   it('the surge pulls back reel progress', () => {
     const rng = new Rng(6)
     const r = rodNew()
@@ -185,5 +199,15 @@ describe('unfair fishing bot vs bot', () => {
       if (play(300 + seed, 'hard', 'easy').winner === 0) hard++
     }
     expect(hard).toBeGreaterThanOrEqual(12)
+  })
+
+  it('hard anglers beat normal ones most of the time', () => {
+    let hard = 0
+    for (let seed = 0; seed < 16; seed++) {
+      const hs = seed % 2 ? 0 : 1
+      const r = play(500 + seed, hs === 0 ? 'hard' : 'normal', hs === 0 ? 'normal' : 'hard')
+      if (r.winner === hs) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(10)
   })
 })

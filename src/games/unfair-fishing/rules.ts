@@ -112,12 +112,25 @@ export const rodNew = (): Rod => ({
   noteValue: 0,
 })
 
-/** Pick the fish for a bite, weighted by FISH.weight. */
-export function pickFish(rng: Rng): number {
-  const total = FISH.reduce((s, f) => s + f.weight, 0)
+/** Share of the match at the end that is the feeding frenzy: quicker bites, bigger fish. */
+export const FRENZY = 1 / 3
+
+/** How far into the feeding frenzy a match is (0 before it, 1 at the whistle). */
+export function frenzyOf(time: number, limit: number): number {
+  const start = limit * (1 - FRENZY)
+  return Math.max(0, Math.min(1, (time - start) / (limit - start)))
+}
+
+/**
+ * Pick the fish for a bite, weighted by FISH.weight. In the frenzy (`late`
+ * 0..1) the big ones bite more often: the weights tilt toward the end of the list.
+ */
+export function pickFish(rng: Rng, late = 0): number {
+  const w = FISH.map((f, i) => f.weight * (1 + late * i * 0.8))
+  const total = w.reduce((s, x) => s + x, 0)
   let r = rng.next() * total
   for (let i = 0; i < FISH.length; i++) {
-    r -= (FISH[i] as FishKind).weight
+    r -= w[i] as number
     if (r < 0) return i
   }
   return FISH.length - 1
@@ -130,8 +143,11 @@ export function landingSpot(x: number, y: number): { x: number; y: number } {
   return { x: clamp(x, POND.x0, POND.x1), y: clamp(y, POND.y0, POND.y1) }
 }
 
-/** Advance one rod by a step. `time` is the match clock (for mash rate). */
-export function rodStep(r: Rod, dt: number, time: number, inp: Taps, rng: Rng): Ev[] {
+/**
+ * Advance one rod by a step. `time` is the match clock (for mash rate);
+ * `late` (0..1) is how far into the feeding frenzy the match is.
+ */
+export function rodStep(r: Rod, dt: number, time: number, inp: Taps, rng: Rng, late = 0): Ev[] {
   const out: Ev[] = []
   r.t += dt
   switch (r.phase) {
@@ -142,7 +158,8 @@ export function rodStep(r: Rod, dt: number, time: number, inp: Taps, rng: Rng): 
         r.y = spot.y
         r.phase = 'cast'
         r.t = 0
-        r.until = rng.range(2.2, 5.6)
+        // Bites come sooner in the frenzy.
+        r.until = rng.range(1.6, 4.4) * (1 - 0.35 * late)
         out.push({ k: 'cast', x: spot.x, y: spot.y })
       }
       break
@@ -166,7 +183,7 @@ export function rodStep(r: Rod, dt: number, time: number, inp: Taps, rng: Rng): 
       break
     case 'bite':
       if (inp.n > 0) {
-        r.kind = pickFish(rng)
+        r.kind = pickFish(rng, late)
         r.phase = 'reel'
         r.t = 0
         r.tension = 0.5

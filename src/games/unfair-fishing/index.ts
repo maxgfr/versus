@@ -5,7 +5,17 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C } from '../../core/render/palette.ts'
 import { FishBot } from './bot.ts'
 import { renderFishing } from './render.ts'
-import { type Ev, FISH, LIMIT, NO_TAPS, type Rod, rodNew, rodStep, type Taps } from './rules.ts'
+import {
+  type Ev,
+  FISH,
+  frenzyOf,
+  LIMIT,
+  NO_TAPS,
+  type Rod,
+  rodNew,
+  rodStep,
+  type Taps,
+} from './rules.ts'
 
 /** A height `d` units toward the middle of the table from world `y`, for `side`'s reader. */
 const towardMid = (side: Side, y: number, d: number): number => (side === 0 ? y - d : y + d)
@@ -51,6 +61,14 @@ class UnfairFishing extends BaseGame<State> {
       this.finish(winner, { score: [a.points, b.points], delay: 2.2 })
       return
     }
+    // The feeding frenzy: announce it once, then bites come quicker and bigger.
+    const late = frenzyOf(this.time, this.limit())
+    if (late > 0 && frenzyOf(this.time - dt, this.limit()) === 0) {
+      ctx.audio.play('powerup', 0.85)
+      ctx.audio.buzz(25)
+      ctx.fx.flash('#bfefff', 0.15)
+      for (const side of [0, 1] as Side[]) floatFor(ctx.fx, side, 'Feeding frenzy!')
+    }
     for (const side of [0, 1] as Side[]) {
       const rod = s.rods[side]
       const bot = this.bots[side]
@@ -66,7 +84,7 @@ class UnfairFishing extends BaseGame<State> {
           at: first ? frame(side, first.x, first.y) : null,
         }
       }
-      this.emit(side, rod, rodStep(rod, dt, this.time, inp, ctx.rng))
+      this.emit(side, rod, rodStep(rod, dt, this.time, inp, ctx.rng, late))
     }
   }
 
@@ -110,10 +128,15 @@ class UnfairFishing extends BaseGame<State> {
           fx.stop(4)
           fx.shake(0.2)
           break
-        case 'tug':
-          ctx.audio.play('tap', 0.9 + Math.random() * 0.25)
-          if (Math.random() < 0.5) fx.puff(float.x, float.y, 'rgba(220,245,255,0.7)', 2)
+        case 'tug': {
+          // The faster you mash, the higher the reel clicks and the more the water churns.
+          const k = Math.min(1, rod.mash.rate / 10)
+          ctx.audio.play('tap', 0.85 + k * 0.45)
+          if (Math.random() < 0.3 + 0.5 * k)
+            fx.puff(float.x, float.y, 'rgba(220,245,255,0.7)', Math.round(1 + k * 3))
+          if (rod.mash.combo > 0 && rod.mash.combo % 10 === 0) ctx.audio.buzz(8)
           break
+        }
         case 'surge': {
           ctx.audio.play('whoosh', 0.7)
           fx.shake(0.25)
