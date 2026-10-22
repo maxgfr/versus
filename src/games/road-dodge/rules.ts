@@ -30,8 +30,8 @@ const RAMP = 14
 const VMAX = 900
 /** Past this round time the road keeps getting faster, slowly, so no round runs forever. */
 export const OVERTIME = 45
-const OVER_RAMP = 9
-export const VTOP = 1300
+const OVER_RAMP = 16
+export const VTOP = 1600
 
 /** Speed of oncoming traffic (units/s) at round time `rt`: ramps up, then creeps on in overtime. */
 export function speedAt(rt: number): number {
@@ -58,7 +58,9 @@ export function hash01(seed: number, a: number, b: number): number {
 /** Seconds between two oncoming cars at round time `rt` (the k-th gap of the round). */
 export function gapAt(seed: number, k: number, rt: number): number {
   const jitter = 0.8 + 0.4 * hash01(seed, k, 2)
-  return Math.max(0.46, 0.95 - 0.008 * rt) * jitter
+  // Overtime packs the traffic tighter too.
+  const squeeze = 1 - Math.min(0.3, Math.max(0, rt - OVERTIME) / 150)
+  return Math.max(0.46, 0.95 - 0.008 * rt) * jitter * squeeze
 }
 
 /** An oncoming car. `near` is set once it has slipped past a driver closely. */

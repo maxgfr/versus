@@ -13,8 +13,8 @@ interface Skill {
 
 const SKILL: Record<Difficulty, Skill> = {
   easy: { react: 0.42, err: 0.2, lateral: 900 },
-  normal: { react: 0.26, err: 0.06, lateral: 1150 },
-  hard: { react: 0.14, err: 0.03, lateral: 1500 },
+  normal: { react: 0.22, err: 0.04, lateral: 1300 },
+  hard: { react: 0.12, err: 0.015, lateral: 1800 },
 }
 
 /** Lateral speed of a bot's car at a difficulty. */
