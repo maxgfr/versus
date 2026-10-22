@@ -26,7 +26,10 @@ export function namePill(
 ): void {
   const y = hudY(g, side, o.inset)
   const x = o.x ?? W / 2
-  const label = o.text ?? name
+  let label = o.text ?? name
+  // Online, "Your turn" on the rival's pill would speak to the wrong player.
+  if (g.viewer !== null && side !== g.viewer && label.startsWith('Your '))
+    label = `${name}'s ${label.slice(5)}`
   g.forSide(side, x, y, () => {
     const w = Math.max(220, g.measure(label, 40, 600) + 80)
     const pulse = o.active ? 0.5 + 0.5 * Math.sin(g.t * 6) : 0

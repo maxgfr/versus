@@ -8,6 +8,8 @@ The phone lies flat between two players. The world is a fixed **1000 × 1800** p
 
 - **Red = side 0** sits at the **bottom** (`y` near 1800). **Blue = side 1** sits at the **top** (`y` near 0). `MID = 900`.
 - In local 2P the top half is read upside down: anything blue must read is drawn rotated with `g.forSide(1, …)`, `g.sideText(1, …)` or `g.orient(1)`. Never hard-code `Math.PI`; `orient` also handles 1P (nothing flipped) and the online guest (whole view rotated).
+- Every game is playable online. A game seen from the side (gravity pointing down the screen) gets the `u` flag in `registry.ts`: the online guest's view is then not rotated. A game that cannot work online gets `l`.
+- Online, a half drawn in its owner's frame shows upside down to the rival: split-screen games draw through `inFrame` / `viewFrame` (engines/runner/frame.ts) and call `mirrorFx`, which turn it upright for whoever looks. Pill texts starting with "Your " are rewritten to "Blue's …" on the rival's pill.
 - The visible area can be larger than the stage (letterbox): paint backdrops with `g.fillView(...)` and place edge HUD with `hudY(g, side)` / `g.stage.edge(side)` (safe-area aware).
 - Per-player panels (each player's own board, tray, keypad…): write the layout once as red sees it and place it for blue with `src/core/frame.ts` (`frame`, `toLocal`, `inFrame`, `textAngle`). Positions stay identical on every device; only text turns to face its reader.
 - Keep tap targets away from the pause button (left edge, mid-height: world x < 110 around y 800–1000).

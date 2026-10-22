@@ -1,12 +1,18 @@
 import { clear } from './dom.ts'
 
 export type Cleanup = (() => void) | void
-export type Screen = (root: HTMLElement, arg: string) => Cleanup | Promise<Cleanup>
+export type Screen = (root: HTMLElement, ...args: string[]) => Cleanup | Promise<Cleanup>
 
 const routes: [RegExp, Screen][] = []
 let current: Cleanup = undefined
 let root: HTMLElement
 let token = 0
+let before: ((path: string) => void) | null = null
+
+/** Runs before every screen change (main.ts leaves the online room this way). */
+export function beforeRoute(fn: (path: string) => void): void {
+  before = fn
+}
 
 export function route(pattern: RegExp, screen: Screen): void {
   routes.push([pattern, screen])
@@ -36,10 +42,11 @@ async function render(): Promise<void> {
   if (typeof current === 'function') current()
   current = undefined
   clear(root)
+  before?.(path)
   for (const [re, screen] of routes) {
     const m = path.match(re)
     if (m) {
-      const c = await screen(root, decodeURIComponent(m[1] ?? ''))
+      const c = await screen(root, ...m.slice(1).map((a) => decodeURIComponent(a ?? '')))
       // A newer navigation happened while this screen was loading.
       if (my !== token) {
         if (typeof c === 'function') c()

@@ -100,9 +100,10 @@ export class Session {
     this.root = h('div.screen.game-screen')
     parent.append(this.root)
     this.stage = new Stage(this.root)
-    this.stage.setRotated(this.guest)
+    this.stage.setRotated(this.guest && !o.meta.upright)
     this.stage.resize()
     this.draw = new Draw(this.stage, o.mode === '2p')
+    if (o.mode === 'online') this.draw.viewer = this.local
     this.fx.reduced = reducedMotion()
     audio.enabled = store.settings.sound
     audio.haptics = store.settings.haptics

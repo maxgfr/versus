@@ -13,6 +13,7 @@ test('two phones join a room and play tic tac toe to a result', async ({ browser
   const guest = await open()
   await host.goto('./#/online')
   await host.getByRole('button', { name: 'Create a room' }).click()
+  await expect(host.locator('.code span')).toHaveCount(4)
   const code = (await host.locator('.code span').allTextContents()).join('')
   await guest.goto(`./#/online/${code}`)
   await expect(host.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 60_000 })
@@ -54,6 +55,7 @@ test('two phones play a real-time game (pull the rope) to a result', async ({ br
   const guest = await open()
   await host.goto('./#/online')
   await host.getByRole('button', { name: 'Create a room' }).click()
+  await expect(host.locator('.code span')).toHaveCount(4)
   const code = (await host.locator('.code span').allTextContents()).join('')
   await guest.goto(`./#/online/${code}`)
   await expect(host.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 60_000 })
@@ -84,6 +86,7 @@ test('the invite still works after the host tab reloads, and a reloaded guest la
   const guest = await open()
   await host.goto('./#/online')
   await host.getByRole('button', { name: 'Create a room' }).click()
+  await expect(host.locator('.code span')).toHaveCount(4)
   const code = (await host.locator('.code span').allTextContents()).join('')
   // iOS often reloads Safari behind the share sheet: the room must survive it.
   await host.reload()
@@ -115,6 +118,7 @@ test('without a direct connection, the phones play through the relay', async ({ 
   const guest = await open()
   await host.goto('./#/online')
   await host.getByRole('button', { name: 'Create a room' }).click()
+  await expect(host.locator('.code span')).toHaveCount(4)
   const code = (await host.locator('.code span').allTextContents()).join('')
   await guest.goto(`./#/online/${code}`)
   await expect(host.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 60_000 })
@@ -132,4 +136,48 @@ test('without a direct connection, the phones play through the relay', async ({ 
   await expect(host.locator('.overlay.result')).toBeVisible()
   await expect(guest.locator('.overlay.result')).toBeVisible({ timeout: 5000 })
   await expect(host.locator('.result-title').first()).toHaveText('You win!')
+})
+
+test('online has its own address, and leaving it leaves the room', async ({ browser }) => {
+  test.setTimeout(120_000)
+  const open = async () =>
+    (await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 760 } })).newPage()
+  const host = await open()
+  const guest = await open()
+  await host.goto('./#/')
+  await host.getByRole('button', { name: 'Online' }).click()
+  await expect(host).toHaveURL(/#\/online$/)
+  await host.getByRole('button', { name: 'Create a room' }).click()
+  await expect(host).toHaveURL(/#\/online\/[A-Z]{4}$/)
+  await expect(host.locator('.code span')).toHaveCount(4)
+  const code = (await host.locator('.code span').allTextContents()).join('')
+  expect(host.url()).toContain(`#/online/${code}`)
+  // The address bar is the invite.
+  await guest.goto(`./#/online/${code}`)
+  await expect(host.locator('.online-banner')).toBeVisible({ timeout: 60_000 })
+  await expect(host.locator('.card')).toHaveCount(114)
+  // A game opens under the room's address on both phones.
+  await host.locator('.card[data-id="air-hockey"]').click()
+  await expect(host).toHaveURL(new RegExp(`#/online/${code}/play/air-hockey$`))
+  await guest.waitForURL(new RegExp(`#/online/${code}/play/air-hockey$`))
+  await host.getByRole('button', { name: 'Back to games' }).click()
+  await expect(host).toHaveURL(new RegExp(`#/online/${code}$`))
+  await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
+  // The guest switches to 2P: back to a local address, out of the room.
+  await guest.getByRole('button', { name: '2P' }).click()
+  await expect(guest).toHaveURL(/#\/$/)
+  await expect(guest.locator('.toast')).toContainText(`You left room ${code}`)
+  await expect(host.locator('.status')).toContainText('Waiting for your friend', {
+    timeout: 20_000,
+  })
+  // Rejoin puts them back in the same seat.
+  await guest.locator('.toast button').click()
+  await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
+  await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 60_000 })
+  // Local games keep working while out of the room.
+  await host.getByRole('button', { name: '1P' }).click()
+  await expect(host).toHaveURL(/#\/$/)
+  await host.locator('.card[data-id="tic-tac-toe"]').click()
+  await expect(host).toHaveURL(/#\/play\/tic-tac-toe$/)
+  await expect(host.locator('.ready-btn')).toHaveText('Play')
 })

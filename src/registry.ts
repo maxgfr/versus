@@ -10,6 +10,11 @@ export interface GameMeta {
   rules: string
   /** Playable over P2P. */
   online: boolean
+  /**
+   * Seen from the side (gravity points down the screen): the online guest's
+   * view is not turned around, or everything would fall upwards.
+   */
+  upright: boolean
   /** 2 vs 2 on one phone (two players per half). */
   teams: boolean
   /** Has a computer opponent (puzzle races use 1P as a solo time trial instead). */
@@ -38,73 +43,65 @@ export const FAMILIES: FamilyMeta[] = [
 
 type Row = [id: string, name: string, glyph: string, rules: string, flags?: string]
 
-// Flags: o = online, t = 2 vs 2, n = new, x = no computer opponent.
+// Flags: t = 2 vs 2, n = new, x = no computer opponent, l = local only (not online),
+// u = side view (see GameMeta.upright).
 const TABLE: Record<Family, Row[]> = {
   board: [
-    ['tic-tac-toe', 'Tic Tac Toe', '❌', 'Take turns placing your mark. Three in a row wins.', 'o'],
+    ['tic-tac-toe', 'Tic Tac Toe', '❌', 'Take turns placing your mark. Three in a row wins.'],
     [
       'ultimate-tic-tac-toe',
       'Ultimate Tic Tac Toe',
       '🔲',
       'Nine boards in one. Where you play sends your rival to that board. Win three boards in a row.',
-      'o',
     ],
     [
       'four-in-a-row',
       '4 in a Row',
       '🔴',
       'Drop discs into the columns. Line up four in any direction.',
-      'o',
     ],
-    ['chess', 'Chess', '♟️', 'The classic. Checkmate the king to win.', 'o'],
+    ['chess', 'Chess', '♟️', 'The classic. Checkmate the king to win.'],
     [
       'checkers',
       'Checkers',
       '🏁',
       'Jump diagonally over rival pieces; captures are compulsory. Reach the far row to crown a king.',
-      'o',
     ],
     [
       'reversi',
       'Reversi',
       '⚪',
       'Trap rival discs between yours to flip them. Most discs when the board fills wins.',
-      'o',
     ],
     [
       'mancala',
       'Mancala',
       '🫘',
       'Sow seeds around the board. End in your store to play again; end in an empty pit on your side to capture.',
-      'o',
     ],
     [
       'dots-and-boxes',
       'Dots and Boxes',
       '✏️',
       'Draw a line between two dots. Close a box to claim it and play again.',
-      'o',
     ],
     [
       'sea-battle',
       'Sea Battle',
       '🚢',
       "Hide your fleet, then take turns firing at your rival's waters. Sink every ship first.",
-      'o',
     ],
     [
       'color-wars',
       'Color Wars',
       '🎨',
       'Tap your cells to add dots. At four they burst and take over the neighbours. Wipe your rival off the board.',
-      'o',
     ],
     [
       'pop-it',
       'Pop It',
       '🫧',
       'Pop as many bubbles as you like from one row. Whoever pops the last bubble loses.',
-      'o',
     ],
   ],
   dice: [
@@ -113,42 +110,36 @@ const TABLE: Record<Family, Row[]> = {
       'Backgammon',
       '🎲',
       'Race your fifteen checkers home and bear them off. Hit a lone checker to send it back.',
-      'o',
     ],
     [
       'ludo',
       'Ludo',
       '🐎',
       'Roll a six to leave base. Race your tokens around and home; land on a rival to send it back.',
-      'o',
     ],
     [
       'snakes-and-ladders',
       'Snakes & Ladders',
       '🪜',
       'Roll and climb. Ladders lift you, snakes slide you down. First to 100 wins.',
-      'o',
     ],
     [
       'yazy',
       'Yazy',
       '💯',
       'Five dice, three rolls a turn. Fill a short score sheet with combos; highest total wins.',
-      'o',
     ],
     [
       'yazy-classic',
       'Yazy Classic',
       '📋',
       'The full thirteen-row dice classic: upper bonus, straights, full house and five of a kind.',
-      'o',
     ],
     [
       'shut-the-box',
       'Shut the Box',
       '📦',
       'Roll and shut tiles that add up to the roll. Lowest total left open wins.',
-      'o',
     ],
   ],
   cards: [
@@ -157,50 +148,38 @@ const TABLE: Record<Family, Row[]> = {
       'Guess the Person',
       '🕵️',
       "Ask yes/no questions about your rival's secret face and flip down the ones it can't be. Name it first to win.",
-      'o',
     ],
     [
       'triple',
       'Triple',
       '🃏',
       'Spot three cards that are all the same or all different on every trait. First to tap a real triple scores.',
-      'o',
     ],
     [
       'memory',
       'Memory',
       '🧠',
       'Flip two cards a turn. A pair is yours and you go again. Most pairs wins.',
-      'o',
     ],
     [
       'pizza-memory',
       'Pizza Memory',
       '🍕',
       'Watch the order arrive, then rebuild it topping by topping. One slip ends your turn.',
-      'o',
     ],
     [
       'math-quiz',
       'Math Quiz',
       '➗',
       'Tap the right answer before your rival. A wrong answer costs a point.',
-      'o',
     ],
     [
       'reflex-race',
       'Reflex Race',
       '⚡',
       'Hit your button the moment the picture matches the rule. Too early costs you.',
-      'o',
     ],
-    [
-      'find-match',
-      'Find Match',
-      '🔍',
-      'Two cards always share exactly one symbol. Spot it first.',
-      'o',
-    ],
+    ['find-match', 'Find Match', '🔍', 'Two cards always share exactly one symbol. Spot it first.'],
   ],
   puck: [
     [
@@ -275,13 +254,7 @@ const TABLE: Record<Family, Row[]> = {
       '👑',
       'Stay on the crown zone and bump your rival off. Hold it the longest.',
     ],
-    [
-      'pinball',
-      'Pinball',
-      '🕹️',
-      "Flip the ball past your rival's flippers and into their drain.",
-      'o',
-    ],
+    ['pinball', 'Pinball', '🕹️', "Flip the ball past your rival's flippers and into their drain."],
   ],
   aim: [
     ['golf', 'Golf', '🏌️', 'Pull back to swing, mind the wind. Hole out in fewer strokes.'],
@@ -315,7 +288,6 @@ const TABLE: Record<Family, Row[]> = {
       'Archery Master',
       '🍎',
       "Shoot the apple off the dummy's head. Hit the dummy and you lose a life.",
-      'o',
     ],
     [
       'knife-thrower',
@@ -350,7 +322,7 @@ const TABLE: Record<Family, Row[]> = {
       'Pull the Rope',
       '🪢',
       'Tap as fast as you can to drag the rope over to your side.',
-      'ot',
+      't',
     ],
     [
       'hammer-hit',
@@ -370,7 +342,7 @@ const TABLE: Record<Family, Row[]> = {
       '🍣',
       "Wait for the signal, then grab the last piece first. Grab too soon and it's gone.",
     ],
-    ['whack-a-mole', 'Whack a Mole', '🐹', 'Bonk the moles on your side. Spare the bunnies.', 'ot'],
+    ['whack-a-mole', 'Whack a Mole', '🐹', 'Bonk the moles on your side. Spare the bunnies.', 't'],
     [
       'hot-potato',
       'Hot Potato',
@@ -532,19 +504,22 @@ const TABLE: Record<Family, Row[]> = {
       'Ballgames Physics',
       '🤸',
       "Floppy players, one ball. Tap to jump and kick it into your rival's goal.",
+      'u',
     ],
-    ['wrestle', 'Wrestle', '🤼', "Tap to jump and grab. Pin your rival's head to the mat."],
+    ['wrestle', 'Wrestle', '🤼', "Tap to jump and grab. Pin your rival's head to the mat.", 'u'],
     [
       'animal-stack',
       'Animal Stack',
       '🦒',
       'Drop animals on the tower in turns. Whoever topples it loses.',
+      'u',
     ],
     [
       'brainrot-stack',
       'Brainrot Stack',
       '🗿',
       'Stack the strangest cast ever. Whoever topples it loses.',
+      'u',
     ],
     [
       'water-game',
@@ -559,63 +534,63 @@ const TABLE: Record<Family, Row[]> = {
       'Sudoku',
       '🔢',
       'Same puzzle for both. Fill every row, column and box with 1 to 9. Fastest wins.',
-      'ox',
+      'x',
     ],
     [
       'sliding-puzzle',
       'Sliding Puzzle',
       '🧩',
       'Slide the tiles back into order. Fastest wins.',
-      'ox',
+      'x',
     ],
     [
       'blocks',
       'Blocks',
       '🟦',
       'Fit pieces on the grid and clear full lines. Best score before the clock runs out.',
-      'ox',
+      'x',
     ],
     [
       'solitaire',
       'Solitaire',
       '♠️',
       'Same deal for both. Build every suit from ace to king. Most cards home wins.',
-      'ox',
+      'x',
     ],
     [
       'tap-match',
       'Tap Match',
       '🀄',
       'Tap tiles into the tray; three alike vanish. Clear the stack first.',
-      'ox',
+      'x',
     ],
     [
       'number-match',
       'Number Match',
       '🔟',
       'Match equal numbers or pairs that make ten. Clear the board first.',
-      'ox',
+      'x',
     ],
     [
       'nuts-and-bolts',
       'Nuts and Bolts',
       '🔩',
       'Move nuts until every bolt holds one colour. Fastest wins.',
-      'ox',
+      'x',
     ],
     [
       'maze-paint',
       'Maze Paint',
       '🖍️',
       'Swipe to roll and paint every tile of the maze. Fastest wins.',
-      'ox',
+      'x',
     ],
     [
       'fruit-merge',
       'Fruit Merge',
       '🍒',
       'Drop fruit; two alike merge into a bigger one. Best score before your jar overflows.',
-      'ox',
+      'x',
     ],
   ],
 }
@@ -627,7 +602,8 @@ export const GAMES: GameMeta[] = (Object.keys(TABLE) as Family[]).flatMap((famil
     family,
     glyph,
     rules,
-    online: flags.includes('o') || ['board', 'dice', 'cards', 'puzzle'].includes(family),
+    online: !flags.includes('l'),
+    upright: flags.includes('u'),
     teams: flags.includes('t'),
     ai: !flags.includes('x'),
     isNew: flags.includes('n'),

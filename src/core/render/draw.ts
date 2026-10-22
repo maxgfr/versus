@@ -46,6 +46,8 @@ export class Draw {
   readonly ctx: CanvasRenderingContext2D
   /** True in local 2P: blue's text and widgets are drawn upside down. */
   flipTop: boolean
+  /** Online: the side whose phone this is (null when both play on this phone). */
+  viewer: Side | null = null
   /** Elapsed real time (s), for idle animations that should run even when paused. */
   t = 0
 

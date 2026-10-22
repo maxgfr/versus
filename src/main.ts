@@ -1,14 +1,15 @@
 import fredoka from '@fontsource-variable/fredoka/files/fredoka-latin-wght-normal.woff2?url'
 import { audio } from './core/audio.ts'
 import { save, store } from './core/store.ts'
+import type { Link } from './core/net/link.ts'
 import { findGame, isBuilt, loadGame } from './registry.ts'
 import { h } from './shell/dom.ts'
 import { home } from './shell/home.ts'
 import { icon } from './shell/icons.ts'
-import { go, route, startRouter } from './shell/router.ts'
+import { beforeRoute, type Cleanup, go, route, startRouter } from './shell/router.ts'
 import { Session } from './shell/session.ts'
 import { sheet } from './shell/settings.ts'
-import { ROOM_KEY, ui } from './shell/state.ts'
+import { ui } from './shell/state.ts'
 import { startUpdates } from './shell/updates.ts'
 import './style.css'
 
@@ -33,68 +34,74 @@ const app = document.getElementById('app') as HTMLElement
 
 route(/^\/$/, (root) => home(root))
 
-route(/^\/play\/([\w-]+)(?:\?.*)?$/, async (root, id) => {
+/** A game: local (`#/play/<id>`) or in an online room (`#/online/CODE/play/<id>`). */
+async function play(root: HTMLElement, id: string, code?: string): Promise<Cleanup> {
   const params = new URLSearchParams(location.hash.split('?')[1] ?? '')
   const demo = params.has('demo')
     ? { speed: Math.min(8, Number(params.get('speed')) || 1), clean: params.has('clean') }
     : undefined
   const meta = findGame(id)
-  if (!meta || !isBuilt(id)) {
-    go('/', true)
+  const back = code ? `/online/${code}` : '/'
+  if (!meta || !isBuilt(id) || (code && !meta.online)) {
+    go(back, true)
     return
   }
-  if (ui.mode === 'online' && (!meta.online || !ui.link?.connected)) {
-    if (!ui.link?.connected) {
-      go('/online', true)
+  let link: Link | null = null
+  let pending: { seed: number; target?: number } | undefined
+  if (code) {
+    const online = await import('./shell/online.ts')
+    link = online.room(code)
+    // A reloaded page waits in the room; the host pulls it back into the game.
+    if (!link.connected) {
+      go(back, true)
       return
     }
-    ui.mode = '2p'
+    if (link.role === 'guest') pending = online.takePending()
   }
   const loading = h('div.loading', h('span.spinner'))
   root.append(loading)
   const [mod] = await Promise.all([loadGame(id), fontReady])
   loading.remove()
-  let pending: { seed: number; target?: number } | undefined
-  if (ui.mode === 'online' && ui.link?.role === 'guest') {
-    pending = (await import('./shell/online.ts')).takePending()
-  }
   const s = new Session(root, {
     meta,
     factory: mod.default,
     match: mod.match,
-    mode: ui.mode,
-    link: ui.mode === 'online' ? ui.link : null,
+    mode: code ? 'online' : ui.local,
+    link,
     ...(pending ? { seed: pending.seed } : {}),
     ...(pending?.target !== undefined ? { target: pending.target } : {}),
     ...(demo ? { demo, mode: '1p' as const } : {}),
-    onExit: () => go('/'),
+    onExit: () => go(back),
   })
   return () => s.destroy()
+}
+
+route(/^\/play\/([\w-]+)(?:\?.*)?$/, (root, id) => play(root, id ?? ''))
+
+route(/^\/online\/([A-Z]{4})\/play\/([\w-]+)$/, (root, code, id) => play(root, id ?? '', code))
+
+route(/^\/online\/([A-Za-z]{4})$/, async (root, code = '') => {
+  if (code !== code.toUpperCase()) {
+    go(`/online/${code.toUpperCase()}`, true)
+    return
+  }
+  return (await import('./shell/online.ts')).roomScreen(root, code)
 })
 
-route(/^\/online(?:\/([A-Za-z]{4}))?$/, async (root, code) =>
-  (await import('./shell/online.ts')).lobby(root, code),
-)
+route(/^\/online$/, async (root) => (await import('./shell/online.ts')).lobby(root))
+
+// Online is a place: going anywhere else leaves the room.
+beforeRoute((path) => {
+  if (ui.link && !path.startsWith('/online'))
+    void import('./shell/online.ts').then((m) => m.leaveRoom())
+})
 
 route(/^\/tournament$/, async (root) => (await import('./shell/tournament.ts')).tournament(root))
 
 document.body.append(
   h('div.rotate', { 'aria-live': 'polite' }, icon('phone'), 'Turn your phone upright to play'),
 )
-// A tab that was reloaded mid-session (iOS does this to Safari behind the
-// share sheet) goes straight back into its online room.
-let room: unknown = null
-try {
-  room = JSON.parse(sessionStorage.getItem(ROOM_KEY) ?? 'null')
-} catch {
-  // No storage: nothing to rejoin.
-}
-if (room && typeof room === 'object') {
-  ui.mode = 'online'
-  void import('./shell/online.ts')
-    .then((m) => m.rejoin(room as Parameters<typeof m.rejoin>[0]))
-    .finally(() => startRouter(app))
-} else startRouter(app)
+startRouter(app)
 
 // ---------- iOS install guide (first Safari visit, not installed) ----------
 
@@ -131,5 +138,5 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) startUpdates()
 
 // Keyboard shortcut for desktop testers: Escape goes home from anywhere but a game.
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !location.hash.startsWith('#/play/')) go('/')
+  if (e.key === 'Escape' && !location.hash.includes('/play/')) go('/')
 })

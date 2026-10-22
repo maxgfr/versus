@@ -1,10 +1,11 @@
 import { Button } from '../../core/controls.ts'
 import { frame } from '../../core/frame.ts'
-import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { BaseGame, type GameContext, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import type { Rng } from '../../core/rng.ts'
 import { choosePumps, type Pumps, thinkEvery } from './bot.ts'
+import { halfFrame, mirrorFx } from '../../engines/runner/frame.ts'
 import { drawBoard, ringColor } from './render.ts'
 import {
   BUTTON,
@@ -51,6 +52,16 @@ class WaterGame extends BaseGame<State> {
   private nextThink: [number, number] = [0, 0]
   private nextBubbleSound: [number, number] = [0, 0]
   private lastSec = -1
+
+  private turned: [boolean, boolean] = [false, false]
+
+  override init(ctx: GameContext): void {
+    super.init(ctx)
+    const frames = [halfFrame(0, ctx.mode), halfFrame(1, ctx.mode)]
+    mirrorFx(ctx, frames)
+    this.turned =
+      ctx.mode === 'online' ? [ctx.stage.rot !== 0, ctx.stage.rot === 0] : [false, false]
+  }
 
   protected setup(): State {
     const { ctx } = this
@@ -237,6 +248,7 @@ class WaterGame extends BaseGame<State> {
       endAt: s.endAt,
       endWhy: s.endWhy,
       winner: s.winner,
+      turned: this.turned,
     })
   }
 }

@@ -119,7 +119,7 @@ class AnimalStack extends BaseGame<State> {
 
   /** The scene faces whoever is to move (fixed upright in 1P). */
   private rotTarget(): number {
-    return this.ctx.mode !== '1p' && this.s.turn === 1 ? Math.PI : 0
+    return this.ctx.mode === '2p' && this.s.turn === 1 ? Math.PI : 0
   }
 
   // ---------- scene ↔ world ----------

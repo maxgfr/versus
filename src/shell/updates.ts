@@ -13,7 +13,7 @@ let pending = false
 let reload: ((reloadPage?: boolean) => Promise<void>) | null = null
 const found = new Set<() => void>()
 
-const inGame = () => location.hash.startsWith('#/play/')
+const inGame = () => location.hash.includes('/play/')
 
 function apply(): void {
   // Never reload under a game: wait until the players leave it.

@@ -21,7 +21,9 @@ function visible(g: GameMeta, mode: Mode): boolean {
   return true
 }
 
-export function home(root: HTMLElement): () => void {
+/** The game grid. `mode` online is the room screen once both phones are in (online.ts). */
+export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
+  let mode = initial
   const games = builtGames()
   const screen = h('div.screen.home')
   const scroller = h('main.scroller')
@@ -68,31 +70,38 @@ export function home(root: HTMLElement): () => void {
   }
 
   const pick = (g: GameMeta) => {
-    if (ui.mode === 'online') {
-      const link = ui.link
-      if (!link || !link.connected) {
-        go('/online')
-        return
-      }
-      if (link.role === 'guest') {
-        toast('Your friend picks the game. Ask them!')
-        return
-      }
-    }
     ui.scrollTop = scroller.scrollTop
-    go(`/play/${g.id}`)
+    if (mode !== 'online') {
+      go(`/play/${g.id}`)
+      return
+    }
+    const link = ui.link
+    if (!link?.connected) toast('Waiting for your friend…')
+    else if (link.role === 'guest') toast('Your friend picks the game. Ask them!')
+    else go(`/online/${link.code}/play/${g.id}`)
   }
 
   const renderModes = () => {
     modesEl.replaceChildren(
       ...MODES.map(([m, label, ic]) => {
-        const b = h('button.mode', { 'aria-pressed': String(ui.mode === m) }, icon(ic), label)
+        const b = h('button.mode', { 'aria-pressed': String(mode === m) }, icon(ic), label)
         onTap(b, () => {
-          if (ui.mode === m) return
-          ui.mode = m
+          if (mode === m) return
+          if (m === 'online') {
+            // Online lives at its own address: the room, or the lobby.
+            go(ui.link ? `/online/${ui.link.code}` : '/online')
+            return
+          }
+          ui.local = m
+          // Leaving the room screen leaves the room (main.ts).
+          if (mode === 'online') {
+            go('/')
+            return
+          }
+          mode = m
           renderModes()
+          renderChips()
           renderGrid(true)
-          if (m === 'online' && !ui.link) go('/online')
         })
         return b
       }),
@@ -100,7 +109,7 @@ export function home(root: HTMLElement): () => void {
   }
 
   const renderChips = () => {
-    const pool = games.filter((g) => visible(g, ui.mode))
+    const pool = games.filter((g) => visible(g, mode))
     const chip = (id: typeof ui.filter, label: string, n: number, lead?: Node) => {
       const b = h(
         'button.chip',
@@ -133,15 +142,15 @@ export function home(root: HTMLElement): () => void {
   }
 
   const banner = (): HTMLElement | null => {
-    if (ui.mode !== 'online') return null
+    if (mode !== 'online') return null
     const link = ui.link
     if (!link) return null
     const btn = h(
       'button.btn.ghost.tile',
       { style: { minHeight: '40px', padding: '0 14px', fontSize: '15px' } },
-      'Room',
+      'Leave',
     )
-    onTap(btn, () => go('/online'))
+    onTap(btn, () => go('/'))
     if (!link.connected)
       return h(
         'div.online-banner.waiting',
@@ -168,7 +177,7 @@ export function home(root: HTMLElement): () => void {
     if (animate)
       for (const el of scroller.querySelectorAll<HTMLElement>('.card'))
         before.set(el.dataset.id ?? '', el.getBoundingClientRect())
-    const pool = games.filter((g) => visible(g, ui.mode))
+    const pool = games.filter((g) => visible(g, mode))
     const list =
       ui.filter === 'all'
         ? pool

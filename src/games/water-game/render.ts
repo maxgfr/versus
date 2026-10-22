@@ -37,6 +37,11 @@ export interface View {
   endAt: number
   endWhy: '' | 'all' | 'time'
   winner: Side | 'draw' | null
+  /**
+   * Online, a rival's tank would show upside down (its frame is turned for
+   * the player across the table): these halves are turned back for this screen.
+   */
+  turned: [boolean, boolean]
 }
 
 /** Toy rings, one colour per ring (never red or blue: those belong to the players). */
@@ -415,11 +420,19 @@ function ending(g: Draw, v: View): void {
     )
   if (v.endWhy === 'all' && v.winner !== null && v.winner !== 'draw') {
     const at = frame(v.winner, W / 2, (TANK.surface + TIP) / 2)
+    if (v.turned[v.winner]) at.y = 2 * (v.winner === 0 ? MID + MID / 2 : MID / 2) - at.y
     stamp(v.winner, at.x, at.y, 'All 6!', C.yellow)
   } else if (g.flipTop) {
     stamp(0, W / 2, MID + 180, 'Time!', C.yellow)
     stamp(1, W / 2, MID - 180, 'Time!', C.yellow)
   } else stamp(undefined, W / 2, MID, 'Time!', C.yellow)
+}
+
+/** Draw `fn` for `side`, turned about the half's centre when that half is turned (see View). */
+function facing(g: Draw, v: View, side: Side, fn: () => void): void {
+  if (!v.turned[side]) return fn()
+  const cy = side === 0 ? MID + MID / 2 : MID / 2
+  g.at(W / 2, cy, Math.PI, () => g.at(-W / 2, -cy, 0, fn))
 }
 
 export function drawBoard(g: Draw, v: View): void {
@@ -438,12 +451,12 @@ export function drawBoard(g: Draw, v: View): void {
   for (const side of [0, 1] as Side[]) {
     const lost = v.endAt >= 0 && v.winner !== null && v.winner !== 'draw' && v.winner !== side
     const dim = lost ? Math.min(0.35, (v.time - v.endAt) * 0.8) : 0
-    inFrame(g, side, () => tank(g, v.time, v.tanks[side], v.pumps[side], side, dim))
-  }
-  for (const side of [0, 1] as Side[]) {
-    pumpButton(g, side, 0, v.pumps[side][0], v.time)
-    pumpButton(g, side, 1, v.pumps[side][1], v.time)
-    tally(g, side, v.tanks[side], v.time)
+    facing(g, v, side, () => {
+      inFrame(g, side, () => tank(g, v.time, v.tanks[side], v.pumps[side], side, dim))
+      pumpButton(g, side, 0, v.pumps[side][0], v.time)
+      pumpButton(g, side, 1, v.pumps[side][1], v.time)
+      tally(g, side, v.tanks[side], v.time)
+    })
   }
   for (const side of [0, 1] as Side[]) {
     const pumping = v.pumps[side][0] || v.pumps[side][1]

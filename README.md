@@ -5,7 +5,7 @@ Two-player mini-games for one phone, played face to face: put the phone flat on 
 **Play now: https://maxgfr.github.io/versus/** — then _Share → Add to Home Screen_ to install it. It works offline.
 
 - 114 original mini-games: board classics, dice, cards and quizzes, ball games, aiming, reflex duels, arena battles, runners, physics and puzzle races.
-- **2P on one phone** with the top half upside down, **1P against the computer** (easy, normal, hard), **online** with a 4-letter room code, link or QR, and **2 vs 2** on one phone for some games.
+- **2P on one phone** with the top half upside down, **1P against the computer** (easy, normal, hard), **online** for every game, with a 4-letter room code, link or QR, and **2 vs 2** on one phone for some games.
 - Choose the match length before each game (rounds to win, points, duration), keep a red-vs-blue scoreboard across games, run **tournaments** of 3, 5 or 7 random games.
 - Free, no ads, no accounts, no tracking. Scores and names stay on your phone.
 
