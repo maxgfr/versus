@@ -25,12 +25,34 @@ export const TRUNK_LEN = 80
 /** No branch. Otherwise the branch side: 0 = left, 1 = right, as the player sees their own half. */
 export const NONE = -1
 
-/** Branch side for each segment, bottom first. The first two are always clear. */
-export function trunkNew(rng: Rng): number[] {
+/** Branch odds per segment at the bottom and at the finish, and the odds a branch switches side. */
+export const DENSITY: readonly [number, number] = [0.45, 0.82]
+export const ZIGZAG: readonly [number, number] = [0.5, 0.78]
+
+/** 0..1 how far up the race segment `i` is, for a match of `target` segments. */
+export const climb = (i: number, target = TARGET): number =>
+  Math.max(0, Math.min(1, (i - 2) / Math.max(1, target - 3)))
+
+/**
+ * Branch side for each segment, bottom first. The first two are always clear.
+ * The trunk ramps up toward the finish of a `target`-segment race: branches
+ * get denser and switch sides more often, so the run-in needs more hops and
+ * more reading. Both players get the same trunk.
+ */
+export function trunkNew(rng: Rng, target = TARGET): number[] {
   const seq: number[] = []
+  let last = NONE
   for (let i = 0; i < TRUNK_LEN; i++) {
-    if (i < 2 || !rng.chance(0.6)) seq.push(NONE)
-    else seq.push(rng.chance(0.5) ? 0 : 1)
+    const k = climb(i, target)
+    const dense = DENSITY[0] + (DENSITY[1] - DENSITY[0]) * k
+    if (i < 2 || !rng.chance(dense)) {
+      seq.push(NONE)
+      continue
+    }
+    const zig = ZIGZAG[0] + (ZIGZAG[1] - ZIGZAG[0]) * k
+    const b = last === NONE ? (rng.chance(0.5) ? 0 : 1) : rng.chance(zig) ? 1 - last : last
+    seq.push(b)
+    last = b
   }
   return seq
 }

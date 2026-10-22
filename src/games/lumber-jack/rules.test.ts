@@ -51,6 +51,56 @@ describe('lumber jack: trunk', () => {
   })
 })
 
+/** Share of branched segments, and of branches that switch side, over [from, to) across many seeds. */
+function trunkStats(target: number, from: number, to: number) {
+  let segs = 0
+  let branches = 0
+  let pairs = 0
+  let switches = 0
+  for (let seed = 0; seed < 200; seed++) {
+    const seq = trunkNew(new Rng(seed), target)
+    let last = NONE
+    for (let i = 0; i < seq.length && i < to; i++) {
+      const b = seq[i] ?? NONE
+      if (i >= from) {
+        segs++
+        if (b !== NONE) branches++
+        if (b !== NONE && last !== NONE) {
+          pairs++
+          if (b !== last) switches++
+        }
+      }
+      if (b !== NONE) last = b
+    }
+  }
+  return { density: branches / segs, zig: switches / pairs }
+}
+
+describe('lumber jack: the trunk ramps up', () => {
+  it('branches are denser and zig-zag more near the finish than at the start', () => {
+    const start = trunkStats(TARGET, 2, 17)
+    const finish = trunkStats(TARGET, TARGET - 15, TARGET)
+    expect(finish.density).toBeGreaterThan(start.density + 0.2)
+    expect(finish.zig).toBeGreaterThan(start.zig + 0.15)
+  })
+
+  it('the ramp follows the chosen match length', () => {
+    // A short match reaches its dense run-in by its own finish line.
+    const short = trunkStats(20, 14, 20)
+    const long = trunkStats(70, 14, 20)
+    expect(short.density).toBeGreaterThan(long.density + 0.15)
+  })
+
+  it('still opens clear and stays the same for the same seed and length', () => {
+    for (const target of [20, 50, 70]) {
+      const a = trunkNew(new Rng(3), target)
+      expect(a).toEqual(trunkNew(new Rng(3), target))
+      expect(a[0]).toBe(NONE)
+      expect(a[1]).toBe(NONE)
+    }
+  })
+})
+
 describe('lumber jack: chopping', () => {
   it('a chop from the side away from the branch is safe', () => {
     const s = stateWith([NONE, NONE, 0, NONE])
@@ -317,10 +367,25 @@ describe('lumber jack: bots', () => {
 
   it('a hard bot beats an easy bot most of the time', () => {
     let hard = 0
-    const games = 12
+    const games = 16
     for (let seed = 0; seed < games; seed++) {
       if (botMatch(100 + seed, 'hard', 'easy').winner === 0) hard++
+      // Sides swapped, so the result does not hang on who is red.
+      if (botMatch(600 + seed, 'easy', 'hard').winner === 1) hard++
     }
-    expect(hard).toBeGreaterThanOrEqual(Math.ceil(games * 0.7))
+    expect(hard).toBeGreaterThanOrEqual(Math.ceil(games * 2 * 0.9))
+  })
+
+  it('a hard bot is fast but humanly so, and normal sits clearly between', () => {
+    const time = (d: 'easy' | 'normal' | 'hard') => {
+      let t = 0
+      for (let seed = 0; seed < 8; seed++) t += botMatch(700 + seed, d, d).t
+      return t / 8
+    }
+    const [easy, normal, hard] = [time('easy'), time('normal'), time('hard')]
+    // 50 segments: hard well under 6 chops a second, easy a relaxed pace.
+    expect(hard).toBeGreaterThan(TARGET / 6)
+    expect(hard).toBeLessThan(normal * 0.8)
+    expect(normal).toBeLessThan(easy * 0.65)
   })
 })

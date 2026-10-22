@@ -63,7 +63,12 @@ class LumberJack extends BaseGame<State> {
         ? new ChopBot(ctx.rng.fork(), ctx.difficulty, side as Side, this.target)
         : null,
     ) as [ChopBot | null, ChopBot | null]
-    return { seq: trunkNew(ctx.rng), p: [chopperNew(), chopperNew()], endAt: -1, crashed: false }
+    return {
+      seq: trunkNew(ctx.rng, this.target),
+      p: [chopperNew(), chopperNew()],
+      endAt: -1,
+      crashed: false,
+    }
   }
 
   protected step(_dt: number): void {
