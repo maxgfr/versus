@@ -9,9 +9,13 @@ import { drive, newBrain } from './bot.ts'
 import {
   FLIP,
   heightAt,
+  matchWinner,
   metres,
   newBike,
+  ROUGH_FROM,
   RUN_CAP,
+  slopeAt,
+  START_CAP,
   stepBike,
   terrainFor,
   wheelieAngle,
@@ -50,6 +54,17 @@ describe('wheelie terrain', () => {
   it('is a pure function of seed and run, and differs between runs', () => {
     expect(terrainFor(42, 1)).toEqual(terrainFor(42, 1))
     expect(terrainFor(42, 0)).not.toEqual(terrainFor(42, 1))
+  })
+
+  it('gets choppier further along: steeper slopes, same height limit', () => {
+    let early = 0
+    let late = 0
+    for (let seed = 1; seed <= 10; seed++) {
+      const t = terrainFor(seed, 0)
+      for (let x = 700; x < ROUGH_FROM; x += 10) early = Math.max(early, Math.abs(slopeAt(t, x)))
+      for (let x = 12000; x < 14300; x += 10) late = Math.max(late, Math.abs(slopeAt(t, x)))
+    }
+    expect(late).toBeGreaterThan(early * 1.2)
   })
 
   it('stays within the lane: no hill is taller than the lane allows', () => {
@@ -107,10 +122,27 @@ describe('wheelie bike', () => {
     const rng = new Rng(4)
     const brain = newBrain()
     for (let f = 0; f < 60 * (RUN_CAP + 2) && !b.end; f++) {
-      stepBike(b, t, DT, drive(b, wheelieAngle(t, b), 'hard', rng, brain))
+      stepBike(b, t, DT, drive(b, t, 'hard', rng, brain))
     }
     expect(b.end === 'capped' || b.end === 'flipped' || b.end === 'dropped').toBe(true)
     expect(b.age).toBeLessThanOrEqual(RUN_CAP + DT)
+  })
+
+  it('ends a run that never lifts the front, so nobody waits out the whole cap', () => {
+    const t = terrainFor(3, 0)
+    const b = newBike()
+    let f = 0
+    for (; f < 60 * RUN_CAP && !b.end; f++) stepBike(b, t, DT, false)
+    expect(b.end).toBe('capped')
+    expect(b.wheelie).toBe(0)
+    expect(f / 60).toBeLessThanOrEqual(START_CAP + DT)
+  })
+
+  it('equal best runs go to the higher total, then a dead heat', () => {
+    expect(matchWinner([30, 10], [20, 25])).toBe(0)
+    expect(matchWinner([30, 10], [30, 25])).toBe(1)
+    expect(matchWinner([30, 25], [25, 30])).toBe('draw')
+    expect(matchWinner([], [])).toBe('draw')
   })
 
   it('counts metres in tenths of a unit', () => {
@@ -129,7 +161,7 @@ describe('wheelie bot', () => {
     let dropped = false
     let flipped = false
     for (let f = 0; f < 60 * 20 && !b.end; f++) {
-      stepBike(b, t, DT, drive(b, wheelieAngle(t, b), 'hard', rng, brain))
+      stepBike(b, t, DT, drive(b, t, 'hard', rng, brain))
     }
     if (b.end === 'dropped') dropped = true
     if (b.end === 'flipped') flipped = true
@@ -147,13 +179,17 @@ describe('wheelie bot', () => {
         const rng = new Rng(seed)
         const brain = newBrain()
         for (let f = 0; f < 60 * 50 && !b.end; f++) {
-          stepBike(b, t, DT, drive(b, wheelieAngle(t, b), d, rng, brain))
+          stepBike(b, t, DT, drive(b, t, d, rng, brain))
         }
         sum += b.wheelie
       }
       return sum / 6
     }
-    expect(avg('hard')).toBeGreaterThan(avg('easy'))
+    const hard = avg('hard')
+    const normal = avg('normal')
+    expect(hard).toBeGreaterThan(avg('easy') * 2)
+    expect(normal).toBeGreaterThan(avg('easy'))
+    expect(normal).toBeLessThan(hard)
   })
 })
 
@@ -183,8 +219,7 @@ describe('wheelie game', () => {
   it('each side banks two runs and the best one decides the match', () => {
     const { game } = bots(8, 'hard')
     const best = (side: Side) => Math.max(...game.s.runs[side])
-    const winner = best(0) === best(1) ? 'draw' : best(0) > best(1) ? 0 : 1
-    expect(game.result?.winner).toBe(winner)
+    expect(game.result?.winner).toBe(matchWinner(game.s.runs[0], game.s.runs[1]))
     expect(game.result?.score).toEqual([best(0), best(1)])
   })
 
@@ -210,5 +245,7 @@ describe('wheelie game', () => {
     }
     expect(game.result?.score).toEqual([0, 0])
     expect(game.result?.winner).toBe('draw')
+    // Two runs of START_CAP each plus the beats between them: no 45 s waits.
+    expect(steps).toBeLessThan(60 * 40)
   })
 })

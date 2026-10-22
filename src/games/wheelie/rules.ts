@@ -15,6 +15,8 @@ export const BASE_Y = 660
 export const RUNS = 2
 /** A run that is still going after this long is called on time. */
 export const RUN_CAP = 45
+/** A run whose front has not left the ground after this long is over (no dead time). */
+export const START_CAP = 10
 /** Front clearance (units) above which the front counts as "in the air". */
 export const CLEAR = 12
 
@@ -76,11 +78,23 @@ export function terrainFor(seed: number, run: number): Terrain {
   }
 }
 
+/** The road roughens from this distance (units) over the next ROUGH_OVER. */
+export const ROUGH_FROM = 3000
+export const ROUGH_OVER = 9000
+
 /** Ground height (units above the base line) at course distance x. Flat for the first ~60 m. */
 export function heightAt(t: Terrain, x: number): number {
   const ramp = Math.min(1, Math.max(0, (x - 60) / 600))
+  // The further the ride, the choppier the road: the short bumps grow while the
+  // long swells shrink, so the peak height stays the same but the slopes get steeper.
+  const k = Math.min(1, Math.max(0, (x - ROUGH_FROM) / ROUGH_OVER))
   const [a, b, c] = t.p
-  return ramp * (40 * Math.sin(x / 300 + a) + 22 * Math.sin(x / 120 + b) + 8 * Math.sin(x / 50 + c))
+  return (
+    ramp *
+    ((40 - 10 * k) * Math.sin(x / 300 + a) +
+      (22 + 4 * k) * Math.sin(x / 120 + b) +
+      (8 + 6 * k) * Math.sin(x / 50 + c))
+  )
 }
 
 /** Slope of the ground at x (rise over run). */
@@ -162,7 +176,7 @@ export function stepBike(b: Bike, t: Terrain, dt: number, thr: boolean): BikeEve
   if (b.started && c > CLEAR) b.wheelie += b.d - d0
   if (b.started && c <= 0) return end(b, 'dropped')
   if (wheelieAngle(t, b) >= FLIP) return end(b, 'flipped')
-  if (b.age >= RUN_CAP) return end(b, 'capped')
+  if (b.age >= RUN_CAP || (!b.started && b.age >= START_CAP)) return end(b, 'capped')
   return ev
 }
 
@@ -170,6 +184,18 @@ function end(b: Bike, why: Phase): BikeEvent {
   b.end = why
   b.om = 0
   return why === 'flipped' ? 'flip' : why === 'dropped' ? 'dropped' : 'capped'
+}
+
+/**
+ * The match: the best run wins; equal bests go to the higher total over all
+ * runs (the steadier rider); equal again is a dead heat.
+ */
+export function matchWinner(a: readonly number[], b: readonly number[]): 0 | 1 | 'draw' {
+  const best = (r: readonly number[]) => Math.max(0, ...r)
+  const sum = (r: readonly number[]) => r.reduce((x, y) => x + y, 0)
+  if (best(a) !== best(b)) return best(a) > best(b) ? 0 : 1
+  if (sum(a) !== sum(b)) return sum(a) > sum(b) ? 0 : 1
+  return 'draw'
 }
 
 /** Score in whole metres. */

@@ -1,9 +1,10 @@
-import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { type GameContext, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { clamp, lerp } from '../../core/fx/ease.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
-import { RunnerGame, toWorld } from '../../engines/runner/index.ts'
+import { mirrorFx, RunnerGame, toWorld } from '../../engines/runner/index.ts'
 import { type Brain, drive, newBrain } from './bot.ts'
 import { drawLane } from './render.ts'
 import {
@@ -12,6 +13,7 @@ import {
   BASE_Y,
   BIKE_X,
   heightAt,
+  matchWinner,
   metres,
   newBike,
   RUNS,
@@ -19,7 +21,6 @@ import {
   type Terrain,
   terrainFor,
   WHEELBASE,
-  wheelieAngle,
 } from './rules.ts'
 import { countFigure } from './ui.ts'
 
@@ -54,6 +55,42 @@ class Wheelie extends RunnerGame<State> {
 
   private brains: [Brain, Brain] = [newBrain(), newBrain()]
   private rng: Rng | null = null
+  /** Cosmetic: each bike at the previous step, for interpolation. */
+  private prev: [{ d: number; y: number; phi: number }, { d: number; y: number; phi: number }] = [
+    { d: 0, y: 0, phi: 0 },
+    { d: 0, y: 0, phi: 0 },
+  ]
+  private stepped = false
+  private alpha = 1
+
+  override init(ctx: GameContext): void {
+    super.init(ctx)
+    // Effects land where each lane is drawn, also when a half is shown turned (online).
+    mirrorFx(ctx, this.frames)
+  }
+
+  protected override step(dt: number): void {
+    for (const side of [0, 1] as Side[]) {
+      const b = this.s.bikes[side]
+      const p = this.prev[side]
+      p.d = b.d
+      p.y = b.y
+      p.phi = b.phi
+    }
+    this.stepped = true
+    super.step(dt)
+  }
+
+  override render(g: Draw, alpha = 1): void {
+    // Hit-stop freezes the world: no blending between two steps that are not moving.
+    this.alpha = this.stepped && this.ctx.fx.hitstop === 0 ? alpha : 1
+    super.render(g)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.stepped = false
+  }
 
   protected setup(): State {
     return {
@@ -138,7 +175,8 @@ class Wheelie extends RunnerGame<State> {
     const s = this.s
     const best0 = Math.max(0, ...s.runs[0])
     const best1 = Math.max(0, ...s.runs[1])
-    const winner = best0 === best1 ? 'draw' : best0 > best1 ? 0 : 1
+    const winner = matchWinner(s.runs[0], s.runs[1])
+    const tie = best0 === best1 && winner !== 'draw'
     s.phase = 'done'
     s.phaseAt = this.time
     s.winner = winner
@@ -148,7 +186,11 @@ class Wheelie extends RunnerGame<State> {
     }
     this.finish(winner, {
       score: [best0, best1],
-      note: this.runs === 1 ? 'Single run' : `Best of ${WORDS[this.runs] ?? this.runs} runs`,
+      note: tie
+        ? 'Equal best: the total decides'
+        : this.runs === 1
+          ? 'Single run'
+          : `Best of ${WORDS[this.runs] ?? this.runs} runs`,
       delay: DONE_T,
     })
   }
@@ -160,12 +202,14 @@ class Wheelie extends RunnerGame<State> {
     if (b.end) return
     const t = this.terrain()
     const thr = this.isBot(side)
-      ? drive(b, wheelieAngle(t, b), this.ctx.difficulty, this.botRng(), this.brains[side])
+      ? drive(b, t, this.ctx.difficulty, this.botRng(), this.brains[side])
       : this.pressing(side)
     const before = Math.floor(b.wheelie / 1000)
+    const vy = b.vy
+    const om = b.om
     const ev = stepBike(b, t, dt, thr)
     if (Math.floor(b.wheelie / 1000) > before) this.milestone(side, b, t)
-    if (ev) this.onEvent(side, b, t, ev)
+    if (ev) this.onEvent(side, b, t, ev, vy, om)
     // Dust kicks off the back wheel while it is driving on the ground.
     if (b.thr && b.y <= 0.5 && Math.round(this.time * 60) % 5 === side) {
       const at = this.at(side, BIKE_X - 40, BASE_Y - heightAt(t, b.d) + 4)
@@ -191,7 +235,7 @@ class Wheelie extends RunnerGame<State> {
     this.ctx.fx.float(`${metres(b.wheelie)} m`, at.x, at.y, SIDE[side].light, 52, side)
   }
 
-  private onEvent(side: Side, b: Bike, t: Terrain, ev: BikeEvent): void {
+  private onEvent(side: Side, b: Bike, t: Terrain, ev: BikeEvent, vy: number, om: number): void {
     const fx = this.ctx.fx
     const contact = this.at(side, BIKE_X, BASE_Y - heightAt(t, b.d))
     const above = this.at(side, BIKE_X + 120, BASE_Y - heightAt(t, b.d) - 260)
@@ -201,16 +245,22 @@ class Wheelie extends RunnerGame<State> {
         fx.float('Wheelie!', above.x, above.y, C.yellow, 60, side)
         fx.puff(contact.x, contact.y, alpha(C.white, 0.6), 6)
         break
-      case 'land':
-        this.ctx.audio.play('thud', 0.9)
-        fx.puff(contact.x, contact.y, alpha(C.white, 0.7), 8)
-        fx.shake(0.12)
+      case 'land': {
+        // Off a crest and back down: as hard as the drop.
+        const k = clamp(-vy / 700, 0, 1)
+        this.ctx.audio.play('thud', 1.1 - k * 0.3)
+        fx.puff(contact.x, contact.y, alpha(C.white, 0.7), Math.round(5 + k * 8))
+        fx.shake(0.06 + k * 0.16)
+        if (k > 0.6) this.ctx.audio.buzz?.(12)
         break
+      }
       case 'flip': {
+        // Going over fast (pitch rate, speed) is the bigger wipe-out.
+        const k = clamp(Math.abs(om) / 3 + b.v / 800, 0.3, 1)
         b.endT = this.time
-        this.ctx.audio.play('hit')
+        this.ctx.audio.play('hit', 1.1 - k * 0.25)
         this.ctx.audio.play('thud')
-        this.ctx.audio.buzz?.(50)
+        this.ctx.audio.buzz?.(Math.round(30 + k * 30))
         const back = this.at(side, BIKE_X - 30, BASE_Y - heightAt(t, b.d) - 60)
         fx.burst(back.x, back.y, SIDE[side].main, { count: 22, speed: 520, size: 14 })
         fx.sparks(back.x, back.y, C.yellow, 16)
@@ -224,20 +274,27 @@ class Wheelie extends RunnerGame<State> {
           life: 1,
         })
         fx.puff(contact.x, contact.y, alpha(C.white, 0.75), 12)
-        fx.shake(0.55)
-        fx.stop(7)
+        fx.shake(0.3 + k * 0.3)
+        fx.stop(Math.round(4 + k * 4))
         break
       }
       case 'dropped': {
+        // The front slams down as fast as it was falling.
+        const k = clamp(-om / 2.5, 0.3, 1)
         b.endT = this.time
-        this.ctx.audio.play('thud', 0.8)
+        this.ctx.audio.play('thud', 0.95 - k * 0.2)
         this.ctx.audio.play('slap', 0.9)
-        this.ctx.audio.buzz?.(30)
+        this.ctx.audio.buzz?.(Math.round(18 + k * 20))
         const front = this.at(side, BIKE_X + WHEELBASE, BASE_Y - heightAt(t, b.d + WHEELBASE))
         fx.puff(front.x, front.y, alpha(C.white, 0.8), 14)
-        fx.burst(front.x, front.y, '#a06d43', { count: 12, speed: 380, size: 10, kind: 'square' })
-        fx.shake(0.3)
-        fx.stop(4)
+        fx.burst(front.x, front.y, '#a06d43', {
+          count: Math.round(8 + k * 8),
+          speed: 300 + k * 160,
+          size: 10,
+          kind: 'square',
+        })
+        fx.shake(0.15 + k * 0.25)
+        fx.stop(Math.round(2 + k * 3))
         break
       }
       case 'capped':
@@ -256,8 +313,12 @@ class Wheelie extends RunnerGame<State> {
   ): void {
     const s = this.s
     const best = (k: Side) => Math.max(0, ...s.runs[k])
+    const b = s.bikes[side]
+    const p = this.prev[side]
+    // Blend toward the latest step, unless a new run just started.
+    const a = Math.abs(b.d - p.d) > 200 ? 1 : this.alpha
     drawLane(g, side, view, {
-      bike: s.bikes[side],
+      bike: { ...b, d: lerp(p.d, b.d, a), y: lerp(p.y, b.y, a), phi: lerp(p.phi, b.phi, a) },
       terrain: this.terrain(),
       time: this.time,
       phase: s.phase,

@@ -431,14 +431,16 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   })
   gauge(g, side, b.phi - slopeAt(o.terrain, b.d), o.phase === 'run' && !b.end, o.time)
 
+  // Online, each phone only coaches its own player: the rival's lane gets no tips.
+  const coach = !o.bot && (g.viewer === null || g.viewer === side)
   if (o.phase === 'ready') {
     if (o.run === 0) {
       // The shell has just counted 3-2-1: a short beat to read the one rule.
       card(
         g,
         side,
-        o.bot ? 'Ready…' : 'Hold to wheelie',
-        o.bot ? o.name : 'Let go before you flip!',
+        coach ? 'Hold to wheelie' : 'Ready…',
+        coach ? 'Let go before you flip!' : o.name,
         CARD_Y,
         o.since,
         {
@@ -458,12 +460,19 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   } else if (o.phase === 'run') {
     if (b.end) {
       const since = o.time - b.endT
-      const label = b.end === 'flipped' ? 'Flipped!' : b.end === 'dropped' ? 'Front down!' : 'Time!'
+      const label =
+        b.end === 'flipped'
+          ? 'Flipped!'
+          : b.end === 'dropped'
+            ? 'Front down!'
+            : b.started
+              ? 'Time!'
+              : 'No wheelie!'
       card(g, side, label, `${m} m`, CARD_Y, since - 0.35, {
         x: CARD_X,
         color: b.end === 'capped' ? C.yellow : C.white,
       })
-    } else if (!b.started && !o.bot && o.since > 1.2) {
+    } else if (!b.started && coach && o.since > 1.2) {
       // Nobody has lifted the front yet: point at the bike.
       g.emoji('👆', BIKE_X + 150, BASE_Y - 330 + Math.sin(o.time * 8) * 14, 96)
       chip(g, 'Hold anywhere on your half', CARD_X, CARD_Y - 40, { size: 38 })
