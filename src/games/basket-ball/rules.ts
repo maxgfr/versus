@@ -27,6 +27,19 @@ export const G = 1000
 export const T_RING = 1.2
 /** Launch speed up, so that the ball is at rim height exactly on the rim plane at T_RING. */
 export const VZ = (RIM_H + 0.5 * G * T_RING * T_RING) / T_RING
+/**
+ * The flick's speed sets the tempo: a lazy push lobs the ball high (T_LOB to the
+ * rim plane), a snappy flick fires a flatter, quicker shot (T_SNAP). The swipe's
+ * length still sets where it lands, so aiming never depends on the speed; a fast
+ * hand just shoots more often.
+ */
+export const T_LOB = 1.3
+export const T_SNAP = 0.95
+/** Flick speeds (world units/s) mapped onto [T_LOB, T_SNAP]. */
+export const FLICK_SLOW = 900
+export const FLICK_FAST = 3400
+/** Rim touches before a rattling ball is settled (in if it sits inside the rim, out otherwise). */
+export const MAX_RIMS = 4
 /** Ground speed per world unit of swipe. */
 export const GAIN = 1.25
 export const MIN_SWIPE = 70
@@ -64,6 +77,10 @@ export interface Ball {
   landed: number
   /** World time the ball appeared (drives the pop-in). */
   born: number
+  /** Seconds from launch to the rim plane for this shot (the flick's tempo). */
+  arc: number
+  /** Rim touches this shot. */
+  rims: number
 }
 
 export interface World {
@@ -77,6 +94,8 @@ export interface World {
   ended: boolean
   /** Sudden death after a tied clock: the next basket ends the match. */
   overtime: boolean
+  /** The sudden-death basket went in: later baskets no longer count. */
+  golden: boolean
   /** Seconds since the start. */
   time: number
 }
@@ -121,6 +140,8 @@ export function spawn(side: Side, rng: Rng, time: number): Ball {
     grounded: false,
     landed: 0,
     born: time,
+    arc: T_RING,
+    rims: 0,
   }
 }
 
@@ -132,6 +153,7 @@ export function newWorld(target: number, rng: Rng): World {
     left: target,
     ended: false,
     overtime: false,
+    golden: false,
     time: 0,
   }
 }
@@ -141,23 +163,45 @@ export function ready(w: World, side: Side): boolean {
   return !w.ended && w.balls[side].state === 'ready'
 }
 
+/** Seconds to the rim plane for a flick of `speed` world units/s (undefined = the standard arc). */
+export function arcFor(speed?: number): number {
+  if (speed === undefined || !Number.isFinite(speed)) return T_RING
+  const k = Math.min(1, Math.max(0, (speed - FLICK_SLOW) / (FLICK_FAST - FLICK_SLOW)))
+  return T_LOB + (T_SNAP - T_LOB) * k
+}
+
+/** Launch velocity for a swipe: the reach on the rim plane depends on `len` only. */
+function launch(dx: number, dy: number, len: number, arc: number): [number, number, number] {
+  const m = Math.hypot(dx, dy) || 1
+  const speed = (Math.min(Math.max(len, 0), MAX_SWIPE) * GAIN * T_RING) / arc
+  return [(dx / m) * speed, (dy / m) * speed, (RIM_H + 0.5 * G * arc * arc) / arc]
+}
+
 /**
  * Launch `side`'s ball along the unit direction (dx, dy) with a swipe of `len`
- * world units. Refused unless the ball is ready and the swipe heads for the hoop.
+ * world units flicked at `flick` units/s. Refused unless the ball is ready and
+ * the swipe heads for the hoop.
  */
-export function shoot(w: World, side: Side, dx: number, dy: number, len: number): boolean {
+export function shoot(
+  w: World,
+  side: Side,
+  dx: number,
+  dy: number,
+  len: number,
+  flick?: number,
+): boolean {
   const b = w.balls[side]
   if (!ready(w, side)) return false
   const m = Math.hypot(dx, dy)
   if (m < 1e-6 || dy * fwd(side) <= 0) return false
   if (!(len >= MIN_SWIPE)) return false
-  const speed = Math.min(len, MAX_SWIPE) * GAIN
-  b.vx = (dx / m) * speed
-  b.vy = (dy / m) * speed
-  b.vz = VZ
+  const arc = arcFor(flick)
+  ;[b.vx, b.vy, b.vz] = launch(dx, dy, len, arc)
+  b.arc = arc
   b.state = 'fly'
   b.t = 0
   b.bounces = 0
+  b.rims = 0
   b.scored = false
   b.grounded = false
   b.landed = 0
@@ -170,14 +214,14 @@ export function aimPath(
   dx: number,
   dy: number,
   len: number,
+  flick?: number,
 ): { x: number; y: number; z: number }[] {
-  const m = Math.hypot(dx, dy) || 1
-  const speed = Math.min(Math.max(len, 0), MAX_SWIPE) * GAIN
+  const [vx, vy, vz] = launch(dx, dy, len, arcFor(flick))
   const out: { x: number; y: number; z: number }[] = []
   for (let t = 0; t <= 2.2; t += 0.05) {
-    const z = VZ * t - 0.5 * G * t * t
+    const z = vz * t - 0.5 * G * t * t
     if (z < 0 && t > 0) break
-    out.push({ x: from.x + (dx / m) * speed * t, y: from.y + (dy / m) * speed * t, z })
+    out.push({ x: from.x + vx * t, y: from.y + vy * t, z })
   }
   return out
 }
@@ -222,8 +266,6 @@ export function step(w: World, dt: number, rng: Rng): Event[] {
       for (let s = 0; s < SUBSTEPS && b.state === 'fly'; s++) flyStep(w, side, h, ev)
     }
   }
-  // Sudden death: the first basket ends it (no new balls after that).
-  if (w.overtime && !w.ended && ev.some((e) => e.kind === 'swish')) w.ended = true
   return ev
 }
 
@@ -275,32 +317,44 @@ function flyStep(w: World, side: Side, h: number, ev: Event[]): void {
       }
     }
   }
-  // Rim: crossing the rim plane from above decides it.
-  if (!b.scored && pz >= RIM_H && b.z < RIM_H && b.vz < 0) {
+  // Rim: crossing the rim plane from above decides it. After the sudden-death
+  // basket nothing else counts, so the other ball just falls through.
+  if (!b.scored && !w.golden && pz >= RIM_H && b.z < RIM_H && b.vz < 0) {
     const t = (pz - RIM_H) / (pz - b.z)
     const cx = px + (b.x - px) * t
     const cy = py + (b.y - py) * t
     const d = Math.hypot(cx - hoop.x, cy - hoop.y)
-    if (d < SWISH_R) {
+    // A ball still rattling after a few touches settles: in if it sits inside the rim.
+    if (d < SWISH_R || (b.rims >= MAX_RIMS && d < RIM_R)) {
       b.scored = true
       w.score[side]++
       w.swishAt[side] = w.time
+      if (w.overtime) {
+        w.golden = true
+        w.ended = true
+      }
       ev.push({ kind: 'swish', side, x: cx, y: cy })
-    } else if (d < RIM_R + BALL_R) {
-      const nx = (cx - hoop.x) / (d || 1)
-      const ny = (cy - hoop.y) / (d || 1)
+    } else if (d < RIM_R + BALL_R && b.rims < MAX_RIMS) {
+      // The rim is a ring: a ball touching its inner edge is knocked toward the
+      // middle (it can rattle in), one touching the outer edge is knocked away.
+      const ux = (cx - hoop.x) / (d || 1)
+      const uy = (cy - hoop.y) / (d || 1)
+      const s = d < RIM_R ? -1 : 1
+      const nx = ux * s
+      const ny = uy * s
       const vn = b.vx * nx + b.vy * ny
-      const speed = Math.abs(b.vz)
+      const speed = Math.abs(b.vz) + Math.hypot(b.vx, b.vy) * 0.25
       if (vn < 0) {
         b.vx -= (1 + RIM_E) * vn * nx
         b.vy -= (1 + RIM_E) * vn * ny
       }
-      // Pushed just outside the rim so the next crossing can still drop in.
-      const push = Math.max(0, RIM_R + 8 - d)
-      b.x = cx + nx * push
-      b.y = cy + ny * push
+      // Kick it off the rim line a little so the next crossing is a fresh decision.
+      const off = s > 0 ? Math.max(d, RIM_R + 8) : Math.min(d, RIM_R - 14)
+      b.x = hoop.x + ux * off
+      b.y = hoop.y + uy * off
       b.z = RIM_H + 1
-      b.vz = Math.abs(b.vz) * 0.3
+      b.vz = Math.max(140, Math.abs(b.vz) * 0.35)
+      b.rims++
       ev.push({ kind: 'rim', side, x: cx, y: cy, speed })
     }
   }

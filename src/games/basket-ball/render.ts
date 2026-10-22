@@ -36,6 +36,8 @@ export interface Drag {
   y0: number
   x: number
   y: number
+  /** Finger speed (world units/s): the flick's tempo. */
+  v?: number
 }
 
 export interface Look {
@@ -43,6 +45,10 @@ export interface Look {
   /** Interpolated balls for this frame. */
   balls: Ball[]
   drag: [Drag | null, Drag | null]
+  /** Each ball's squash (1 = round, < 1 = flattened, > 1 = stretched). */
+  squash: [number, number]
+  /** Recent flight positions (world), oldest first. */
+  trail: [{ x: number; y: number; z: number }[], { x: number; y: number; z: number }[]]
   names: [string, string]
   target: number
   status: [string | undefined, string | undefined]
@@ -252,13 +258,26 @@ function ballFace(g: Draw, r: number): void {
   g.arc(-r * 1.2, 0, r * 1.9, -0.55, 0.55, seam, lw)
 }
 
-/** A basketball: orange, black seams, turning as it flies, and lifted by its height. */
-function drawBall(g: Draw, lx: number, ly: number, z: number, spin: number, pop = 1): void {
+/**
+ * A basketball: orange, black seams, turning as it flies, and lifted by its
+ * height. `squash` < 1 flattens it (landing, wind-up), > 1 stretches it (launch).
+ */
+function drawBall(
+  g: Draw,
+  lx: number,
+  ly: number,
+  z: number,
+  spin: number,
+  pop = 1,
+  squash = 1,
+): void {
   const s = (1 + 0.26 * Math.min(1, z / 360)) * pop
   const sh = BALL_R * (1 - Math.min(0.5, z / 700)) * pop
   g.shadow(lx, ly + 6, sh, sh * 0.42, 0.4 * (1 - Math.min(0.7, z / 500)))
-  const cy = ly - z * K
-  g.at(lx, cy, spin, () => ballFace(g, BALL_R), s, s)
+  const q = Math.max(0.6, Math.min(1.4, squash))
+  // Squash about the ball's base so a landing ball sits on the floor.
+  const cy = ly - z * K + BALL_R * s * (1 - q)
+  g.at(lx, cy, 0, () => g.at(0, 0, spin, () => ballFace(g, BALL_R)), s * (2 - q), s * q)
   // Highlight stays put while the ball spins.
   g.alpha(0.6, () =>
     g.ellipse(
@@ -278,7 +297,7 @@ function drawPreview(g: Draw, b: Ball, d: Drag, side: Side): void {
   const dy = d.y - d.y0
   const len = Math.hypot(dx, dy)
   if (!swipeOK(side, dy, len)) return
-  const path = aimPath({ x: b.x, y: b.y }, dx / len, dy / len, len)
+  const path = aimPath({ x: b.x, y: b.y }, dx / len, dy / len, len, d.v)
   const hoop = hoopAt(side)
   let color: string = C.yellow
   // The first point below the rim plane tells where the ball will cross it.
@@ -432,8 +451,17 @@ export function render(g: Draw, look: Look): void {
     const live = b && b.state !== 'wait' ? b : null
     const lp = live ? frame(side, live.x, live.y) : null
     const lz = live ? Math.max(0, live.z) : 0
-    const spin = live ? live.t * 9 : 0
+    // A quick flat shot spins faster than a lob.
+    const spin = live ? (live.t * 9 * 1.2) / (live.arc || 1.2) : 0
     const pop = live ? outBack(prog(w.time - live.born, 0, 0.35)) : 1
+    // Wind-up: a ready ball sinks into the swipe as it gets longer, and breathes when idle.
+    const d = look.drag[side]
+    let sq = look.squash[side]
+    if (live && live.state === 'ready') {
+      const pull = d ? prog(Math.hypot(d.x - d.x0, d.y - d.y0), 0, 600) : 0
+      sq *= d ? 1 - 0.22 * pull : 1 + 0.03 * Math.sin(w.time * 4 + side * 2)
+    }
+    const tr = look.trail[side]
     inFrame(g, side, () => {
       const ball = () => {
         if (!live || !lp) return
@@ -441,7 +469,16 @@ export function render(g: Draw, look: Look): void {
           const pulse = 6 * Math.sin(w.time * 5)
           g.ring(lp.x, lp.y, BALL_R * 1.3 + pulse, alpha(C.yellow, 0.85 * pop), 7)
         }
-        drawBall(g, lp.x, lp.y, lz, spin, Math.max(0.01, pop))
+        if (live.state === 'fly' && tr.length > 1) {
+          for (let i = 0; i < tr.length - 1; i++) {
+            const q = tr[i]
+            if (!q) continue
+            const tp = frame(side, q.x, q.y)
+            const k = (i + 1) / tr.length
+            g.circle(tp.x, tp.y - q.z * K, BALL_R * (0.35 + 0.55 * k), alpha('#f6a25a', 0.18 * k))
+          }
+        }
+        drawBall(g, lp.x, lp.y, lz, spin, Math.max(0.01, pop), sq)
       }
       const deep = live && lp ? live.state === 'fly' && lp.y < BY - 20 && lz < BOARD_Z[0] : false
       if (deep) ball()
@@ -464,8 +501,10 @@ export function render(g: Draw, look: Look): void {
   for (const side of [0, 1] as Side[]) {
     const d = look.drag[side]
     if (!d || !ready(w, side)) continue
-    g.line(d.x0, d.y0, d.x, d.y, alpha(SIDE[side].light, 0.25), 22)
-    g.line(d.x0, d.y0, d.x, d.y, alpha(C.white, 0.5), 7)
+    // The streak heats up with the flick's speed.
+    const hot = prog(d.v ?? 0, 900, 3400)
+    g.line(d.x0, d.y0, d.x, d.y, alpha(SIDE[side].light, 0.25 + hot * 0.25), 22 + hot * 14)
+    g.line(d.x0, d.y0, d.x, d.y, alpha(hot > 0.5 ? C.yellow : C.white, 0.5 + hot * 0.3), 7)
     g.circle(d.x0, d.y0, 10, alpha(C.white, 0.6))
     g.circle(d.x, d.y, 22, alpha(SIDE[side].main, 0.9))
   }

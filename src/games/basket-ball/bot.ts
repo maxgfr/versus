@@ -1,6 +1,16 @@
 import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { GAIN, MAX_SWIPE, MIN_SWIPE, T_RING, hoopAt, ready, type World } from './rules.ts'
+import {
+  FLICK_FAST,
+  FLICK_SLOW,
+  GAIN,
+  MAX_SWIPE,
+  MIN_SWIPE,
+  T_RING,
+  hoopAt,
+  ready,
+  type World,
+} from './rules.ts'
 
 interface Tuning {
   /** Angular error on each swipe (radians, ±). */
@@ -9,12 +19,14 @@ interface Tuning {
   length: number
   /** Seconds between two shots (after the last one was launched). */
   cadence: number
+  /** How snappy its flicks are, 0 (lazy lob) .. 1 (fastest tempo). */
+  snap: number
 }
 
 export const TUNING: Record<Difficulty, Tuning> = {
-  easy: { angle: 0.3, length: 0.3, cadence: 2.1 },
-  normal: { angle: 0.18, length: 0.16, cadence: 1.5 },
-  hard: { angle: 0.12, length: 0.12, cadence: 1 },
+  easy: { angle: 0.3, length: 0.3, cadence: 2.1, snap: 0.1 },
+  normal: { angle: 0.17, length: 0.15, cadence: 1.4, snap: 0.5 },
+  hard: { angle: 0.1, length: 0.09, cadence: 0.9, snap: 0.9 },
 }
 
 /** Per-bot memory between steps (not synced). */
@@ -28,6 +40,8 @@ export interface Swipe {
   dx: number
   dy: number
   len: number
+  /** Flick speed (world units/s): sets the shot's tempo. */
+  flick: number
 }
 
 /**
@@ -58,5 +72,7 @@ export function decide(
     dx: Math.cos(ang),
     dy: Math.sin(ang),
     len: Math.min(MAX_SWIPE, Math.max(MIN_SWIPE, len)),
+    flick:
+      FLICK_SLOW + (FLICK_FAST - FLICK_SLOW) * Math.min(1, tune.snap + (rng.next() - 0.5) * 0.3),
   }
 }
