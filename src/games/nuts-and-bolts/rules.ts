@@ -146,11 +146,15 @@ class Heap<T extends { f: number; g: number }> {
 }
 
 /**
- * The shortest-ish sequence of moves that solves `start`: best-first search
- * (A*-style) over canonical states. Null when the node budget runs out.
+ * Best-first search (A*-style) over canonical states. `plan` is the moves that
+ * solve `start` (null if none was found); `exhausted` says the search saw every
+ * reachable position, so a null plan then means there is no way to solve it.
  */
-export function solve(start: Bolts, budget = 60000): [number, number][] | null {
-  if (isSolved(start)) return []
+function search(
+  start: Bolts,
+  budget: number,
+): { plan: [number, number][] | null; exhausted: boolean } {
+  if (isSolved(start)) return { plan: [], exhausted: false }
   const from = new Map<string, { prev: string; move: [number, number] } | null>()
   const k0 = key(start)
   from.set(k0, null)
@@ -167,9 +171,9 @@ export function solve(start: Bolts, budget = 60000): [number, number][] | null {
         path.push(e.move)
         k = e.prev
       }
-      return path.reverse()
+      return { plan: path.reverse(), exhausted: false }
     }
-    if (++expanded > budget) return null
+    if (++expanded > budget) return { plan: null, exhausted: false }
     for (const m of moves(cur.b)) {
       const nb = move(cur.b, m[0], m[1])
       const nk = key(nb)
@@ -178,7 +182,27 @@ export function solve(start: Bolts, budget = 60000): [number, number][] | null {
       heap.push({ f: cur.g + 1 + misplaced(nb), g: cur.g + 1, b: nb, k: nk })
     }
   }
-  return null
+  return { plan: null, exhausted: true }
+}
+
+/**
+ * The shortest-ish sequence of moves that solves `start`. Null when the node
+ * budget runs out (or there is no solution).
+ */
+export function solve(start: Bolts, budget = 60000): [number, number][] | null {
+  return search(start, budget).plan
+}
+
+/**
+ * Can this board still be sorted? 'dead' only when that is certain: no legal
+ * move at all, or every reachable position searched without a sorted one.
+ * 'unknown' when the budget ran out first (assume there is a way).
+ */
+export function outlook(bolts: Bolts, budget = 3000): 'solved' | 'ok' | 'dead' | 'unknown' {
+  if (isSolved(bolts)) return 'solved'
+  if (!moves(bolts).length) return 'dead'
+  const r = search(bolts, budget)
+  return r.plan ? 'ok' : r.exhausted ? 'dead' : 'unknown'
 }
 
 export interface Puzzle {

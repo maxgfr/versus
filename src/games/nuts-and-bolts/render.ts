@@ -1,5 +1,5 @@
 import type { Side } from '../../core/game.ts'
-import { inOutCubic, outBack, outCubic, prog } from '../../core/fx/ease.ts'
+import { clamp, inOutCubic, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { floodlight } from './ending.ts'
@@ -19,7 +19,7 @@ const TILT = 0.3
 /** The angle at which a nut shows one face square on. */
 const REST = -Math.PI / 6
 /** Seconds for a lifted run to spin up, and for a dropped run to fly over and screw down. */
-export const LIFT_T = 0.18
+export const LIFT_T = 0.24
 export const MOVE_T = 0.42
 
 /**
@@ -71,6 +71,25 @@ export function boltAt(g: Geo, bolts: number, px: number, py: number): number {
     const p = place(g, i)
     const top = rodTop(g, p.base) - 110 * g.k
     if (Math.abs(px - p.x) <= g.pitch / 2 && py >= top && py <= p.base + 52 * g.k) return i
+  }
+  return -1
+}
+
+/**
+ * The bolt under a dragged run let go at (px, py): the nearest by x (any
+ * height in a half; the row nearest the finger in solo), or -1.
+ */
+export function boltUnder(g: Geo, bolts: number, px: number, py: number): number {
+  const row =
+    g.solo && g.bases.length > 1
+      ? py < ((g.bases[0] ?? 0) + (g.bases[1] ?? 0)) / 2 - 200 * g.k
+        ? 0
+        : 1
+      : 0
+  for (let i = 0; i < bolts; i++) {
+    if (g.solo && (i < 4 ? 0 : 1) !== row) continue
+    const p = place(g, i)
+    if (Math.abs(px - p.x) <= g.pitch / 2) return i
   }
   return -1
 }
@@ -213,6 +232,8 @@ export interface Hand {
   c: number
   n: number
   at: number
+  /** A finger carrying the run (panel coords), or null while it waits above its bolt. */
+  drag: { id: number; x: number; y: number; sx: number; vx: number; moved: boolean } | null
 }
 
 export interface Move {
@@ -223,6 +244,11 @@ export interface Move {
   n: number
   back: number
   at: number
+  /** Seconds the flight takes, and 0..1 how hard it was thrown. */
+  dur: number
+  k: number
+  /** Where a dragged run was let go (panel coords), or null: it leaves from above its bolt. */
+  drag: { x: number; y: number } | null
 }
 
 export interface BoltsView {
@@ -236,6 +262,9 @@ export interface BoltsView {
   capAt: readonly number[]
   bad: number
   badAt: number
+  /** The board hit a dead end at this time (-1: it did not), and was last stepped back. */
+  deadAt: number
+  rewindAt: number
   now: number
 }
 
@@ -251,12 +280,20 @@ function hop(x0: number, y0: number, x1: number, y1: number, over: number, t: nu
   return { x, y }
 }
 
+/** Damped wobble 0..1 → ±1, settling to 0. */
+const wobble = (u: number, freq: number): number =>
+  u < 0 || u >= 1 ? 0 : Math.sin(u * Math.PI * freq) * (1 - u) * (1 - u)
+
 /** Every bolt with its stack, the lifted run spinning above its source, flying runs, and the cues for taps. */
 export function drawBolts(g: Draw, geo: Geo, v: BoltsView): void {
   const k = geo.k
   const col = SIDE[v.side]
-  const mv = v.move && v.now - v.move.at < MOVE_T ? v.move : null
+  const mv = v.move && v.now - v.move.at < v.move.dur ? v.move : null
+  // Just landed: the target stack squashes, harder for a thrown run.
+  const landed = v.move && !mv ? v.move : null
   const flying: { x: number; y: number; c: number; spin: number; sq: number }[] = []
+  const dead = v.deadAt >= 0 && v.now >= v.deadAt
+  const rewind = v.now - v.rewindAt
   // Back row first in solo so the front row's flying nuts read on top.
   v.bolts.forEach((stack, i) => {
     const { x: cx, base } = place(geo, i)
@@ -275,19 +312,34 @@ export function drawBolts(g: Draw, geo: Geo, v: BoltsView): void {
     }
     bolt(g, cx, base, top, k)
     const hot = v.bad === i && v.now - v.badAt < 0.4
-    const wob = hot ? Math.sin((v.now - v.badAt) * 50) * 9 * (1 - (v.now - v.badAt) / 0.4) : 0
+    let wob = hot ? wobble((v.now - v.badAt) / 0.4, 6) * 10 : 0
+    // A dead end: every stack shivers.
+    if (dead) wob += Math.sin(v.now * 40 + i * 1.7) * 2.5
     // Nuts still in flight are not on their bolt yet.
     let shown = stack.length
     if (mv && i === mv.to) shown -= mv.n
     if (mv && i === mv.from) shown -= mv.back
     const cap = v.capAt[i] ?? -10
     const sweep = v.now - cap
+    // Landing squash on the target, scaled by the run and the throw.
+    let land = 0
+    if (landed && landed.to === i && landed.from !== i) {
+      const u = (v.now - landed.at - landed.dur) / 0.32
+      land = wobble(u, 2.5) * (0.06 + landed.n * 0.02 + landed.k * 0.08)
+    }
     for (let j = 0; j < shown; j++) {
       const c = stack[j] ?? 0
-      const y = nutY(geo, base, j)
+      let y = nutY(geo, base, j)
+      // A completed bolt hops its stack, bottom nut first.
+      if (sweep >= 0 && sweep < 0.6)
+        y -= Math.max(0, Math.sin(prog(sweep - j * 0.04, 0, 0.32) * Math.PI)) * 16 * k
       // A glint runs up a bolt as it is completed.
       const glow = sweep >= 0 && sweep < 0.7 ? Math.max(0, 1 - Math.abs(sweep * 8 - j - 0.5)) : 0
-      nut(g, cx + wob, y, c, k, 0, glow)
+      // Stepped back from a dead end: the nuts pop back in, one bolt after another.
+      const pop =
+        rewind >= 0 && rewind < 0.6 ? outBack(prog(rewind - i * 0.03 - j * 0.02, 0, 0.3)) : 1
+      const sq = 1 + land * (j / Math.max(1, shown - 1))
+      g.at(cx + wob, y, 0, () => nut(g, 0, 0, c, k, 0, glow), sq * pop, (2 - sq) * pop)
     }
     if (hot) g.text('✕', cx, top - 40 * k, { size: 44 * k, weight: 700, color: C.red })
     // The completed badge under the plate.
@@ -306,31 +358,54 @@ export function drawBolts(g: Draw, geo: Geo, v: BoltsView): void {
         s * k,
       )
     }
-    // The lifted run, spinning up off its bolt and bobbing while it waits.
+    // The lifted run: a dip (anticipation), a springy spin up, then it bobs while it waits.
     if (v.hand?.from === i) {
       const h = v.hand
       const t = prog(v.now - h.at, 0, LIFT_T)
-      const e = outCubic(t)
+      const dip = Math.sin(prog(t, 0, 0.25) * Math.PI) * 8 * k
+      const e = outBack(prog(t, 0.2, 1))
       const bob = t >= 1 ? Math.sin(v.now * 5) * 4 * k : 0
+      const shake = v.bad >= 0 && v.bad !== i ? wobble((v.now - v.badAt) / 0.4, 6) * 8 : 0
       const glowY = hoverY(geo, base, stack.length, 0)
       const pulse = 0.55 + 0.45 * Math.sin(v.now * 6)
-      g.path(
-        (c) => c.ellipse(cx, glowY + (HH + 14) * k, 70 * k, 20 * k, 0, 0, Math.PI * 2),
-        undefined,
-        alpha(C.yellow, 0.35 + pulse * 0.4 * e),
-        5,
-      )
+      const d = h.drag && h.drag.moved ? h.drag : null
+      if (!d)
+        g.path(
+          (c) => c.ellipse(cx, glowY + (HH + 14) * k, 70 * k, 20 * k, 0, 0, Math.PI * 2),
+          undefined,
+          alpha(C.yellow, 0.35 + pulse * 0.4 * clamp(e, 0, 1)),
+          5,
+        )
       for (let n = 0; n < h.n; n++) {
         const y0 = nutY(geo, base, stack.length + n)
         const y1 = hoverY(geo, base, stack.length, n)
-        const spin = -(1 - e) * Math.PI * 0.9 + (t >= 1 ? Math.sin(v.now * 2.4) * 0.12 : 0)
-        flying.push({ x: cx, y: y0 + (y1 - y0) * e + bob, c: h.c, spin, sq: 1 })
+        // Squash into the dip, stretch on the way up.
+        const sq =
+          1 +
+          0.12 * Math.sin(prog(t, 0, 0.25) * Math.PI) -
+          0.1 * Math.sin(prog(t, 0.2, 0.7) * Math.PI)
+        if (d) {
+          // Carried by a finger: above it, leaning with the swing.
+          const lean = clamp(d.vx / 2500, -0.4, 0.4)
+          const y = d.y - (150 + n * STEP) * k
+          flying.push({
+            x: d.x + lean * n * 18 * k,
+            y,
+            c: h.c,
+            spin: lean,
+            sq: 1 + Math.abs(lean) * 0.12,
+          })
+          continue
+        }
+        const spin =
+          -(1 - clamp(e, 0, 1)) * Math.PI * 0.9 + (t >= 1 ? Math.sin(v.now * 2.4) * 0.12 : 0)
+        flying.push({ x: cx + shake, y: y0 + (y1 - y0) * e + dip + bob, c: h.c, spin, sq })
       }
     }
   })
   // A dropped run flies over the bolts and screws down onto its target.
   if (mv) {
-    const t = prog(v.now - mv.at, 0, MOVE_T)
+    const t = prog(v.now - mv.at, 0, mv.dur)
     const src = place(geo, mv.from)
     const dst = place(geo, mv.to)
     const srcStack = v.bolts[mv.from] ?? []
@@ -353,10 +428,14 @@ export function drawBolts(g: Draw, geo: Geo, v: BoltsView): void {
         flying.push({ x: src.x, y: y0 + (y1 - y0) * e, c: mv.c, spin: e * Math.PI, sq: 1 })
         continue
       }
-      // The run keeps its spacing in the air.
-      const p = hop(src.x, y0, dst.x, y1, over - n * STEP * k, t)
-      const spin = -outCubic(prog(t, 0, 0.3)) * Math.PI + prog(t, 0.62, 1) * Math.PI * 2
-      flying.push({ x: p.x, y: p.y, c: mv.c, spin, sq: 1 + bump * 0.12 })
+      // Thrown from under a finger: it leaves from there.
+      const x0 = mv.drag ? mv.drag.x : src.x
+      const yy0 = mv.drag ? mv.drag.y - (150 + n * STEP) * k : y0
+      // The run keeps its spacing in the air; a harder throw screws down faster.
+      const p = hop(x0, yy0, dst.x, y1, over - n * STEP * k, t)
+      const spin =
+        -outCubic(prog(t, 0, 0.3)) * Math.PI + prog(t, 0.62, 1) * Math.PI * (2 + mv.k * 2)
+      flying.push({ x: p.x, y: p.y, c: mv.c, spin, sq: 1 + bump * (0.12 + mv.k * 0.1) })
     }
   }
   for (const f of flying) {

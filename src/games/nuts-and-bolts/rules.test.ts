@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { nextTap, PACE } from './bot.ts'
+import { DETOUR, detour, nextTap, PACE } from './bot.ts'
 import {
   BOLTS,
   buildPuzzle,
@@ -10,6 +10,7 @@ import {
   isSolved,
   move,
   moves,
+  outlook,
   roundSeed,
   SWAPS,
   solvedBolts,
@@ -170,5 +171,93 @@ describe('nuts and bolts bot', () => {
     }
     expect(isSolved(b)).toBe(true)
     expect(taps).toBeLessThan(2000)
+  })
+})
+
+/** Six full-ish bolts whose tops match no bolt with room: not a single legal move. */
+const DEADLOCK: Bolts = [
+  [3, 3, 3, 0],
+  [4, 4, 4, 0],
+  [5, 5, 5, 0],
+  [1, 1, 1, 1],
+  [2, 2, 2, 2],
+  [0, 3],
+  [4],
+  [5],
+]
+
+describe('nuts and bolts dead ends', () => {
+  it('sees a board with no legal move as dead', () => {
+    expect(moves(DEADLOCK)).toEqual([])
+    expect(outlook(DEADLOCK)).toBe('dead')
+  })
+
+  it('a fresh puzzle is fine, a sorted one is solved', () => {
+    expect(outlook(buildPuzzle(9, SWAPS.normal).start)).toBe('ok')
+    expect(outlook(solvedBolts())).toBe('solved')
+  })
+
+  it('only calls a board dead when no solution exists at all', () => {
+    // Random play into dead ends: a much bigger search confirms none of them can be sorted.
+    let found = 0
+    for (let seed = 1; seed <= 30 && found < 3; seed++) {
+      const rng = new Rng(seed)
+      let b = buildPuzzle(seed * 13, SWAPS.hard).start
+      for (let s = 0; s < 60; s++) {
+        const ms = moves(b)
+        if (!ms.length) break
+        const [f, t] = rng.pick(ms) as [number, number]
+        b = move(b, f, t)
+        const o = outlook(b)
+        if (o === 'dead') {
+          found++
+          expect(solve(b, 200000)).toBeNull()
+          break
+        }
+        if (o === 'solved') break
+      }
+    }
+    expect(found).toBeGreaterThan(0)
+  })
+})
+
+describe('nuts and bolts bot levels', () => {
+  it('a detour is a legal move off the plan that still sorts the board', () => {
+    const p = buildPuzzle(21, SWAPS.normal)
+    const plan = detour(p.start, new Rng(3))
+    expect(plan).not.toBeNull()
+    expect(replay(p.start, plan ?? [])).toBe(true)
+  })
+
+  it('easy wanders more than hard: slower to sort the same puzzles', () => {
+    const time = (lv: 'easy' | 'normal' | 'hard'): number => {
+      let total = 0
+      for (let seed = 1; seed <= 6; seed++) {
+        const rng = new Rng(seed)
+        let b = buildPuzzle(seed * 7, SWAPS.normal).start
+        let plan = solve(b) ?? []
+        let idx = 0
+        let n = 0
+        while (!isSolved(b) && n < 400) {
+          if (rng.chance(DETOUR[lv])) {
+            const d = detour(b, rng)
+            if (d) {
+              plan = d
+              idx = 0
+            }
+          }
+          const m = plan[idx++]
+          if (!m) break
+          b = move(b, m[0], m[1])
+          n++
+        }
+        expect(isSolved(b)).toBe(true)
+        total += n * 2 * PACE[lv]
+      }
+      return total
+    }
+    const [e, n, h] = [time('easy'), time('normal'), time('hard')]
+    expect(e).toBeGreaterThan(n)
+    expect(n).toBeGreaterThan(h)
   })
 })
