@@ -41,6 +41,8 @@ import {
 /** Turns after which the game is decided on pip count (a safety cap for computer-vs-computer). */
 export const PLY_CAP = 400
 const FLIGHT = 0.34
+/** A beat before a forced move (only one checker move possible) plays itself. */
+const AUTO = 0.4
 /** Seconds a finished round stays on screen before the board is set up again. */
 const ROUND_PAUSE = 2.4
 
@@ -102,6 +104,8 @@ class Backgammon extends TurnGame<State> {
   /** The computer's plan for the current turn (host only, never streamed). */
   private plan: Step[] = []
   private wasRolling = false
+  /** When the current choice of moves opened up, keyed by turn and move number (for forced moves). */
+  private forcedAt: { key: string; at: number } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -184,6 +188,7 @@ class Backgammon extends TurnGame<State> {
     if (fl.to === 0) {
       const at = spotOf(side, 0, s.pos.off[side] - 1)
       this.ctx.audio.play('coin', hi + s.pos.off[side] * 0.02)
+      this.ctx.audio.buzz(10)
       fx.sparks(at.x, at.y, C.yellow, 10)
       fx.burst(at.x, at.y, SIDE[side].main, { count: 8, speed: 260, size: 9 })
       return
@@ -193,6 +198,7 @@ class Backgammon extends TurnGame<State> {
       const foe = other(side)
       this.ctx.audio.play('hit', hi)
       this.ctx.audio.play('slap', 0.9)
+      this.ctx.audio.buzz(30)
       fx.stop(5)
       fx.shake(0.4)
       fx.ring(at.x, at.y, C.yellow, 110)
@@ -200,8 +206,13 @@ class Backgammon extends TurnGame<State> {
       fx.burst(at.x, at.y, C.white, { count: 8, speed: 300, size: 7, kind: 'spark' })
       fx.float('Hit!', at.x, at.y + (at.y > MID ? -90 : 90), C.yellow, 56, side)
     } else {
-      this.ctx.audio.play('place', hi)
-      fx.puff(at.x, at.y + 10, 'rgba(255,255,255,0.35)', 4)
+      // A long run lands with more weight than a step.
+      const span = fl.from === BAR ? 6 : Math.abs(fl.from - fl.to)
+      const k = Math.min(1, span / 12)
+      this.ctx.audio.play('place', hi * (1.08 - k * 0.18))
+      this.ctx.audio.buzz(Math.round(5 + k * 10))
+      fx.puff(at.x, at.y + 10, 'rgba(255,255,255,0.35)', Math.round(3 + k * 4))
+      if (k > 0.6) fx.shake(0.06 + k * 0.05)
     }
   }
 
@@ -216,6 +227,13 @@ class Backgammon extends TurnGame<State> {
     // No legal move for these dice: the turn passes without a tap.
     if (s.moves.length === 0) {
       this.pass()
+      return
+    }
+    // Only one checker move possible: it plays itself after a beat.
+    const key = `${s.ply}:${s.used.length}`
+    if (this.forcedAt?.key !== key) this.forcedAt = { key, at: this.time }
+    if (s.moves.length === 1 && this.time - this.forcedAt.at >= AUTO) {
+      this.play(s.moves[0] as Step)
       return
     }
     if (!tap) return
@@ -285,9 +303,11 @@ class Backgammon extends TurnGame<State> {
     if (st) this.play(st)
   }
 
-  /** Bots take their moves a little quicker than the first roll. */
+  /** Bots roll briskly and take their moves quicker still. */
   protected override botDelay(): number {
-    return this.s.roll.length === 0 ? super.botDelay() : 0.35 + this.ctx.rng.range(0, 0.25)
+    if (this.s.roll.length !== 0) return 0.28 + this.ctx.rng.range(0, 0.2)
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.55 : 0.4) + this.ctx.rng.range(0, 0.25)
   }
 
   private inDice(side: Side, tap: Ptr): boolean {
@@ -309,6 +329,7 @@ class Backgammon extends TurnGame<State> {
     this.plan = []
     this.refresh()
     this.ctx.audio.play('roll')
+    this.ctx.audio.buzz(10)
     this.ctx.fx.shake(0.08)
     const at = frame(side, DICE.x, DICE.y)
     this.ctx.fx.puff(at.x, at.y + (side === 0 ? 50 : -50), 'rgba(255,255,255,0.3)', 5)
@@ -324,7 +345,7 @@ class Backgammon extends TurnGame<State> {
     const at = frame(side, DICE.x, DICE.y)
     this.ctx.fx.float('No move', at.x, at.y + (side === 0 ? -150 : 150), C.white, 50, side)
     this.ctx.audio.play('buzz', 0.9)
-    s.wait = this.time + 1
+    s.wait = this.time + 0.6
     this.endTurn()
   }
 
@@ -412,18 +433,25 @@ class Backgammon extends TurnGame<State> {
     this.plan = []
   }
 
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.forcedAt = null
+  }
+
   render(g: Draw): void {
     const s = this.s
+    // Online, the move hints and the roll prompt show only on the mover's phone.
+    const mine = g.viewer === null || g.viewer === s.turn
     tableBackdrop(g)
     renderBoard(
       g,
       {
         turn: s.turn,
         pos: s.pos,
-        sel: s.sel,
+        sel: mine ? s.sel : null,
         moves: s.moves,
         flight: s.flight,
-        hints: !this.isBot(s.turn) && this.time - s.rolledAt[s.turn] >= ROLL_T,
+        hints: mine && !this.isBot(s.turn) && this.time - s.rolledAt[s.turn] >= ROLL_T,
         end: s.end,
       },
       this.time,
@@ -440,7 +468,7 @@ class Backgammon extends TurnGame<State> {
       },
       this.time,
       this.over,
-      (side) => this.isBot(side),
+      (side) => this.isBot(side) || (g.viewer !== null && g.viewer !== side),
     )
     this.drawTurns(g, undefined, s.nextAt < 0)
     if (this.target > 1) {

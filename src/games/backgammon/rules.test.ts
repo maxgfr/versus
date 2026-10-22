@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './bot.ts'
+import { choose, planTurn, racing } from './bot.ts'
 import {
   apply,
   BAR,
@@ -252,4 +252,42 @@ describe('backgammon games', () => {
     expect(g.plies).toBeLessThanOrEqual(400)
     expect([0, 1]).toContain(g.winner)
   }, 120_000)
+})
+
+describe('backgammon computer', () => {
+  it('opens 3-1 the classic way on normal: 8/5 6/5, making the 5-point', () => {
+    const steps = planTurn(start(), 0, [3, 1], 'normal', new Rng(1))
+    const moves = steps.map((st) => `${st.from}/${st.to}`).sort()
+    expect(moves).toEqual(['6/5', '8/5'])
+  })
+
+  it('knows a race once the armies have passed each other', () => {
+    expect(racing(start())).toBe(false)
+    // Red all home, blue all home on the other side: nothing can hit any more.
+    expect(racing(board({ 1: 5, 2: 5, 3: 5, 22: -5, 23: -5, 24: -5 }))).toBe(true)
+    // One blue checker still behind a red one (point 2, with red on 3 and 5): contact.
+    expect(racing(board({ 1: 5, 3: 5, 5: 5, 2: -1, 23: -7, 24: -7 }))).toBe(false)
+  })
+
+  it('normal beats easy most of the time over seeded games (the dice still have a say)', () => {
+    const game = (seed: number) => {
+      const rng = new Rng(seed)
+      let p = start()
+      let turn: Side = seed % 2 === 0 ? 0 : 1
+      for (let ply = 1; ply <= 600; ply++) {
+        const a = rng.int(1, 6)
+        const b = rng.int(1, 6)
+        const dice = a === b ? [a, a, a, a] : [a, b]
+        for (const st of planTurn(p, turn, dice, turn === 0 ? 'normal' : 'easy', rng))
+          p = apply(p, turn, st)
+        const r = result(p)
+        if (r) return r.winner
+        turn = other(turn)
+      }
+      return pips(p, 0) < pips(p, 1) ? 0 : 1
+    }
+    let normal = 0
+    for (let seed = 1; seed <= 20; seed++) if (game(seed) === 0) normal++
+    expect(normal).toBeGreaterThanOrEqual(15)
+  })
 })
