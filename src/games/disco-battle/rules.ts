@@ -16,8 +16,10 @@ export const BEAT = 60 / BPM
 export const DURATION = 40
 /** The first arrow's arrival (seconds). Chart times are multiples of BEAT / 2 from here. */
 export const START = 2
-/** Seconds an arrow is on screen before it reaches its pad. */
+/** Seconds an arrow is on screen before it reaches its pad (at the start of the song). */
 export const LEAD = 1.6
+/** How much faster the arrows scroll by the end of a full-ramp song: the lead shrinks by this. */
+export const LEAD_RAMP = 0.45
 /** Half-windows (s): perfect and good. */
 export const PERFECT = 0.05
 export const GOOD = 0.12
@@ -30,20 +32,27 @@ export const LANE_X = [210, 395, 605, 790] as const
 export const PAD_Y = 1460
 /** Arrows appear just above the middle line and scroll to the pads. */
 export const SPAWN_Y = 880
-export const ARROW_SPEED = (PAD_Y - SPAWN_Y) / LEAD
 
-/** An arrival: a time, and a bitmask of the lanes that must be tapped then. */
+/**
+ * An arrival: a time, and a bitmask of the lanes that must be tapped then.
+ * `l` is how long its arrows are on screen (s): it shrinks as the song goes on.
+ */
 export interface Note {
   t: number
   lanes: number
+  l?: number
 }
 
-/** One lane's arrow to hit. r: 0 pending, 1 perfect, 2 good, 3 missed. */
+/** One lane's arrow to hit. r: 0 pending, 1 perfect, 2 good, 3 missed. l: its lead (s). */
 export interface Hit {
   t: number
   lane: number
   r: 0 | 1 | 2 | 3
+  l?: number
 }
+
+/** Seconds a hit's arrow is on screen before it reaches the pad. */
+export const leadOf = (h: { l?: number }): number => h.l ?? LEAD
 
 export interface Dancer {
   score: number
@@ -72,21 +81,31 @@ export interface State {
 }
 
 /**
- * A seeded chart: mostly single arrows on the beat, some pairs, some off-beat
- * eighths. It runs for `duration` seconds (the match length).
+ * A seeded chart: single arrows on the beat, pairs, and off-beat eighths. It
+ * runs for `duration` seconds (the match length) and builds up: rests thin
+ * out, pairs and eighths get more frequent and the arrows scroll faster as the
+ * song goes on, so the end is a frantic finale. `ramp` scales that build-up
+ * (0 = flat, 1 = full; easy uses a gentle one).
  */
-export function chartNew(rng: Rng, duration = DURATION): Note[] {
+export function chartNew(rng: Rng, duration = DURATION, ramp = 1): Note[] {
   const notes: Note[] = []
-  for (let t = START; t < duration - 1; t += BEAT) {
+  const last = duration - 1
+  for (let t = START; t < last; t += BEAT) {
+    // 0 at the first arrow, `ramp` at the last.
+    const p = Math.max(0, Math.min(1, (t - START) / Math.max(1, last - START))) * ramp
+    const q = Math.min(1, p)
+    const l = Math.round((LEAD - LEAD_RAMP * Math.min(1.2, p)) * 100) / 100
+    const rest = 0.24 - 0.18 * q
     const roll = rng.next()
-    if (roll < 0.2) {
-      // A rest: the dancers catch their breath.
-    } else if (roll < 0.34) {
-      notes.push({ t, lanes: pair(rng) })
+    if (roll < rest) {
+      // A rest: the dancers catch their breath (rarer as the song heats up).
+    } else if (roll < rest + 0.12 + 0.12 * q) {
+      notes.push({ t, lanes: pair(rng), l })
     } else {
-      notes.push({ t, lanes: 1 << rng.int(0, LANES - 1) })
+      notes.push({ t, lanes: 1 << rng.int(0, LANES - 1), l })
     }
-    if (rng.chance(0.22)) notes.push({ t: t + BEAT / 2, lanes: 1 << rng.int(0, LANES - 1) })
+    if (rng.chance(0.12 + 0.34 * p))
+      notes.push({ t: t + BEAT / 2, lanes: 1 << rng.int(0, LANES - 1), l })
   }
   return notes
 }
@@ -104,7 +123,10 @@ export function hitsFor(chart: Note[]): Hit[] {
   const hits: Hit[] = []
   for (const n of chart) {
     for (let lane = 0; lane < LANES; lane++) {
-      if (n.lanes & (1 << lane)) hits.push({ t: n.t, lane, r: 0 })
+      if (!(n.lanes & (1 << lane))) continue
+      const h: Hit = { t: n.t, lane, r: 0 }
+      if (n.l !== undefined) h.l = n.l
+      hits.push(h)
     }
   }
   return hits.sort((a, b) => a.t - b.t || a.lane - b.lane)
@@ -128,8 +150,8 @@ export function dancerNew(chart: Note[]): Dancer {
   }
 }
 
-export function worldNew(rng: Rng, duration = DURATION): State {
-  const chart = chartNew(rng, duration)
+export function worldNew(rng: Rng, duration = DURATION, ramp = 1): State {
+  const chart = chartNew(rng, duration, ramp)
   return { chart, p: [dancerNew(chart), dancerNew(chart)] }
 }
 
@@ -213,7 +235,8 @@ export function expire(d: Dancer, now: number): number {
 }
 
 /** Arrow height (red's layout) for a hit at game time `now`. */
-export const arrowY = (h: Hit, now: number): number => PAD_Y - ARROW_SPEED * (h.t - now)
+export const arrowY = (h: Hit, now: number): number =>
+  PAD_Y - ((PAD_Y - SPAWN_Y) / leadOf(h)) * (h.t - now)
 
 /** Lane under a tap in a side's layout (pad row down to the edge), or null when the tap is off the pads. */
 export function laneAt(side: Side, x: number, y: number): number | null {

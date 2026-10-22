@@ -5,7 +5,7 @@ import { approach, clamp, Spring } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
 import { tapRipple } from '../../engines/reflex/index.ts'
-import { DanceBot } from './bot.ts'
+import { DanceBot, RAMP } from './bot.ts'
 import { type DiscoOpts, type Ghost, LANE_COL, renderDisco } from './render.ts'
 import {
   BEAT,
@@ -59,6 +59,8 @@ class DiscoBattle extends BaseGame<State> {
   private bots: [DanceBot | null, DanceBot | null] = [null, null]
   /** Last beat ticked (sound only). */
   private beatNo = -1
+  /** The "Faster!" cue has played (sound and fx only). */
+  private cued = false
   // Cosmetic only (not synced, reset in restore): springs, rolling score, hit ghosts.
   private pads: [Spring[], Spring[]] = [padSprings(), padSprings()]
   private lean: [Spring, Spring] = [new Spring(0, 160, 9), new Spring(0, 160, 9)]
@@ -100,7 +102,9 @@ class DiscoBattle extends BaseGame<State> {
     ) as [DanceBot | null, DanceBot | null]
     this.look.names = ctx.names
     this.look.bots = ctx.bots
-    return { ...worldNew(ctx.rng, this.total), endAt: -1 }
+    // The difficulty setting is the computer's: two humans always get the full build-up.
+    const ramp = ctx.bots[0] || ctx.bots[1] ? RAMP[ctx.difficulty] : 1
+    return { ...worldNew(ctx.rng, this.total, ramp), endAt: -1 }
   }
 
   protected step(_dt: number): void {
@@ -128,6 +132,16 @@ class DiscoBattle extends BaseGame<State> {
         if (lane !== null) this.hitLane(side, lane)
         else tapRipple(ctx, side, p.x, p.y)
       }
+    }
+    // Two thirds in, the chart is visibly heating up: call it out.
+    if (!this.cued && now >= this.total * 0.62) {
+      this.cued = true
+      for (const side of [0, 1] as Side[]) {
+        const at = frame(side, 500, PAD_Y - 380)
+        ctx.fx.float('Faster!', at.x, at.y, C.orange, 72, side)
+      }
+      ctx.fx.flash(C.purple, 0.12)
+      ctx.audio.play('whoosh', 1.2)
     }
     if (now >= this.total) this.end()
   }

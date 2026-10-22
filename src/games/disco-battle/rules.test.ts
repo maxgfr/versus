@@ -16,6 +16,8 @@ import {
   LANES,
   laneAt,
   LEAD,
+  LEAD_RAMP,
+  leadOf,
   PAD_Y,
   PERFECT,
   pointsFor,
@@ -238,9 +240,14 @@ describe('disco battle: match length', () => {
 })
 
 /** A full game between two bots, on the real clock. */
-function game(seed: number, red: 'easy' | 'normal' | 'hard', blue: 'easy' | 'normal' | 'hard') {
+function game(
+  seed: number,
+  red: 'easy' | 'normal' | 'hard',
+  blue: 'easy' | 'normal' | 'hard',
+  ramp = 1,
+) {
   const rng = new Rng(seed)
-  const s = worldNew(rng)
+  const s = worldNew(rng, DURATION, ramp)
   const bots = [new DanceBot(rng.fork(), red), new DanceBot(rng.fork(), blue)] as const
   let t = 0
   while (t < DURATION) {
@@ -254,7 +261,77 @@ function game(seed: number, red: 'easy' | 'normal' | 'hard', blue: 'easy' | 'nor
   return { s, winner: winnerOf(s) }
 }
 
+describe('disco battle: the song builds up', () => {
+  /** Arrows per second in [a, b). */
+  const density = (n: Note[], a: number, b: number) =>
+    n.filter((x) => x.t >= a && x.t < b).reduce((k, x) => k + popcount(x.lanes), 0) / (b - a)
+  const popcount = (m: number) => (m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1) + ((m >> 3) & 1)
+
+  it('the last third is denser than the first, over many seeds', () => {
+    let first = 0
+    let lastThird = 0
+    for (let seed = 1; seed <= 20; seed++) {
+      const c = chartNew(new Rng(seed), 60)
+      first += density(c, START, 21)
+      lastThird += density(c, 40, 59)
+    }
+    expect(lastThird).toBeGreaterThan(first * 1.3)
+  })
+
+  it('arrows scroll faster as the song goes on, and never overtake one another', () => {
+    const c = chartNew(new Rng(3), 60)
+    const leads = c.map(leadOf)
+    expect(leads[0]).toBeCloseTo(LEAD, 2)
+    expect(leads[leads.length - 1]).toBeLessThan(LEAD - LEAD_RAMP * 0.9)
+    for (let i = 1; i < leads.length; i++)
+      expect(leads[i] as number).toBeLessThanOrEqual(leads[i - 1] as number)
+    // A later arrow is always behind an earlier one in the same lane, on screen.
+    const hits = hitsFor(c)
+    for (let t = 2; t < 59; t += 0.1) {
+      const seen = new Map<number, number>()
+      for (const h of hits) {
+        if (h.t < t || h.t - t > leadOf(h)) continue
+        const y = arrowY(h, t)
+        const prev = seen.get(h.lane)
+        if (prev !== undefined) expect(y).toBeLessThan(prev)
+        seen.set(h.lane, y)
+      }
+    }
+  })
+
+  it('a flat ramp keeps the old pace: same lead throughout', () => {
+    const c = chartNew(new Rng(3), 40, 0)
+    expect(c.every((n) => leadOf(n) === LEAD)).toBe(true)
+  })
+
+  it('every arrow still spawns at the spawn line and lands on the pad', () => {
+    for (const h of hitsFor(chartNew(new Rng(6), 60))) {
+      expect(arrowY(h, h.t - leadOf(h))).toBeCloseTo(SPAWN_Y, 6)
+      expect(arrowY(h, h.t)).toBeCloseTo(PAD_Y, 6)
+    }
+  })
+})
+
 describe('disco battle: bots', () => {
+  it('hard beats easy, normal beats easy and hard beats normal most of the time', () => {
+    const duel = (a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard') => {
+      let wins = 0
+      for (let seed = 1; seed <= 10; seed++) {
+        // Alternate sides so neither colour is favoured.
+        const red = seed % 2 === 0
+        const r = game(seed * 7, red ? a : b, red ? b : a)
+        if (r.winner === (red ? 0 : 1)) wins++
+      }
+      return wins
+    }
+    const he = duel('hard', 'easy')
+    const ne = duel('normal', 'easy')
+    const hn = duel('hard', 'normal')
+    expect(he).toBeGreaterThanOrEqual(9)
+    expect(ne).toBeGreaterThanOrEqual(8)
+    expect(hn).toBeGreaterThanOrEqual(6)
+  })
+
   it('a bot plays the whole chart within the clock and scores', () => {
     const r = game(3, 'normal', 'normal')
     expect(r.s.p[0].score).toBeGreaterThan(0)

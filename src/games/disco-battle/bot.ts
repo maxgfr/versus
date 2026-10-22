@@ -1,13 +1,22 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { BEAT, GOOD, LEAD, START, type Dancer } from './rules.ts'
+import { BEAT, GOOD, LEAD, leadOf, START, type Dancer } from './rules.ts'
 
+/*
+ * Easy is a first-timer: it lets a quarter of the arrows go and its timing is
+ * loose. Normal is a solid regular who rarely drops an arrow and lands most of
+ * them perfect. Hard is a rhythm-game veteran: dead-on timing, almost never a
+ * miss, so a human has to dance near-flawlessly to beat it. Every bot only sees
+ * what a player sees (arrows on screen) and presses inside the same window.
+ */
 /** Odds the bot hits an arrow at all. */
-const ACCURACY: Record<Difficulty, number> = { easy: 0.72, normal: 0.9, hard: 0.98 }
-/** Timing error, one spread unit (s). */
-const JITTER: Record<Difficulty, number> = { easy: 0.085, normal: 0.045, hard: 0.02 }
+const ACCURACY: Record<Difficulty, number> = { easy: 0.72, normal: 0.94, hard: 0.985 }
+/** Timing error, one spread unit (s): ×1.7 is the worst case (PERFECT is 0.05). */
+const JITTER: Record<Difficulty, number> = { easy: 0.085, normal: 0.034, hard: 0.018 }
 /** Accuracy lost on the hard bits: chords (two pads at once) and off-beat eighths. */
-const TRICKY: Record<Difficulty, number> = { easy: 0.16, normal: 0.07, hard: 0.01 }
+const TRICKY: Record<Difficulty, number> = { easy: 0.16, normal: 0.04, hard: 0.008 }
+/** How much the chart builds up over the song (rules `chartNew` ramp): gentle on easy. */
+export const RAMP: Record<Difficulty, number> = { easy: 0.5, normal: 1, hard: 1.25 }
 
 /**
  * Computer dancer: when an arrow comes on screen it decides whether to hit it
@@ -28,7 +37,7 @@ export class DanceBot {
     for (let i = dancer.cursor; i < dancer.hits.length; i++) {
       const h = dancer.hits[i]
       if (!h || h.t - now > LEAD) break
-      if (h.r !== 0) continue
+      if (h.r !== 0 || h.t - now > leadOf(h)) continue
       if (!this.plan.has(i)) {
         // Like a person, the bot fumbles chords and off-beats more than plain beats.
         const chord =
