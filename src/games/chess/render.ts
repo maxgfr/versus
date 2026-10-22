@@ -4,7 +4,7 @@ import { outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw, Fill } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { cellCenter, type Geom } from '../../engines/board/index.ts'
+import { cellAt, cellCenter, type Geom } from '../../engines/board/index.ts'
 import type { State } from './index.ts'
 import {
   boardOf,
@@ -374,8 +374,11 @@ export function renderChess(
   now: number,
   targets: readonly string[],
   over: boolean,
+  showSel = true,
 ): void {
   const live = !over && s.endedAt < 0
+  const sel = showSel ? s.sel : null
+  const drag = s.drag && live ? s.drag : null
   renderBoard(g, geo, s.turn, now, live)
   const u = geo.cell
   const at = (sq: string) => {
@@ -432,9 +435,9 @@ export function renderChess(
     )
   }
   // The selected piece: the one yellow thing, with its moves.
-  if (s.sel && live) {
-    const { c, r } = coordsOf(s.sel)
-    fillSquare(s.sel, alpha(C.yellow, 0.55))
+  if (sel && live) {
+    const { c, r } = coordsOf(sel)
+    fillSquare(sel, alpha(C.yellow, 0.55))
     g.rrect(geo.x + c * u + 4, geo.y + r * u + 4, u - 8, u - 8, 10, undefined, C.yellow, 8)
   }
 
@@ -448,8 +451,10 @@ export function renderChess(
     const sq = squareAt(i % 8, Math.floor(i / 8))
     if (moving && sq === moving.to) return
     if (rookMoving && sq === rookMoving.to) return
+    // The dragged piece is drawn under the finger, last.
+    if (drag && sq === drag.sq) return
     const c = at(sq)
-    const picked = sq === s.sel && live
+    const picked = sq === sel && live
     const side = sideOf(p.color)
     let angle = g.orient(side)
     let lift = picked ? u * 0.1 + Math.sin(now * 6) * u * 0.02 : 0
@@ -493,6 +498,24 @@ export function renderChess(
     }
   }
 
+  // A dragged piece rides under the finger, lifted, with its shadow left on the board.
+  if (drag) {
+    const { c, r } = coordsOf(drag.sq)
+    const p = board[r * 8 + c]
+    if (p) {
+      const hover = cellAt(geo, drag.x, drag.y)
+      if (hover) {
+        const sq = squareAt(hover.c, hover.r)
+        if (targets.includes(sq)) fillSquare(sq, alpha(C.yellow, 0.35))
+      }
+      drawPiece(g, p, drag.x, drag.y - u * 0.15, u, {
+        angle: g.orient(sideOf(p.color)),
+        lift: u * 0.18,
+        scale: 1.2,
+      })
+    }
+  }
+
   // The piece that just moved slides (with a hop) to its square; a castling rook follows.
   const slide = (m: { from: string; to: string }, p: Piece, hopK: number) => {
     const t = prog(sinceMove, 0, SLIDE)
@@ -507,7 +530,8 @@ export function renderChess(
   }
   if (moving) {
     const p = board[coordsOf(moving.to).r * 8 + coordsOf(moving.to).c]
-    if (p) slide(moving, p, 0.28)
+    // A knight leaps; everything else glides with a small hop.
+    if (p) slide(moving, p, p.type === 'n' ? 0.6 : 0.28)
   }
   if (rookMoving) {
     const p = board[coordsOf(rookMoving.to).r * 8 + coordsOf(rookMoving.to).c]

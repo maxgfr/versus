@@ -2,7 +2,7 @@ import { other, type MatchSpec, type Side } from '../../core/game.ts'
 import { prog } from '../../core/fx/ease.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { banner, pips } from '../../core/hud.ts'
-import type { Ptr } from '../../core/input.ts'
+import type { PlayerInput, Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
@@ -60,6 +60,8 @@ export interface State {
   roundText: string
   /** Game time the next round starts, or -1. */
   resetAt: number
+  /** The piece being dragged by a finger: its square and where the finger is (the guest sees it too). */
+  drag: { sq: string; x: number; y: number } | null
 }
 
 /**
@@ -91,6 +93,8 @@ const centre = (sq: string) => {
 
 class Chess extends TurnGame<State> {
   private targetMemo: { key: string; to: string[] } | null = null
+  /** The finger on a picked-up piece: drag it to a square and let go, or just tap twice. */
+  private hold: { input: PlayerInput; id: number; sq: string; x0: number; y0: number } | null = null
   /** Effects timed to land with the moving piece (host side; the guest gets them as fx). */
   private queue: { at: number; run: () => void }[] = []
 
@@ -115,6 +119,7 @@ class Chess extends TurnGame<State> {
       starter: 0,
       roundText: '',
       resetAt: -1,
+      drag: null,
     }
   }
 
@@ -149,6 +154,8 @@ class Chess extends TurnGame<State> {
     s.endText = ''
     s.roundText = ''
     s.resetAt = -1
+    s.drag = null
+    this.hold = null
     this.targetMemo = null
   }
 
@@ -167,15 +174,62 @@ class Chess extends TurnGame<State> {
     this.queue.sort((a, b) => a.at - b.at)
   }
 
+  /** The inputs that may move a piece this turn (same routing as `turnTap`). */
+  private turnInputs(): PlayerInput[] {
+    const [a, b] = this.ctx.input.players
+    if (this.ctx.mode === 'online') return [this.ctx.input.player(this.s.turn)]
+    if (this.ctx.mode === '1p') return [a]
+    return [a, b]
+  }
+
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
-    if (!tap) return
-    const hit = cellAt(GEO, tap.x, tap.y)
-    if (!hit) {
-      if (this.s.sel) this.ctx.audio.play('click', 0.8)
-      this.s.sel = null
+    const s = this.s
+    if (tap) {
+      const hit = cellAt(GEO, tap.x, tap.y)
+      if (!hit) {
+        if (s.sel) this.ctx.audio.play('click', 0.8)
+        s.sel = null
+      } else {
+        const sq = squareAt(hit.c, hit.r)
+        this.tapSquare(sq)
+        // Pressing on a piece just picked up starts a drag.
+        const input = this.turnInputs().find((i) => i.downs.includes(tap))
+        if (input && s.sel === sq && s.endedAt < 0)
+          this.hold = { input, id: tap.id, sq, x0: tap.x, y0: tap.y }
+      }
+    }
+    this.dragStep()
+  }
+
+  /** Follow the finger with the picked-up piece; on release over a legal square, play there. */
+  private dragStep(): void {
+    const s = this.s
+    const h = this.hold
+    if (!h) return
+    const held = h.input.held.get(h.id)
+    const p = held ?? h.input.ups.find((u) => u.id === h.id)
+    if (!p || s.sel !== h.sq) {
+      this.hold = null
+      s.drag = null
       return
     }
-    this.tapSquare(squareAt(hit.c, hit.r))
+    const moved = Math.hypot(p.x - h.x0, p.y - h.y0) > GEO.cell * 0.3
+    if (held) {
+      if (moved || s.drag) s.drag = { sq: h.sq, x: p.x, y: p.y }
+      return
+    }
+    this.hold = null
+    const wasDragged = s.drag !== null
+    s.drag = null
+    if (!wasDragged) return
+    const hit = cellAt(GEO, p.x, p.y)
+    const to = hit ? squareAt(hit.c, hit.r) : null
+    if (to && to !== h.sq && targetsFrom(s.fen, h.sq).some((m) => m.to === to)) {
+      this.play(h.sq, to, true)
+      return
+    }
+    // Dropped somewhere it can't go: it springs back and stays picked up.
+    this.ctx.audio.play('click', 0.8)
   }
 
   private tapSquare(sq: string): void {
@@ -218,16 +272,20 @@ class Chess extends TurnGame<State> {
     })
   }
 
-  private play(from: string, to: string): void {
+  /** Play a move. `placed` = a finger set it down (no slide: it lands where it was dropped). */
+  private play(from: string, to: string, placed = false): void {
     const s = this.s
     const side = s.turn
     const pl = play(this.pos(), from, to)
+    s.drag = null
+    this.hold = null
     const v = verdict(pl.pos)
     s.fen = pl.pos.fen
     s.history = pl.pos.history
     s.lastMove = { from, to }
     s.sel = null
-    s.movedAt = this.time
+    // A piece set down by hand is already there: skip most of the slide.
+    s.movedAt = placed ? this.time - SLIDE * 0.75 : this.time
     s.turn = other(side)
     s.status = v.status
     s.taken =
@@ -240,11 +298,15 @@ class Chess extends TurnGame<State> {
     const audio = this.ctx.audio
     const pitch = side === 0 ? 1 : 1.12
     const dest = centre(to)
-    audio.play('slide', pitch)
+    // A long move lands harder than a step.
+    const a = coordsOf(from)
+    const b = coordsOf(to)
+    const reach = Math.min(1, Math.hypot(a.c - b.c, a.r - b.r) / 7)
+    audio.play('slide', pitch * (1.1 - reach * 0.2))
     const taken = s.taken
     const big = taken ? 'qr'.includes(taken.code[1] ?? '') : false
     // Everything below lands with the piece, at the end of its slide.
-    this.later(SLIDE, () => {
+    this.later(placed ? SLIDE * 0.25 : SLIDE, () => {
       if (taken) {
         const at = centre(taken.sq)
         audio.play(big ? 'explode' : 'hit', pitch)
@@ -254,9 +316,18 @@ class Chess extends TurnGame<State> {
         fx.ring(at.x, at.y, SIDE[side].light, 130)
         fx.shake(big ? 0.45 : 0.28)
         fx.stop(big ? 6 : 3)
+        audio.buzz(big ? 30 : 16)
       } else {
-        audio.play('place', pitch)
-        fx.ring(dest.x, dest.y, 'rgba(255,255,255,0.45)', 75)
+        audio.play('place', pitch * (1.05 - reach * 0.15))
+        fx.ring(dest.x, dest.y, 'rgba(255,255,255,0.45)', 70 + reach * 50)
+        fx.puff(
+          dest.x,
+          dest.y + GEO.cell * 0.3,
+          'rgba(255,255,255,0.35)',
+          Math.round(2 + reach * 5),
+        )
+        if (reach > 0.5) fx.shake(0.05 + reach * 0.06)
+        audio.buzz(Math.round(5 + reach * 10))
       }
       if (pl.promoted) {
         audio.play('powerup')
@@ -326,10 +397,24 @@ class Chess extends TurnGame<State> {
     return this.targetMemo.to
   }
 
+  /** The computer replies briskly; the search itself runs off-thread. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.55 : d === 'normal' ? 0.4 : 0.3) + this.ctx.rng.range(0, 0.25)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.hold = null
+    this.queue = []
+  }
+
   render(g: Draw): void {
     const s = this.s
     tableBackdrop(g)
-    renderChess(g, s, GEO, this.time, this.targets(), this.over)
+    // Online, the selection and its moves are the mover's own guide: not drawn on the rival's phone.
+    const mine = g.viewer === null || g.viewer === s.turn
+    renderChess(g, s, GEO, this.time, mine ? this.targets() : [], this.over, mine)
     let label: [string | undefined, string | undefined] | undefined
     // In check, the pill says so: the player has to answer it.
     if (s.status === 'check' && s.endedAt < 0 && !this.isBot(s.turn)) {
