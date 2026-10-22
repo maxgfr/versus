@@ -1,11 +1,12 @@
-import { outBack, outCubic } from '../../core/fx/ease.ts'
+import { outBack, outCubic, Spring } from '../../core/fx/ease.ts'
 import type { Mode, Side } from '../../core/game.ts'
 import { namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { type BodySnap, drawShape, extent, type Shape } from '../../engines/ragdoll/index.ts'
-import { ISLAND, PIECES, shapeOf, towerTop } from './rules.ts'
+import type { BodySnap } from '../../engines/ragdoll/index.ts'
+import { ISLAND, toyOf, towerTop } from './rules.ts'
+import { drawToy, type Mood } from './toy.ts'
 
 /** Rotate button per side, in fixed world coords (the host hit-tests the guest's touches against these). */
 export const ROTATE_BTN: [
@@ -24,9 +25,13 @@ export interface SceneView {
   bodies: BodySnap[]
   piece: number
   next: number
+  /** The hand's x (where the cable hangs from) and the piece's x after the sway. */
   hx: number
+  x: number
   ha: number
   hoverY: number
+  /** Where the hovering piece would touch down if it fell straight (null: into the slime). */
+  landing: number | null
   showHover: boolean
   cam: number
   rot: number
@@ -39,13 +44,15 @@ export interface SceneView {
   over: boolean
   loading: boolean
   aiming: boolean
-  glyph: string
-  /** Game time the current piece was let go (-1 while hovering): drives the hook's release. */
-  dropAt: number
-  dropY: number
-  /** Game time the tower fell (-1 while it stands) and who toppled it. */
   fellAt: number
   loser: Side | null
+  /** 0..1 tower wobble. */
+  wob: number
+  /** Seconds left to drop, or -1. */
+  clock: number
+  /** Game time of the last drop and the x it was let go at. */
+  dropAt: number
+  dropX: number
 }
 
 const SEA_Y = ISLAND.top + 330
@@ -235,64 +242,115 @@ function island(g: Draw): void {
 }
 
 /**
- * A cast member: the glossy block (its hitbox) with the emoji printed big on it,
- * stretched along the block for the long and the tall ones.
+ * Faces for the tower: each piece's mood, blink and landing squash, read from
+ * how its snapshot moves (so the online guest, which only gets snapshots, sees
+ * the same reactions). Cosmetic only.
  */
-export function drawPiece(
+export class Faces {
+  private seen = new Map<
+    number,
+    { x: number; y: number; a: number; dy: number; landed: number; spring: Spring }
+  >()
+  private last: readonly BodySnap[] | null = null
+
+  update(bodies: readonly BodySnap[], time: number): void {
+    for (const f of this.seen.values()) f.spring.update(1 / 60)
+    if (bodies === this.last) return
+    this.last = bodies
+    const live = new Set<number>()
+    for (const b of bodies) {
+      live.add(b.id)
+      const f = this.seen.get(b.id)
+      if (!f) {
+        this.seen.set(b.id, {
+          x: b.x,
+          y: b.y,
+          a: b.a,
+          dy: 0,
+          landed: -10,
+          spring: new Spring(1, 300, 11),
+        })
+        continue
+      }
+      const dy = b.y - f.y
+      // A landing: it was dropping fast and has just stopped.
+      if (f.dy > 5 && dy < 1.5) {
+        f.spring.kick(-Math.min(9, f.dy * 0.6))
+        f.landed = time
+      }
+      f.dy = dy
+      f.x = b.x
+      f.y = b.y
+      f.a = b.a
+    }
+    for (const id of this.seen.keys()) if (!live.has(id)) this.seen.delete(id)
+  }
+
+  /** How piece `id` looks right now. */
+  of(
+    b: BodySnap,
+    time: number,
+    wob: number,
+    fell: boolean,
+  ): { mood: Mood; squash: number; blink: boolean } {
+    const f = this.seen.get(b.id)
+    // Idle life: a slow breath, out of step from one animal to the next.
+    const breathe = 1 + Math.sin(time * 2.2 + b.id * 1.7) * 0.012
+    const squash = (f?.spring.value ?? 1) * breathe
+    const blink = (time + b.id * 1.37) % 3.4 < 0.12
+    let mood: Mood = 'happy'
+    if (fell) mood = b.y > ISLAND.top ? 'wow' : 'sad'
+    else if (f && f.dy > 5) mood = 'wow'
+    else if (f && time - f.landed < 0.6) mood = 'grin'
+    else if (wob > 0.35) mood = 'scared'
+    return { mood, squash, blink }
+  }
+}
+
+/** The team's claw: a cable from the hand, swinging with the sway, pincers round the piece. */
+function clawAt(
   g: Draw,
-  k: number,
+  hx: number,
   x: number,
   y: number,
-  a: number,
-  o: { ghost?: boolean; glow?: string } = {},
+  col: { main: string; dark: string },
+  open: number,
 ): void {
-  const p = PIECES[k]
-  if (!p) return
-  const s: Shape = p.shape
-  const { hw, hh } = extent(s)
-  if (o.glow) {
-    g.at(x, y, a, () => {
-      g.alpha(0.35, () =>
-        g.rrect(-hw - 14, -hh - 14, hw * 2 + 28, hh * 2 + 28, Math.min(hw, hh), o.glow),
-      )
-    })
-  }
-  drawShape(g, s, x, y, a, p.color, undefined, o.ghost ? { ghost: true } : {})
-  const base = Math.min(hw, hh) * 1.7
-  const sx = Math.min(2.1, Math.max(1, hw / hh))
-  const sy = Math.min(1.8, Math.max(1, hh / hw))
-  g.alpha(o.ghost ? 0.5 : 1, () => g.emoji(p.glyph, x, y, base, a, sx, sy))
+  g.line(hx, y - 260, x, y - 24, alpha('#ffffff', 0.35), 8)
+  g.rrect(x - 34, y - 34, 68, 24, 12, col.main)
+  g.line(x - 28, y - 16, x - 28 - open, y + 8, col.dark, 10)
+  g.line(x + 28, y - 16, x + 28 + open, y + 8, col.dark, 10)
 }
 
 function hover(g: Draw, v: SceneView): void {
-  const k = v.piece
+  const t = toyOf(v.piece)
+  // Idle: a gentle bob; while aiming the hand holds it steady.
   const bob = v.aiming ? 0 : Math.sin(v.time * 3) * 8
   const y = v.hoverY + bob
-  const { hh } = extent(shapeOf(k))
-  const col = SIDE[v.turn]
-  // Drop guide down to the tower.
-  g.dashed(v.hx, y + hh + 16, v.hx, towerTop(v.bodies) - 6, alpha(C.yellow, 0.6), 6, [18, 16])
-  // The team's claw holding the piece.
-  g.line(v.hx, y - hh - 260, v.hx, y - hh - 24, alpha('#ffffff', 0.35), 8)
-  g.rrect(v.hx - 34, y - hh - 34, 68, 24, 12, col.main)
-  g.line(v.hx - 28, y - hh - 16, v.hx - 36, y - hh + 8, col.dark, 10)
-  g.line(v.hx + 28, y - hh - 16, v.hx + 36, y - hh + 8, col.dark, 10)
-  drawPiece(g, k, v.hx, y, v.ha, { glow: C.yellow })
+  // Landing preview: a dashed drop line and a ghost where it would touch down.
+  if (v.landing !== null) {
+    g.dashed(v.x, y + t.radius * 0.5, v.x, v.landing, alpha(C.yellow, 0.6), 6, [18, 16])
+    drawToy(g, t, v.x, v.landing, v.ha, { ghost: 0.3 })
+  } else {
+    // Nothing underneath: it would drop straight into the slime.
+    g.dashed(v.x, y + t.radius * 0.5, v.x, SEA_Y, alpha(C.red, 0.55), 6, [18, 16])
+  }
+  clawAt(g, v.hx, v.x, y - t.radius, SIDE[v.turn], 8)
+  drawToy(g, t, v.x, y, v.ha, {
+    mood: v.landing === null ? 'scared' : 'happy',
+    look: [0, 1],
+    blink: v.time % 2.9 < 0.12,
+  })
 }
 
 /** Just after a drop the empty claw springs open and swings back up. */
 function claw(g: Draw, v: SceneView): void {
-  if (v.dropAt < 0) return
-  const t = v.time - v.dropAt
-  if (t > 0.8) return
-  const col = SIDE[v.turn]
-  const y = v.dropY - extent(shapeOf(v.piece)).hh - 34 - outCubic(t / 0.8) * 200
-  const open = 10 + 26 * outBack(Math.min(1, t / 0.2))
-  g.alpha(1 - t / 0.8, () => {
-    g.rrect(v.hx - 34, y, 68, 24, 12, col.main)
-    g.line(v.hx - 28, y + 18, v.hx - 28 - open, y + 40, col.dark, 10)
-    g.line(v.hx + 28, y + 18, v.hx + 28 + open, y + 40, col.dark, 10)
-  })
+  const e = v.time - v.dropAt
+  if (e < 0 || e > 0.8) return
+  const col = SIDE[v.turn === 0 ? 1 : 0]
+  const y = v.hoverY - 120 - outCubic(e / 0.8) * 200
+  const open = 10 + 26 * outBack(Math.min(1, e / 0.2))
+  g.alpha(1 - e / 0.8, () => clawAt(g, v.dropX, v.dropX, y, col, open))
 }
 
 /** The tower's height: a measuring pole beside the island with a flag at the top piece. */
@@ -338,14 +396,44 @@ function rotateButton(g: Draw, side: Side, at: { x: number; y: number; r: number
   })
 }
 
-function nextPreview(g: Draw, side: Side, k: number, at: { x: number; y: number }): void {
-  const p = PIECES[k]
-  if (!p) return
+function nextPreview(
+  g: Draw,
+  side: Side,
+  k: number,
+  at: { x: number; y: number },
+  time: number,
+): void {
+  const t = toyOf(k)
   g.forSide(side, at.x, at.y, () => {
-    g.rrect(-74, -74, 148, 148, 34, alpha(C.ink, 0.72))
-    g.rrect(-74, -74, 148, 148, 34, undefined, alpha('#ffffff', 0.15), 3)
-    g.text('next', 0, -46, { size: 34, weight: 600, color: alpha('#ffffff', 0.8) })
-    g.emoji(p.glyph, 0, 16, 64)
+    g.rrect(-74, -74, 148, 148, 34, alpha(C.ink, 0.62))
+    g.rrect(-74, -74, 148, 148, 34, undefined, alpha('#ffffff', 0.2), 3)
+    g.text('next', 0, -46, { size: 34, weight: 600, color: alpha('#ffffff', 0.85) })
+    // A small copy of the real piece, scaled to fit.
+    const s = Math.min(0.5, 62 / t.radius)
+    g.at(0, 18, 0, () => drawToy(g, t, 0, 0, 0, { blink: time % 3.1 < 0.12 }), s)
+  })
+}
+
+/** The turn clock's last seconds, by the mover's rotate button. */
+function clock(g: Draw, side: Side, left: number): void {
+  if (left > 5 || left <= 0) return
+  const n = Math.ceil(left)
+  const f = n - left
+  const s = 1 + 0.25 * Math.max(0, 1 - f * 4)
+  const at = ROTATE_BTN[side]
+  const x = side === 0 ? at.x - 150 : at.x + 150
+  g.forSide(side, x, at.y, () => {
+    g.circle(0, 0, 50 * s, alpha(C.ink, 0.8))
+    g.arc(
+      0,
+      0,
+      50 * s,
+      -Math.PI / 2,
+      -Math.PI / 2 + (left / 5) * Math.PI * 2,
+      n <= 2 ? C.red : C.yellow,
+      8,
+    )
+    g.text(n, 0, 3, { size: 52 * s, weight: 700, color: n <= 2 ? C.red : C.yellow })
   })
 }
 
@@ -383,7 +471,7 @@ function toppled(g: Draw, v: SceneView): void {
   else draw(undefined, MID - 280)
 }
 
-export function drawScene(g: Draw, v: SceneView): void {
+export function drawScene(g: Draw, v: SceneView, faces: Faces): void {
   const c = g.ctx
   c.save()
   c.translate(W / 2, MID)
@@ -394,7 +482,13 @@ export function drawScene(g: Draw, v: SceneView): void {
   props(g, v.cam, v.time)
   sea(g, v.time)
   island(g)
-  for (const b of v.bodies) drawPiece(g, b.k, b.x, b.y, b.a)
+  const fell = v.fellAt >= 0
+  // Pupils follow the hanging piece.
+  for (const b of v.bodies) {
+    const f = faces.of(b, v.time, v.wob, fell)
+    const lx = Math.max(-1, Math.min(1, (v.x - b.x) / 300))
+    drawToy(g, toyOf(b.k), b.x, b.y, b.a, { ...f, look: [lx, -0.7] })
+  }
   pennant(g, v)
   if (v.showHover) hover(g, v)
   else claw(g, v)
@@ -414,10 +508,13 @@ export function drawScene(g: Draw, v: SceneView): void {
     namePill(g, side, v.names[side], text ? { active, text } : { active })
   }
   const side = v.mode === '1p' ? 0 : v.turn
-  if (!v.over && v.showHover && !v.bots[v.turn]) {
+  // Online, each phone shows only its own player's controls.
+  const own = g.viewer === null || g.viewer === v.turn
+  if (!v.over && v.showHover && !v.bots[v.turn] && own) {
     rotateButton(g, side, ROTATE_BTN[side])
-    nextPreview(g, side, v.next, NEXT_AT[side])
+    nextPreview(g, side, v.next, NEXT_AT[side], v.time)
   }
+  if (!v.over && v.showHover) clock(g, side, v.clock)
   toppled(g, v)
   if (v.loading) g.both('Loading…', { size: 48, color: shade(C.white, -0.2) })
 }

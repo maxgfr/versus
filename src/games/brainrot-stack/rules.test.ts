@@ -2,7 +2,7 @@ import Matter from 'matter-js'
 import { describe, expect, it } from 'vitest'
 import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { type BodySnap, type M, trapCentroid } from '../../engines/ragdoll/index.ts'
+import type { BodySnap, M } from '../../engines/ragdoll/index.ts'
 import { choose } from './bot.ts'
 import {
   anyFallen,
@@ -11,13 +11,17 @@ import {
   FALL_LINE,
   hoverY,
   ISLAND,
+  landingOf,
   matchWinner,
   PIECES,
   pieceAt,
   roundSeed,
+  swayOf,
+  toyOf,
   towerTop,
 } from './rules.ts'
-import { simulateDrop } from './sim.ts'
+import { rebuild, simulateDrop } from './sim.ts'
+import { bottomOf, isConvex } from './toy.ts'
 
 const Mx = Matter as unknown as M
 
@@ -29,27 +33,6 @@ describe('brainrot stack rules', () => {
     expect(a.every((k) => k >= 0 && k < PIECES.length)).toBe(true)
   })
 
-  it('has a cast of distinct, printable pieces', () => {
-    const glyphs = PIECES.map((p) => p.glyph)
-    expect(new Set(glyphs).size).toBe(glyphs.length)
-    for (const p of PIECES) {
-      expect(p.glyph.length).toBeGreaterThan(0)
-      if (p.shape.kind === 'rect') expect(p.shape.w).toBeGreaterThan(0)
-    }
-    // The long sneaker is wider than it is tall; the moai is the tallest piece.
-    const sneaker = PIECES.find((p) => p.glyph === '👟')!
-    expect(sneaker.shape.kind === 'rect' && sneaker.shape.w > sneaker.shape.h * 2).toBe(true)
-    const moai = PIECES.find((p) => p.glyph === '🗿')!
-    expect(moai.shape.kind === 'rect' && moai.shape.h > 200).toBe(true)
-  })
-
-  it('deals each round its own pieces', () => {
-    expect(roundSeed(7, 0)).toBe(7)
-    const first = Array.from({ length: 20 }, (_, i) => pieceAt(7, i))
-    const second = Array.from({ length: 20 }, (_, i) => pieceAt(roundSeed(7, 1), i))
-    expect(second).not.toEqual(first)
-  })
-
   it('measures the tower and the camera', () => {
     expect(towerTop([])).toBe(ISLAND.top)
     const b: BodySnap[] = [{ id: 1, k: 3, x: 500, y: ISLAND.top - 60, a: 0 }]
@@ -57,6 +40,13 @@ describe('brainrot stack rules', () => {
     expect(hoverY(b, 0)).toBeLessThan(towerTop(b))
     expect(cameraFor(1000)).toBe(0)
     expect(cameraFor(-200)).toBeGreaterThan(0)
+  })
+
+  it('deals each round its own pieces', () => {
+    expect(roundSeed(7, 0)).toBe(7)
+    const first = Array.from({ length: 20 }, (_, i) => pieceAt(7, i))
+    const second = Array.from({ length: 20 }, (_, i) => pieceAt(roundSeed(7, 1), i))
+    expect(second).not.toEqual(first)
   })
 
   it('takes the match at the chosen number of round wins', () => {
@@ -76,22 +66,106 @@ describe('brainrot stack rules', () => {
     expect(clampHover(5000, 0)).toBeLessThan(1000)
   })
 
-  it('places a trapezoid centroid below its box centre', () => {
-    expect(trapCentroid({ w: 180, h: 80, slope: 0.4 })).toBeGreaterThan(0)
-    expect(trapCentroid({ w: 180, h: 80, slope: 0 })).toBeCloseTo(0)
+  it('every piece is built from convex parts, centred on its centre of mass', () => {
+    for (const t of PIECES) {
+      for (const part of t.parts) {
+        expect(isConvex(part.pts), t.name).toBe(true)
+        // No repeated vertex: a zero-length edge breaks the collision normals.
+        const p = part.pts
+        for (let i = 0; i < p.length; i += 2) {
+          const j = (i + 2) % p.length
+          expect(Math.hypot(p[j]! - p[i]!, p[j + 1]! - p[i + 1]!), t.name).toBeGreaterThan(0.5)
+        }
+      }
+      // Area-weighted centre of the parts sits at the origin.
+      let mx = 0
+      let my = 0
+      let area = 0
+      for (const part of t.parts) {
+        const p = part.pts
+        let a = 0
+        let cx = 0
+        let cy = 0
+        for (let i = 0; i < p.length; i += 2) {
+          const j = (i + 2) % p.length
+          const cr = p[i]! * p[j + 1]! - p[j]! * p[i + 1]!
+          a += cr
+          cx += (p[i]! + p[j]!) * cr
+          cy += (p[i + 1]! + p[j + 1]!) * cr
+        }
+        mx += cx / 6
+        my += cy / 6
+        area += a / 2
+      }
+      expect(Math.abs(mx / area), t.name).toBeLessThan(0.5)
+      expect(Math.abs(my / area), t.name).toBeLessThan(0.5)
+    }
+  })
+
+  it('has a cast of distinct characters', () => {
+    const names = PIECES.map((p) => p.name)
+    expect(new Set(names).size).toBe(names.length)
+    expect(PIECES.length).toBeGreaterThanOrEqual(10)
+  })
+
+  it('mixes sizes and weights', () => {
+    const r = PIECES.map((t) => t.radius)
+    const d = PIECES.map((t) => t.density)
+    expect(Math.max(...r) / Math.min(...r)).toBeGreaterThan(1.5)
+    expect(Math.max(...d) / Math.min(...d)).toBeGreaterThan(2)
+  })
+
+  it('the crane sways wider as the tower grows, and not at all at the start', () => {
+    expect(swayOf(0, 0.7)).toBe(0)
+    const amp = (n: number) => Math.max(...Array.from({ length: 200 }, (_, i) => swayOf(n, i / 30)))
+    expect(amp(8)).toBeGreaterThan(amp(4))
+    expect(amp(30)).toBeLessThanOrEqual(90)
+  })
+
+  it('previews the landing on the island, and nothing over the sea', () => {
+    const y = landingOf([], 3, ISLAND.x, 0)
+    expect(y).not.toBeNull()
+    expect(bottomOf(toyOf(3), ISLAND.x, y as number, 0)).toBeCloseTo(ISLAND.top, 5)
+    expect(landingOf([], 3, ISLAND.x + ISLAND.w / 2 + 300, 0)).toBeNull()
   })
 })
 
 describe('brainrot stack physics', () => {
   it('a centred drop lands on the island', () => {
-    const o = simulateDrop(Mx, [], 5, ISLAND.x, 0)
+    const o = simulateDrop(Mx, [], 3, ISLAND.x, 0)
     expect(o.fallen).toBe(false)
     expect(o.bodies).toHaveLength(1)
     expect(o.bodies[0]!.y).toBeLessThan(ISLAND.top)
   })
 
+  it('every piece comes to rest on the island without sinking or creeping', () => {
+    for (let k = 0; k < PIECES.length; k++) {
+      const o = simulateDrop(Mx, [], k, ISLAND.x, 0, 600)
+      const b = o.bodies[0]!
+      const t = toyOf(k)
+      expect(o.fallen, t.name).toBe(false)
+      // Resting on the grass: its lowest point within a hair of the island top.
+      expect(Math.abs(bottomOf(t, b.x, b.y, b.a) - ISLAND.top), t.name).toBeLessThan(2)
+      // Left alone, it stays put (no jitter, no slow slide).
+      const w = rebuild(Mx, o.bodies)
+      for (let i = 0; i < 120; i++) w.step(1 / 60)
+      const a = w.snap()[0]!
+      expect(Math.hypot(a.x - b.x, a.y - b.y), t.name).toBeLessThan(2)
+    }
+  }, 30000)
+
+  it('a stacked pair never sinks one piece into the other', () => {
+    const base = simulateDrop(Mx, [], 7, ISLAND.x, 0, 600).bodies
+    const o = simulateDrop(Mx, base, 10, base[0]!.x, 0, 600)
+    expect(o.fallen).toBe(false)
+    const top = o.bodies.find((b) => b.k === 10)!
+    const low = o.bodies.find((b) => b.k === 7)!
+    // The upper one rests above the lower one's centre, not inside it.
+    expect(top.y).toBeLessThan(low.y - 40)
+  })
+
   it('a drop far off the edge falls', () => {
-    const o = simulateDrop(Mx, [], 5, ISLAND.x + ISLAND.w / 2 + 110, 0, 400)
+    const o = simulateDrop(Mx, [], 3, ISLAND.x + ISLAND.w / 2 + 110, 0, 400)
     expect(o.fallen).toBe(true)
   })
 
