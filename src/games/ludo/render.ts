@@ -509,7 +509,7 @@ export function renderLudo(
   drawBoard(g, s.turn, over, ready, now)
   // Legal tokens of the side to move bounce and glow, so the tap target is obvious.
   const active = !over && s.face > 0 && s.move === null && now >= s.wait && !rolling
-  const legal = active ? legalTokens(s.tok, s.turn, s.face) : []
+  const legal = active && human ? legalTokens(s.tok, s.turn, s.face) : []
   const toks = layout(s, now, legal)
   const pulse = 0.5 + 0.5 * Math.sin(now * 7)
   for (const t of toks) {

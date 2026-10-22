@@ -54,8 +54,13 @@ export interface State extends TurnState {
 
 const DIE_HIT: ButtonLayout = { x: DIE.x, y: DIE.y, w: DIE.hit, h: DIE.hit }
 
+/** A beat before a pawn with no real choice moves by itself. */
+const AUTO = 0.35
+
 class Ludo extends TurnGame<State> {
   private wasRolling = false
+  /** Game time the current face became playable (for the automatic move). */
+  private readyAt = -1
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -133,6 +138,7 @@ class Ludo extends TurnGame<State> {
     if (m.captured.length > 0) {
       this.ctx.audio.play('hit', hi)
       this.ctx.audio.play('boing', 0.8)
+      this.ctx.audio.buzz(30)
       fx.stop(5)
       fx.shake(0.4)
       fx.ring(at.x, at.y, C.yellow, 120)
@@ -146,6 +152,8 @@ class Ludo extends TurnGame<State> {
     } else if (m.to === FINISH) {
       this.ctx.audio.play('coin', hi)
       this.ctx.audio.play('score', hi)
+      this.ctx.audio.buzz(18)
+      fx.stop(3)
       fx.sparks(at.x, at.y, C.yellow, 20)
       fx.ring(at.x, at.y, SIDE[m.side].main, 100)
       fx.float('Home!', at.x, at.y + (m.side === 0 ? -90 : 90), C.yellow, 52, m.side)
@@ -154,8 +162,12 @@ class Ludo extends TurnGame<State> {
       fx.burst(at.x, at.y, SIDE[m.side].main, { count: 12, speed: 320, size: 10 })
       fx.ring(at.x, at.y, SIDE[m.side].main, 70)
     } else {
-      this.ctx.audio.play('place', hi)
-      fx.puff(at.x, at.y + 16, 'rgba(255,255,255,0.4)', 4)
+      // A long run lands heavier than a short step.
+      const k = Math.min(1, m.path.length / 6)
+      this.ctx.audio.play('place', hi * (1.1 - k * 0.2))
+      this.ctx.audio.buzz(Math.round(5 + k * 8))
+      fx.puff(at.x, at.y + 16, 'rgba(255,255,255,0.4)', Math.round(3 + k * 4))
+      if (k > 0.8) fx.shake(0.08)
     }
   }
 
@@ -215,6 +227,13 @@ class Ludo extends TurnGame<State> {
       this.pass()
       return
     }
+    // No real choice (one pawn, or only pawns leaving base): it goes by itself after a beat.
+    if (this.readyAt < 0) this.readyAt = this.time
+    const same = legal.every((i) => (s.tok[s.turn][i] ?? BASE) === BASE)
+    if ((legal.length === 1 || same) && this.time - this.readyAt >= AUTO) {
+      this.move(legal[0] as number)
+      return
+    }
     if (!tap) return
     const i = this.tokenUnder(tap.x, tap.y)
     if (i < 0) return
@@ -240,9 +259,11 @@ class Ludo extends TurnGame<State> {
     this.move(choose(s.tok, side, s.face, this.ctx.difficulty, this.ctx.rng))
   }
 
-  /** Bots hurry up between the steps of one turn. */
+  /** Bots roll briskly and hurry up between the steps of one turn. */
   protected override botDelay(): number {
-    return this.s.face === 0 ? super.botDelay() : 0.45 + this.ctx.rng.range(0, 0.3)
+    if (this.s.face !== 0) return 0.35 + this.ctx.rng.range(0, 0.2)
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.55 : 0.4) + this.ctx.rng.range(0, 0.25)
   }
 
   /** The legal token of the side to move under a world point (or any of its tokens), or -1. */
@@ -265,12 +286,14 @@ class Ludo extends TurnGame<State> {
   }
 
   private roll(): void {
+    this.readyAt = -1
     const s = this.s
     const face = this.ctx.rng.int(1, 6)
     s.face = face
     s.dice[s.turn] = face
     s.rolledAt[s.turn] = this.time
     this.ctx.audio.play('roll')
+    this.ctx.audio.buzz(10)
     this.ctx.fx.shake(0.08)
     const at = frame(s.turn, DIE.x, DIE.y)
     this.ctx.fx.puff(at.x, at.y + (s.turn === 0 ? 60 : -60), 'rgba(255,255,255,0.3)', 5)
@@ -282,13 +305,14 @@ class Ludo extends TurnGame<State> {
     const at = frame(side, DIE.x, DIE.y)
     this.ctx.fx.float('No move', at.x, at.y + (side === 0 ? -110 : 110), C.white, 48, side)
     this.ctx.audio.play('buzz', 0.9)
-    s.wait = this.time + 0.9
+    s.wait = this.time + 0.5
     const face = s.face
     s.face = 0
     if (face !== 6) s.turn = other(side)
   }
 
   private move(i: number): void {
+    this.readyAt = -1
     const s = this.s
     const side = s.turn
     const before = s.tok
@@ -312,10 +336,22 @@ class Ludo extends TurnGame<State> {
     this.ctx.audio.play(from === BASE ? 'powerup' : 'tick', side === 0 ? 1 : 1.1)
   }
 
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.readyAt = -1
+  }
+
   render(g: Draw): void {
     const s = this.s
     tableBackdrop(g)
-    renderLudo(g, s, this.time, this.over, (side) => this.isBot(side))
+    // Online, the roll prompt and the movable-pawn glow show only on the mover's phone.
+    renderLudo(
+      g,
+      s,
+      this.time,
+      this.over,
+      (side) => this.isBot(side) || (g.viewer !== null && g.viewer !== side),
+    )
     this.drawTurns(g, undefined, s.nextAt < 0)
     if (this.target > 1) {
       pips(g, 0, s.wins[0], this.target)

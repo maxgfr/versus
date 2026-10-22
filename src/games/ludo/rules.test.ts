@@ -207,3 +207,40 @@ describe('ludo games', () => {
     }
   }
 })
+
+describe('ludo computer strength', () => {
+  const duel = (a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard', seed: number) => {
+    const rng = new Rng(seed)
+    let tok = none()
+    let turn: Side = seed % 2 === 0 ? 0 : 1
+    for (;;) {
+      const face = rng.int(1, 6)
+      if (legalTokens(tok, turn, face).length) {
+        tok = step(tok, turn, choose(tok, turn, face, turn === 0 ? a : b, rng), face).tok
+        if (won(tok, turn)) return turn
+      }
+      if (face !== 6) turn = turn === 0 ? 1 : 0
+    }
+  }
+
+  it('hard and normal beat easy most of the time over seeded games (the dice still have a say)', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 1; seed <= 60; seed++) {
+      if (duel('hard', 'easy', seed) === 0) hard++
+      if (duel('normal', 'easy', seed) === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(42)
+    expect(normal).toBeGreaterThanOrEqual(42)
+  })
+
+  it('hard steps out of reach of a rival right behind rather than run a pawn that is safe', () => {
+    const tok = none()
+    // Red pawn A sits 2 squares ahead of a blue pawn; pawn B is far away and unthreatened.
+    const a = 10
+    tok[0] = [a, 30, BASE, BASE]
+    tok[1][0] = blueProgOn(a - 2)
+    // With a 5, moving A puts it 7 ahead (out of reach of one roll); moving B leaves A hanging.
+    expect(choose(tok, 0, 5, 'hard', new Rng(1))).toBe(0)
+  })
+})
