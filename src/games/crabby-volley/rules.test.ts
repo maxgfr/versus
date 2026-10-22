@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { STEP, type Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
-import { decide, newMemory, TUNING, type BotMemory } from './bot.ts'
+import { contactOf, decide, newMemory, TUNING, type BotMemory } from './bot.ts'
 import {
   BAND_Y,
+  DEEP,
   BALL_R,
   CRAB_R,
   HOP_H,
@@ -132,6 +133,84 @@ describe('crabby volley rules', () => {
     expect(w.ball.vy).toBeLessThan(0) // red sends it up the table
   })
 
+  it('the serve toss cannot be swatted on its way up', () => {
+    const rng = new Rng(20)
+    const w = newWorld(false, 0, rng)
+    const c = w.crabs[0]
+    if (!c) throw new Error('no crab')
+    c.x = w.ball.x
+    let first = -1
+    for (let i = 0; i < 60 * 3 && first < 0; i++)
+      for (const e of step(w, STEP, none(w), [false, false], rng)) if (e.kind === 'bump') first = i
+    // It only meets the claws once it falls back down.
+    expect(first).toBeGreaterThan(60)
+  })
+
+  it('a plain bump comes down inside the court, in front of the rival band', () => {
+    for (const seed of [21, 22, 23, 24]) {
+      const rng = new Rng(seed)
+      const w = newWorld(false, 0, rng)
+      const c = w.crabs[0]
+      if (!c) throw new Error('no crab')
+      const blue = w.crabs[1]
+      if (!blue) throw new Error('no crab')
+      blue.x = span().x0 // out of the way, so the ball lands
+      toss(w, c.x, c.y - 40, 0, 0, 150, -400)
+      let landed: { x: number; y: number } | null = null
+      for (let i = 0; i < 60 * 4 && w.phase === 'rally'; i++)
+        for (const e of step(w, STEP, none(w), [false, false], rng))
+          if (e.kind === 'land') landed = e
+      expect(w.why).toBe('land')
+      expect(landed).not.toBeNull()
+      const y = (landed as { y: number }).y
+      expect(Math.abs(y - (BAND_Y[1] + DEEP))).toBeLessThan(40)
+    }
+  })
+
+  it('a crab high in its hop spikes: flatter, faster and shorter than a bump', () => {
+    const bump = (hop: boolean) => {
+      const rng = new Rng(25)
+      const w = newWorld(false, 0, rng)
+      const c = w.crabs[0]
+      if (!c) throw new Error('no crab')
+      if (hop) {
+        hopCrab(c, c.x)
+        c.hop = HOP_T / 2 - 0.05
+        c.z = HOP_H * 0.95
+      }
+      toss(w, c.x, c.y - 40, 0, 0, hop ? REACH + c.z - 10 : 150, -300)
+      let ev: { power: number; speed: number } | null = null
+      for (let i = 0; i < 5 && !ev; i++)
+        for (const e of step(w, STEP, none(w), [false, false], rng)) if (e.kind === 'bump') ev = e
+      return { ev, vz: w.ball.vz }
+    }
+    const plain = bump(false)
+    const spike = bump(true)
+    expect(plain.ev?.power).toBe(0)
+    expect(spike.ev?.power ?? 0).toBeGreaterThan(0.8)
+    expect(spike.vz).toBeLessThan(plain.vz * 0.7)
+    expect(spike.ev?.speed ?? 0).toBeGreaterThan(plain.ev?.speed ?? 0)
+  })
+
+  it('crabs scuttle evenly through the substeps, at their real speed', () => {
+    const rng = new Rng(26)
+    const w = newWorld(false, 0, rng)
+    const c = w.crabs[0]
+    if (!c) throw new Error('no crab')
+    const x0 = c.x
+    step(w, STEP, [x0 + 300 * STEP, null], [false, false], rng, [880, 880])
+    expect(c.vx).toBeCloseTo(300, 0)
+  })
+
+  it('the bot reads where the ball comes within its claws', () => {
+    const rng = new Rng(27)
+    const w = newWorld(false, 1, rng)
+    toss(w, 400, 600, 50, 560, 300, 900)
+    const spot = contactOf(w.ball, 0, REACH)
+    expect(spot).not.toBeNull()
+    expect(Math.abs((spot as { x: number }).x - 400)).toBeLessThan(150)
+  })
+
   it('a ball landing on red sand is a point for blue', () => {
     const rng = new Rng(4)
     const w = newWorld(false, 0, rng)
@@ -229,8 +308,8 @@ describe('crabby volley rules', () => {
     expect(w.crabs).toHaveLength(4)
     expect(winner(w, 3)).not.toBeNull()
     let hard = 0
-    for (let s = 1; s <= 4; s++)
-      if (winner(botMatch('hard', 'easy', s, 3, false).w, 3) === 0) hard++
-    expect(hard).toBeGreaterThanOrEqual(3)
+    for (let s = 1; s <= 6; s++)
+      if (winner(botMatch('hard', 'easy', s, 5, false).w, 5) === 0) hard++
+    expect(hard).toBeGreaterThanOrEqual(5)
   })
 })

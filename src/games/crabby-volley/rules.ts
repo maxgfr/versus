@@ -27,13 +27,25 @@ export const HOP_T = 0.6
 export const SCUTTLE = 880
 export const G = 1400
 export const BUMP_VZ = 1540
-export const BUMP_VY = 600
 export const STEER = 1.5
 export const MAX_TOUCH = 3
 export const POINT_PAUSE = 1.3
-export const RALLY_MAX = 12
+/**
+ * Safety net: a rally longer than this (s) goes to the last toucher. Rallies
+ * quicken with every bump and end on play long before.
+ */
+export const RALLY_MAX = 30
+/** A plain bump comes down this far in front of the rival's band (toward the net). */
+export const DEEP = 60
+/** A spike (struck at the top of a hop) comes down this much shorter, and this much flatter. */
+export const SPIKE_SHORT = 240
+const SPIKE_FLAT = 0.42
+/** Each bump of a rally takes this share off the flight time, up to `QUICK_MAX`. */
+const QUICK = 0.018
+const QUICK_MAX = 0.32
 const SUBSTEPS = 4
-const COOL = 0.22
+/** After a bump the crab cannot touch the ball again until it has risen clear. */
+const COOL = 0.5
 
 export interface Crab {
   side: Side
@@ -74,11 +86,23 @@ export interface World {
   count: number
   why: 'land' | 'net' | 'touches' | 'slow' | 'out' | ''
   rally: number
+  /** Bumps so far in this rally (each one quickens the next flight). */
+  hits: number
 }
 
 export type Event =
   | { kind: 'hop'; side: Side; x: number; y: number }
-  | { kind: 'bump'; side: Side; x: number; y: number; count: number }
+  | {
+      kind: 'bump'
+      side: Side
+      x: number
+      y: number
+      count: number
+      /** 0..1: how high in its hop the crab struck it (a spike). */
+      power: number
+      /** Ground speed the ball leaves at. */
+      speed: number
+    }
   | { kind: 'net'; x: number; y: number }
   | { kind: 'land'; side: Side; x: number; y: number }
   | { kind: 'point'; side: Side; why: 'land' | 'net' | 'touches' | 'slow' | 'out' }
@@ -130,6 +154,7 @@ export function newWorld(teams: boolean, server: Side, rng: Rng): World {
     count: 0,
     why: '',
     rally: 0,
+    hits: 0,
   }
   serve(w, server, rng)
   return w
@@ -151,6 +176,7 @@ export function serve(w: World, side: Side, rng: Rng): void {
   w.count = 0
   w.why = ''
   w.rally = 0
+  w.hits = 0
 }
 
 function point(
@@ -221,8 +247,11 @@ export function step(
     return ev
   }
   const h = dt / SUBSTEPS
+  // The finger moves once per frame: walk each target evenly through the
+  // substeps so a crab's sideways speed is its real one in every substep.
+  const from = w.crabs.map((c) => c.x)
   for (let s = 0; s < SUBSTEPS && w.phase === 'rally'; s++) {
-    moveCrabs(w, h, targetX, s === 0 ? hopReq : [], ev, speeds)
+    moveCrabs(w, h, targetX, s === 0 ? hopReq : [], ev, speeds, from, (s + 1) / SUBSTEPS)
     flight(w, h, ev, rng)
   }
   return ev
@@ -235,6 +264,8 @@ function moveCrabs(
   hopReq: boolean[],
   ev: Event[],
   speeds: number[],
+  from?: number[],
+  k = 1,
 ): void {
   w.crabs.forEach((c, i) => {
     c.cool = Math.max(0, c.cool - dt)
@@ -255,8 +286,11 @@ function moveCrabs(
         c.cool = 0.12
       }
     } else {
-      const t = targetX[i]
-      if (t !== null && t !== undefined) {
+      const goal = targetX[i]
+      const f = from?.[i]
+      const t =
+        goal === null || goal === undefined ? null : f === undefined ? goal : f + (goal - f) * k
+      if (t !== null) {
         const d = t - c.x
         const step = (speeds[i] ?? SCUTTLE) * dt
         c.x += Math.abs(d) <= step ? d : Math.sign(d) * step
@@ -297,7 +331,9 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
     else point(w, other(w.server), 'net', ev)
     return
   }
-  for (const c of w.crabs) {
+  // Claws meet a falling ball: the serve toss (and a ball still climbing off a
+  // bump) cannot be swatted on the way up.
+  for (const c of b.vz > 0 ? [] : w.crabs) {
     if (c.cool > 0) continue
     const reach = REACH + c.z
     if (b.z > reach) continue
@@ -310,14 +346,23 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
       w.last = c.side
       w.count = 1
     }
-    const power = 0.86 + 0.28 * rng.next()
+    // A crab high in its hop spikes: flatter, faster, and short of the rival's
+    // band so they must hop to meet it. Where the ball sits on the claws and the
+    // crab's sideways scuttle aim it left or right. The rally quickens.
+    const power = Math.max(0, Math.min(1, (c.z - 40) / (HOP_H - 40)))
+    w.hits++
+    const quick = 1 - Math.min(QUICK_MAX, w.hits * QUICK)
+    const vz = BUMP_VZ * quick * (1 - power * SPIKE_FLAT) * (0.98 + 0.04 * rng.next())
+    const z0 = Math.max(0, b.z)
+    const T = (vz + Math.sqrt(vz * vz + 2 * G * z0)) / G
+    const rival = other(c.side)
+    const landY = BAND_Y[rival] - fwd(c.side) * (DEEP + power * SPIKE_SHORT)
     b.vx = dx * STEER + c.vx * 0.4
-    b.vy = fwd(c.side) * BUMP_VY * power
-    b.vz = BUMP_VZ * (0.95 + 0.1 * rng.next())
-    // Push the ball clear of the crab so it does not hit again at once.
-    b.y = c.y + fwd(c.side) * -(CRAB_R + BALL_R) * 0.2
+    b.vy = (landY - b.y) / T
+    b.vz = vz
     c.cool = COOL
-    ev.push({ kind: 'bump', side: c.side, x: b.x, y: b.y, count: w.count })
+    const speed = Math.hypot(b.vx, b.vy)
+    ev.push({ kind: 'bump', side: c.side, x: b.x, y: b.y, count: w.count, power, speed })
     if (w.count > MAX_TOUCH) {
       point(w, other(c.side), 'touches', ev)
       return
