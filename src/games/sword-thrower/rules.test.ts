@@ -9,11 +9,14 @@ import {
   canThrow,
   centreAngle,
   freeShot,
+  FRENZY,
+  FRENZY_RELOAD,
   impactAngle,
   leader,
   MATCH,
   newState,
   PIVOT,
+  predict,
   REACH,
   RELOAD,
   RIM,
@@ -274,5 +277,82 @@ describe('sword thrower bot', () => {
     const r = duel('normal', 'normal', 7)
     expect(r.s.score[0]).toBeGreaterThan(0)
     expect(r.s.score[1]).toBeGreaterThan(0)
+  })
+
+  it('hard beats normal from either side most of the time', () => {
+    let wins = 0
+    for (let seed = 1; seed <= 8; seed++) {
+      const hs: Side = seed % 2 ? 0 : 1
+      if (
+        leader(duel(hs === 0 ? 'hard' : 'normal', hs === 0 ? 'normal' : 'hard', 20 + seed).s) === hs
+      )
+        wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(6)
+  })
+})
+
+describe('reading the flight', () => {
+  it('predict matches what the sword actually does, stuck swords and spin included', () => {
+    let agree = 0
+    let total = 0
+    for (let seed = 1; seed <= 6; seed++) {
+      const rng = new Rng(seed)
+      const s = newState(rng)
+      // A shield already half full, mid-match, so the spin is not trivial.
+      s.t = 20
+      s.left = MATCH - 20
+      const sh = targetOf(s, 0)
+      for (let i = 0; i < 4; i++) sh.stuck.push({ a: i * 1.5 + rng.range(0, 0.4), t: 0 })
+      for (const a of [-0.4, -0.2, 0, 0.15, 0.3]) {
+        const copy = structuredClone(s)
+        const guess = predict(copy, 0, a)
+        copy.sway[0] = Math.asin(a / SWAY)
+        throwSword(copy, 0)
+        const ev: Event[] = []
+        for (let i = 0; i < 200 && copy.swords.some((w) => !w.drop); i++)
+          ev.push(...advance(copy, STEP, [false, false]))
+        const real = ev.some((e) => e.kind === 'stick')
+          ? 'stick'
+          : ev.some((e) => e.kind === 'clang')
+            ? 'clang'
+            : 'miss'
+        total++
+        // Right at a clang zone's edge one step of drift can tip it; count the clear calls.
+        if (Math.abs(guess.margin) < 0.03 && guess.k !== 'miss') {
+          total--
+          continue
+        }
+        if (real === guess.k) agree++
+      }
+    }
+    expect(agree / total).toBeGreaterThan(0.95)
+  })
+
+  it('the last seconds are a frenzy: the arm reloads faster', () => {
+    const s = still()
+    expect(throwSword(s, 0).kind).toBe('throw')
+    expect(s.reload[0]).toBe(RELOAD)
+    s.left = FRENZY - 1
+    s.reload[0] = 0
+    throwSword(s, 0)
+    expect(s.reload[0]).toBe(FRENZY_RELOAD)
+    const t = still()
+    t.left = FRENZY + 0.01
+    expect(advance(t, STEP, [false, false]).some((e) => e.kind === 'frenzy')).toBe(true)
+  })
+
+  it('sticks in a row build a streak; a throw that does not stick breaks it', () => {
+    const s = still()
+    aimedThrow(s, 0)
+    settle(s)
+    expect(s.streak[0]).toBe(1)
+    // Far to the side: it misses the rival's shield (and may clang off its own).
+    s.reload[0] = 0
+    s.sway[0] = Math.PI / 2
+    throwSword(s, 0)
+    const ev = settle(s)
+    expect(ev.some((e) => e.kind === 'stick')).toBe(false)
+    expect(s.streak[0]).toBe(0)
   })
 })

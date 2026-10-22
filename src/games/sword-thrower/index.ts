@@ -69,9 +69,20 @@ class SwordThrower extends BaseGame<Game> {
         return
       case 'stick': {
         const col = SIDE[e.side].main
+        // A streak of sticks climbs in pitch and kicks harder each time.
+        const k = Math.min(1, (e.streak - 1) / 5)
         audio.play('hit', Math.min(1.7, 1 + e.count * 0.04))
-        audio.play('coin', Math.min(1.6, 1 + e.count * 0.03))
-        audio.buzz(14)
+        audio.play('coin', Math.min(1.8, 1 + e.streak * 0.08))
+        audio.buzz(Math.round(12 + k * 18))
+        if (e.streak >= 3)
+          fx.float(
+            `${e.streak} in a row!`,
+            e.x,
+            e.y + (e.side === 0 ? 120 : -120),
+            C.yellow,
+            46,
+            e.side,
+          )
         fx.burst(e.x, e.y, col, {
           count: 18,
           speed: 560,
@@ -92,10 +103,10 @@ class SwordThrower extends BaseGame<Game> {
           kind: 'square',
           colors: [C.cream, '#e2c9a0', SIDE[other(e.side)].light],
         })
-        fx.sparks(e.x, e.y, C.yellow, 10)
-        fx.ring(e.x, e.y, SIDE[e.side].light, 110)
-        fx.shake(0.22)
-        fx.stop(3)
+        fx.sparks(e.x, e.y, C.yellow, Math.round(10 + k * 12))
+        fx.ring(e.x, e.y, SIDE[e.side].light, 110 + k * 80)
+        fx.shake(0.18 + k * 0.15)
+        fx.stop(Math.round(3 + k * 2))
         floatFor(fx, e.side, '+1', e.x, e.y)
         return
       }
@@ -131,15 +142,21 @@ class SwordThrower extends BaseGame<Game> {
       case 'miss':
         audio.play('whoosh', 1.4)
         return
+      case 'frenzy':
+        audio.play('powerup', 0.8)
+        audio.buzz(30)
+        fx.flash(C.orange, 0.15)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Frenzy! Quick reload')
+        return
       case 'tick':
         audio.play(e.left <= 3 ? 'count' : 'tick', e.left <= 3 ? 1.2 : 1)
         return
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha: number): void {
     const s = this.s
-    render(g, s, this.time, s.endAt, [!this.isBot(0), !this.isBot(1)])
+    render(g, s, this.time, s.endAt, [!this.isBot(0), !this.isBot(1)], (1 - alpha) / 60)
     drawFuse(g, s, this.time)
     const w = s.left <= 0 ? leader(s) : null
     for (const side of [0, 1] as Side[]) {

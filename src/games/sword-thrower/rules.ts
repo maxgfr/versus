@@ -14,6 +14,9 @@ import { W } from '../../core/stage.ts'
 
 export const MATCH = 45
 export const RELOAD = 0.5
+/** The last seconds of a match are a frenzy: the arm reloads this fast. */
+export const FRENZY = 10
+export const FRENZY_RELOAD = 0.33
 export const SPEED = 1600
 /** Swords a shield holds before it clears. */
 export const CAP = 8
@@ -95,13 +98,24 @@ export interface State {
   sway: [number, number]
   reload: [number, number]
   react: [React, React]
+  /** Swords stuck in a row per side (a clang or a miss resets it). */
+  streak: [number, number]
   /** Seconds since the final whistle (the shields spin down, loose swords settle). */
   after: number
 }
 
 export type Event =
   | { kind: 'throw'; side: Side; x: number; y: number }
-  | { kind: 'stick'; side: Side; shield: Side; x: number; y: number; count: number }
+  | {
+      kind: 'stick'
+      side: Side
+      shield: Side
+      x: number
+      y: number
+      count: number
+      streak: number
+    }
+  | { kind: 'frenzy' }
   | { kind: 'clang'; side: Side; x: number; y: number; own: boolean }
   | { kind: 'clear'; shield: Side; x: number; y: number }
   | { kind: 'miss'; side: Side; x: number; y: number }
@@ -132,6 +146,7 @@ export function newState(rng: Rng, seconds = MATCH): State {
       { t: -9, k: 'none' },
       { t: -9, k: 'none' },
     ],
+    streak: [0, 0],
     after: 0,
   }
 }
@@ -202,6 +217,50 @@ export function freeShot(s: State, side: Side, a: number): boolean {
   return th !== null && !clangsAt(targetOf(s, side), th)
 }
 
+/** Spin rate of a shield (rad/s) at match time `t`: it speeds up as the match goes on. */
+export function spinRate(s: State, t: number): number {
+  return 1.2 + 0.9 * (t / s.total)
+}
+
+/**
+ * Fly a sword thrown now at sway angle `a` forward against where the shields
+ * will be (their spin and wander are known), without changing anything: does
+ * it stick in the rival's shield, clang off a stuck sword (or the thrower's
+ * own shield), or miss? `margin` is how far (radians) the impact lands from the
+ * nearest stuck sword's clang zone, so a careful thrower can keep clear of it.
+ */
+export function predict(
+  s: State,
+  side: Side,
+  a: number,
+): { k: 'stick' | 'clang' | 'miss'; margin: number; t: number } {
+  const p = PIVOT[side] as { x: number; y: number }
+  const d = dirOf(side, a)
+  const x0 = p.x + d.x * START
+  const y0 = p.y + d.y * START
+  const h = 1 / 120
+  for (let tau = h; tau < 1.6; tau += h) {
+    const x = x0 + d.x * SPEED * tau
+    const y = y0 + d.y * SPEED * tau
+    for (const k of [other(side), side] as Side[]) {
+      const sh = s.shields[k] as Shield
+      const sx = W / 2 + WANDER * Math.sin(sh.ph + WANDER_RATE * tau)
+      const dx = x - sx
+      const dy = y - sh.y
+      if (Math.hypot(dx, dy) > REACH) continue
+      if (k === side) return { k: 'clang', margin: 0, t: tau }
+      // The shield's angle then: its spin integrates a rate that grows with match time.
+      const rot = sh.rot + sh.dir * (1.2 * tau + (0.9 * (s.t * tau + (tau * tau) / 2)) / s.total)
+      const theta = Math.atan2(dy, dx)
+      let margin = Math.PI
+      for (const st of sh.stuck)
+        margin = Math.min(margin, Math.abs(wrap(theta - (rot + st.a))) - BLOCK)
+      return { k: margin < 0 ? 'clang' : 'stick', margin, t: tau }
+    }
+  }
+  return { k: 'miss', margin: 0, t: 1.6 }
+}
+
 /** Launch a sword from `side`'s pivot along the current sway. */
 export function throwSword(s: State, side: Side): Event {
   const p = PIVOT[side] as { x: number; y: number }
@@ -209,7 +268,7 @@ export function throwSword(s: State, side: Side): Event {
   const x = p.x + d.x * START
   const y = p.y + d.y * START
   s.swords.push({ side, x, y, vx: d.x * SPEED, vy: d.y * SPEED, drop: false, t: 0 })
-  s.reload[side] = RELOAD
+  s.reload[side] = s.left <= FRENZY ? FRENZY_RELOAD : RELOAD
   return { kind: 'throw', side, x, y }
 }
 
@@ -226,13 +285,15 @@ export function advance(s: State, dt: number, want: readonly [boolean, boolean])
   if (s.left > 0 && Math.ceil(s.left) < before && s.left <= 5) {
     ev.push({ kind: 'tick', left: Math.ceil(s.left) })
   }
+  if (s.left <= FRENZY && s.left + dt > FRENZY && s.total > FRENZY * 1.5)
+    ev.push({ kind: 'frenzy' })
   for (const side of [0, 1] as Side[]) {
     s.sway[side] += SWAY_RATE * dt
     s.reload[side] = Math.max(0, s.reload[side] - dt)
   }
   for (const sh of s.shields) {
     // Spins faster as the match goes on.
-    sh.rot += sh.dir * (1.2 + 0.9 * (s.t / s.total)) * dt
+    sh.rot += sh.dir * spinRate(s, s.t) * dt
     sh.ph += WANDER_RATE * dt
     sh.x = W / 2 + WANDER * Math.sin(sh.ph)
   }
@@ -254,6 +315,7 @@ export function advance(s: State, dt: number, want: readonly [boolean, boolean])
     sw.y += sw.vy * dt
     if (sweep(s, i, ev)) continue
     if (sw.x < -150 || sw.x > W + 150 || sw.y < -150 || sw.y > 1950) {
+      if (s.streak) s.streak[sw.side] = 0
       ev.push({ kind: 'miss', side: sw.side, x: sw.x, y: sw.y })
       s.swords.splice(i, 1)
     }
@@ -279,6 +341,7 @@ function sweep(s: State, i: number, ev: Event[]): boolean {
       clang(sw, dx / (d || 1), dy / (d || 1))
       sh.clangT = s.t
       s.react[sw.side] = { t: s.t, k: own ? 'own' : 'clang' }
+      if (s.streak) s.streak[sw.side] = 0
       ev.push({ kind: 'clang', side: sw.side, x: sw.x, y: sw.y, own })
       return true
     }
@@ -287,6 +350,7 @@ function sweep(s: State, i: number, ev: Event[]): boolean {
     sh.hitT = s.t
     s.react[sw.side] = { t: s.t, k: 'stick' }
     s.score[sw.side]++
+    if (s.streak) s.streak[sw.side]++
     ev.push({
       kind: 'stick',
       side: sw.side,
@@ -294,6 +358,7 @@ function sweep(s: State, i: number, ev: Event[]): boolean {
       x: sw.x,
       y: sw.y,
       count: s.score[sw.side],
+      streak: s.streak?.[sw.side] ?? 1,
     })
     if (sh.stuck.length >= CAP) {
       // Full: every stuck sword tumbles off the rim and the shield starts again.

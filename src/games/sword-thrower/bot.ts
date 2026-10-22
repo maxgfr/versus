@@ -1,18 +1,35 @@
 import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { aimAngle, canThrow, centreAngle, freeShot, SWAY, type State } from './rules.ts'
+import { aimAngle, canThrow, centreAngle, freeShot, predict, SWAY, type State } from './rules.ts'
 
 /**
- * The computer's sword arm. It plans one throw at a time: an angle a little off
- * the target's centre, chosen after a reaction delay. It taps the moment its sway
- * crosses that angle on a free line (no stuck sword in the way). Harder levels
- * react sooner and aim truer; every level sometimes deliberately throws wide.
+ * The computer's sword arm. Easy plans one throw at a time: an angle a little
+ * off the target's centre, after a reaction delay, and taps when its sway
+ * crosses it on a line that looks free right now. Normal and hard read the
+ * flight instead (`predict`): each step they ask "if I let go now, where on
+ * the spinning, wandering shield does it land?" and tap when it sticks clear
+ * of the swords already there; hard wants a wider clearance and reacts
+ * faster. Every level sometimes throws wide or a frame late.
  */
 
-const LEVEL: Record<Difficulty, { react: number; err: number; wide: number }> = {
-  easy: { react: 0.45, err: 0.3, wide: 0.25 },
-  normal: { react: 0.28, err: 0.14, wide: 0.1 },
-  hard: { react: 0.14, err: 0.05, wide: 0.02 },
+interface Level {
+  react: number
+  /** Aim error of the planned angle (easy only). */
+  err: number
+  /** Chance of a deliberately wide throw. */
+  wide: number
+  /** Reads the flight ahead (normal, hard). */
+  read: boolean
+  /** Clearance (rad) it wants from the stuck swords' clang zones. */
+  margin: number
+  /** Chance per step that a good moment slips by (hand lag). */
+  slip: number
+}
+
+const LEVEL: Record<Difficulty, Level> = {
+  easy: { react: 0.45, err: 0.3, wide: 0.25, read: false, margin: 0, slip: 0 },
+  normal: { react: 0.2, err: 0, wide: 0.06, read: true, margin: 0.04, slip: 0.35 },
+  hard: { react: 0.08, err: 0, wide: 0.01, read: true, margin: 0.1, slip: 0.12 },
 }
 
 interface Plan {
@@ -56,6 +73,14 @@ export class Bot {
     }
     const p = this.plan
     p.think -= dt
+    if (lv.read && !p.wide) {
+      if (p.think > 0) return false
+      const f = predict(s, side, sway)
+      if (f.k !== 'stick' || f.margin < lv.margin) return false
+      if (this.rng.chance(lv.slip)) return false
+      this.plan = null
+      return true
+    }
     const diff = sway - p.a
     const crossed = Math.sign(diff) !== Math.sign(p.prev) && p.think <= 0
     p.prev = diff

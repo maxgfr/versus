@@ -276,8 +276,12 @@ export function render(
   now: number,
   endAt: number,
   human: readonly [boolean, boolean] = [true, true],
+  /** Seconds since the last fixed step: flying swords are drawn that far back. */
+  lag = 0,
 ): void {
   const end = endAt >= 0 ? now - endAt : 0
+  // Online, each phone shows only its own player's aim guide and hint.
+  const mine = (side: Side) => g.viewer === null || g.viewer === side
   drawTable(g, s)
   // Each shield is drawn with the swords stuck in it, before the flying ones.
   for (const side of [0, 1] as Side[]) {
@@ -296,13 +300,17 @@ export function render(
     }
   }
   for (const side of [0, 1] as Side[]) {
-    if (s.left > 0 && canThrow(s, side)) drawAimGuide(g, s, side)
+    if (s.left > 0 && canThrow(s, side) && mine(side)) drawAimGuide(g, s, side)
     drawThrower(g, s, side, now, end)
   }
-  for (const sw of s.swords) drawFlying(g, sw)
+  for (const sw of s.swords)
+    drawFlying(
+      g,
+      sw.drop || lag <= 0 ? sw : { ...sw, x: sw.x - sw.vx * lag, y: sw.y - sw.vy * lag },
+    )
   if (s.t < 5 && s.left > 0) {
     for (const side of [0, 1] as Side[]) {
-      if (!human[side]) continue
+      if (!human[side] || !mine(side)) continue
       const y = side === 0 ? 1395 : 405
       banner(g, side, 'Tap to throw', y, {
         size: 44,
