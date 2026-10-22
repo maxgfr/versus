@@ -341,13 +341,16 @@ class NumberMatch extends PuzzleRace<State> {
       shift: b.shift,
       now: this.time,
     })
-    drawAdd(g, geo, side, b.adds, {
-      stuck: b.noPair,
-      can: canAdd(b.vals, ADDS - b.adds),
-      now: this.time,
-      pressAt: b.pressAt,
-    })
-    if (b.sel < 0 && b.adds === 0 && this.time < 7 && !this.isBot(side) && !b.hit) {
+    // Online, each phone shows only its own player's controls (the Add button, the hint).
+    const mine = g.viewer === null || side === g.viewer
+    if (mine)
+      drawAdd(g, geo, side, b.adds, {
+        stuck: b.noPair,
+        can: canAdd(b.vals, ADDS - b.adds),
+        now: this.time,
+        pressAt: b.pressAt,
+      })
+    if (mine && b.sel < 0 && b.adds === 0 && this.time < 7 && !this.isBot(side) && !b.hit) {
       g.text('Tap two that match or make 10', w / 2, geo.btn.y - 36, {
         size: 34,
         weight: 600,
