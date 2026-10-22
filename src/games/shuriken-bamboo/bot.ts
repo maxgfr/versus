@@ -33,8 +33,8 @@ interface Level {
 
 const LEVEL: Record<Difficulty, Level> = {
   easy: { react: 1.4, err: 0.1, miss: 0.25, looks: 3, power: [0.25, 0.6] },
-  normal: { react: 0.85, err: 0.05, miss: 0.1, looks: 12, power: [0.45, 0.85] },
-  hard: { react: 0.5, err: 0.02, miss: 0.03, looks: 40, power: [0.8, 1] },
+  normal: { react: 0.65, err: 0.04, miss: 0.07, looks: 20, power: [0.5, 0.9] },
+  hard: { react: 0.38, err: 0.015, miss: 0.02, looks: 48, power: [0.82, 1] },
 }
 
 export class Bot {

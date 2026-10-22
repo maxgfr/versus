@@ -17,6 +17,7 @@ import {
   pathOf,
   PIERCE,
   REGROW,
+  RUSH,
   SHURI_SPEED,
   SHURI_Z,
   type Stalk,
@@ -303,5 +304,33 @@ describe('shuriken bamboo bot', () => {
       if (leader(duel('hard', 'easy', seed).s) === 0) wins++
     }
     expect(wins).toBeGreaterThanOrEqual(4)
+  })
+
+  it('hard out-cuts normal most of the time, from either side', () => {
+    let wins = 0
+    for (let seed = 1; seed <= 8; seed++) {
+      const hs: Side = seed % 2 ? 0 : 1
+      if (
+        leader(duel(hs === 0 ? 'hard' : 'normal', hs === 0 ? 'normal' : 'hard', 60 + seed).s) === hs
+      )
+        wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(6)
+  })
+
+  it('the last seconds are a bamboo rush: stalks grow back faster', () => {
+    const grow = (left: number) => {
+      const s = still()
+      s.left = left
+      const st = s.stalks[0] as Stalk
+      st.state = 'grow'
+      st.h = 0
+      advance(s, 0.5, [null, null], rng())
+      return st.h
+    }
+    expect(grow(RUSH - 1)).toBeGreaterThan(grow(RUSH + 10) * 1.5)
+    const s = still()
+    s.left = RUSH + 0.01
+    expect(advance(s, STEP, [null, null], rng()).some((e) => e.kind === 'rush')).toBe(true)
   })
 })

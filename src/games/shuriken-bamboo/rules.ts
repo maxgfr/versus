@@ -36,6 +36,10 @@ export const REGROW = 2.0
 export const HIT_R = 24
 /** Share of regrowing stalks that come up golden. */
 export const GOLD = 0.16
+/** The last seconds of a match are a bamboo rush: faster growth, quicker regrowth, more gold. */
+export const RUSH = 12
+export const RUSH_GROW = 1.7
+export const RUSH_GOLD = 0.3
 /** Where each side's shurikens leave from: a line at its own end. */
 export const THROW_Y: readonly number[] = [1560, 240]
 /** Stalk positions: a staggered band across the middle; the clock sits in the gap. */
@@ -151,6 +155,7 @@ export type Event =
     }
   | { kind: 'miss'; side: Side; x: number; y: number }
   | { kind: 'tick'; left: number }
+  | { kind: 'rush' }
 
 export function newState(rng: Rng, seconds = MATCH): State {
   return {
@@ -215,7 +220,9 @@ export function advance(
   if (s.left > 0 && Math.ceil(s.left) < before && s.left <= 5) {
     ev.push({ kind: 'tick', left: Math.ceil(s.left) })
   }
-  for (const st of s.stalks) growStalk(st, dt, rng)
+  const rush = s.left <= RUSH
+  if (rush && s.left + dt > RUSH) ev.push({ kind: 'rush' })
+  for (const st of s.stalks) growStalk(st, dt, rng, rush)
   for (const side of [0, 1] as Side[]) {
     s.cool[side] = Math.max(0, s.cool[side] - dt)
     const aim = aims[side]
@@ -310,20 +317,21 @@ export function advance(
   return ev
 }
 
-function growStalk(st: Stalk, dt: number, rng: Rng): void {
+function growStalk(st: Stalk, dt: number, rng: Rng, rush = false): void {
   st.ph += dt
+  const k = rush ? RUSH_GROW : 1
   if (st.state === 'grow') {
-    st.h += (FULL / GROW_TIME) * dt
+    st.h += (FULL / GROW_TIME) * k * dt
     if (st.h >= FULL) {
       st.h = FULL
       st.state = 'up'
     }
   } else if (st.state === 'stump') {
-    st.wait -= dt
+    st.wait -= dt * k
     if (st.wait <= 0) {
       st.state = 'grow'
       st.h = 0
-      st.gold = rng.chance(GOLD)
+      st.gold = rng.chance(rush ? RUSH_GOLD : GOLD)
     }
   }
 }

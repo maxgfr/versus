@@ -164,6 +164,12 @@ class ShurikenBamboo extends BaseGame<Game> {
       case 'miss':
         audio.play('whoosh', 1.4)
         return
+      case 'rush':
+        audio.play('powerup', 0.85)
+        audio.buzz(25)
+        fx.flash(C.yellow, 0.12)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Bamboo rush!')
+        return
       case 'tick':
         audio.play(e.left <= 3 ? 'count' : 'tick', e.left <= 3 ? 1.2 : 1)
         return
