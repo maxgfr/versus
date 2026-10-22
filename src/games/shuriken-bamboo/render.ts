@@ -9,8 +9,10 @@ import {
   FULL,
   HIT_H,
   originX,
+  PIERCE,
   type Preview,
   type Shuri,
+  SHURI_SPEED,
   SHURI_Z,
   type Stalk,
   STUMP,
@@ -236,21 +238,38 @@ function drawStar(g: Draw, x: number, y: number, spin: number, side: Side, a = 1
 }
 
 /** A shuriken in the air: lifted by its height over its shadow, spinning, a ghost trail behind. */
-export function drawShuri(g: Draw, sh: Shuri): void {
-  const px = sh.x - SHURI_Z * 0.12
-  const py = sh.y - SHURI_Z * LIFT
-  g.shadow(sh.x, sh.y, 26, 11, 0.45)
+export function drawShuri(g: Draw, sh: Shuri, back = 0): void {
+  // `back`: how far behind its stepped spot to draw it (interpolation between steps).
+  const v = sh.v ?? SHURI_SPEED
+  const k = v / SHURI_SPEED
+  const x = sh.x - sh.dx * back
+  const y = sh.y - sh.dy * back
+  const px = x - SHURI_Z * 0.12
+  const py = y - SHURI_Z * LIFT
+  g.shadow(x, y, 26, 11, 0.45)
+  // A harder flick leaves a longer streak; a piercing one burns yellow.
+  const gap = 30 * k
   for (let i = 3; i >= 1; i--) {
     drawStar(
       g,
-      px - sh.dx * i * 30,
-      py - sh.dy * i * 30,
+      px - sh.dx * i * gap,
+      py - sh.dy * i * gap,
       sh.spin - i * 0.5,
       sh.side,
       0.16 * (4 - i),
     )
   }
-  g.line(px, py, px - sh.dx * 110, py - sh.dy * 110, alpha(SIDE[sh.side].light, 0.35), 10)
+  const hot = (sh.pierce ?? 0) > 0
+  const tail = 110 * k
+  g.line(
+    px,
+    py,
+    px - sh.dx * tail,
+    py - sh.dy * tail,
+    alpha(hot ? C.yellow : SIDE[sh.side].light, 0.4),
+    hot ? 14 : 10,
+  )
+  if (hot) g.circle(px, py, 44, alpha(C.yellow, 0.25 + 0.15 * Math.sin(sh.spin * 3)))
   drawStar(g, px, py, sh.spin, sh.side)
 }
 
@@ -258,13 +277,16 @@ export function drawShuri(g: Draw, sh: Shuri): void {
 function drawPreview(g: Draw, side: Side, p: Preview): void {
   const y0 = THROW_Y[side] ?? 0
   const x0 = originX(p.x)
-  const col = SIDE[side].light
-  for (let i = 0; i < 14; i++) {
+  // The finger's current speed: faster swipes reach further and glow yellow once they would pierce.
+  const pw = p.power ?? 0.5
+  const col = pw >= PIERCE ? C.yellow : SIDE[side].light
+  const n = Math.round(8 + pw * 8)
+  for (let i = 0; i < n; i++) {
     const d = 90 + i * 70
     const x = x0 + p.dx * d
     const y = y0 + p.dy * d - SHURI_Z * LIFT
     if (y < -20 || y > H + 20) break
-    g.alpha(0.95 - i * 0.06, () => g.circle(x, y, 10 - i * 0.4, col))
+    g.alpha(0.95 - i * (0.8 / n), () => g.circle(x, y, 10 + pw * 4 - i * 0.4, col))
   }
 }
 
@@ -330,20 +352,24 @@ export function render(
   now: number,
   endAt: number,
   human: readonly [boolean, boolean] = [true, true],
+  /** Seconds since the last fixed step, for drawing shurikens between steps. */
+  lag = 0,
 ): void {
   const end = endAt >= 0 ? now - endAt : 0
+  // Online, each phone shows only its own player's swipe preview and hint.
+  const mine = (side: Side) => g.viewer === null || g.viewer === side
   drawGrove(g)
   for (const st of [...s.stalks].sort((a, b) => a.y - b.y)) drawStalk(g, st, now)
   for (const f of s.fallen) drawFallen(g, f)
   for (const side of [0, 1] as Side[]) {
     const p = s.aiming[side]
-    if (p && s.left > 0) drawPreview(g, side, p)
+    if (p && s.left > 0 && mine(side)) drawPreview(g, side, p)
   }
   for (const side of [0, 1] as Side[]) drawNinja(g, s, side, end, now)
-  for (const sh of s.shuris) drawShuri(g, sh)
+  for (const sh of s.shuris) drawShuri(g, sh, (sh.v ?? SHURI_SPEED) * lag)
   if (s.t < 5 && s.left > 0) {
     for (const side of [0, 1] as Side[]) {
-      if (!human[side]) continue
+      if (!human[side] || !mine(side)) continue
       const y = side === 0 ? 1430 : 370
       banner(g, side, 'Swipe at the bamboo', y, {
         size: 44,

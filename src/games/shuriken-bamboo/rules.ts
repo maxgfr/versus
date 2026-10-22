@@ -12,7 +12,15 @@ import { W } from '../../core/stage.ts'
 export const MATCH = 45
 /** Seconds between one player's throws. */
 export const COOL = 0.7
+/** Flight speed of a medium throw; a lazy swipe flies at 70% of it, a hard flick at 130%. */
 export const SHURI_SPEED = 1500
+/** A flick at least this hard cuts clean through its first stalk and flies on to a second. */
+export const PIERCE = 0.8
+
+/** Flight speed for a throw of this power (0..1). */
+export function speedOf(power: number): number {
+  return SHURI_SPEED * (0.7 + 0.6 * Math.max(0, Math.min(1, power)))
+}
 /** Height the shuriken flies at (world units above the ground). */
 export const SHURI_Z = 110
 /** A stalk must be at least this tall for a shuriken to slice it. */
@@ -66,6 +74,12 @@ export interface Shuri {
   spin: number
   /** Seconds in flight. */
   t: number
+  /** Flight speed (units/s); SHURI_SPEED when absent. */
+  v?: number
+  /** Stalks it may still cut through and keep flying (a hard flick). */
+  pierce?: number
+  /** Stalks it has sliced so far. */
+  cuts?: number
 }
 
 /** A top that was sliced off, falling away from the shuriken's path. */
@@ -110,18 +124,31 @@ export interface Preview {
   x: number
   dx: number
   dy: number
+  /** How hard the finger is moving right now (0..1). */
+  power?: number
 }
 
-/** A throw: where it leaves the thrower's line and the unit direction it flies. */
+/** A throw: where it leaves the thrower's line, the unit direction it flies, and how hard (0..1, default 0.5). */
 export interface Aim {
   x: number
   dx: number
   dy: number
+  power?: number
 }
 
 export type Event =
-  | { kind: 'throw'; side: Side; x: number; y: number }
-  | { kind: 'slice'; side: Side; x: number; y: number; gold: boolean; points: number }
+  | { kind: 'throw'; side: Side; x: number; y: number; power: number }
+  | {
+      kind: 'slice'
+      side: Side
+      x: number
+      y: number
+      gold: boolean
+      points: number
+      /** 1 for the first stalk this shuriken cut, 2 for the second (a pierce). */
+      combo: number
+      power: number
+    }
   | { kind: 'miss'; side: Side; x: number; y: number }
   | { kind: 'tick'; left: number }
 
@@ -194,6 +221,7 @@ export function advance(
     const aim = aims[side]
     if (aim && canThrow(s, side)) {
       const y = THROW_Y[side] ?? 0
+      const power = Math.max(0, Math.min(1, aim.power ?? 0.5))
       s.shuris.push({
         side,
         x: originX(aim.x),
@@ -202,6 +230,9 @@ export function advance(
         dy: aim.dy,
         spin: 0,
         t: 0,
+        v: speedOf(power),
+        pierce: power >= PIERCE ? 1 : 0,
+        cuts: 0,
       })
       s.cool[side] = COOL
       const x = originX(aim.x)
@@ -211,20 +242,23 @@ export function advance(
         s.moveT[side] = s.t
       }
       s.throwT[side] = s.t
-      ev.push({ kind: 'throw', side, x, y })
+      ev.push({ kind: 'throw', side, x, y, power })
     }
   }
-  // Two substeps: a fast shuriken must not skip a thin stalk.
+  // Two substeps, each swept along the shuriken's path: a fast one never skips a stalk.
   for (let k = 0; k < 2; k++) {
     for (let i = s.shuris.length - 1; i >= 0; i--) {
       const sh = s.shuris[i]
       if (!sh) continue
       const h = dt / 2
-      sh.x += sh.dx * SHURI_SPEED * h
-      sh.y += sh.dy * SHURI_SPEED * h
-      sh.spin += 26 * h
+      const v = sh.v ?? SHURI_SPEED
+      const x0 = sh.x
+      const y0 = sh.y
+      sh.x += sh.dx * v * h
+      sh.y += sh.dy * v * h
+      sh.spin += 26 * h * (v / SHURI_SPEED)
       sh.t += h
-      const hit = stalkAt(s, sh)
+      const hit = stalkOnPath(s, x0, y0, sh.x, sh.y)
       if (hit) {
         const pts = valueOf(hit)
         const top = hit.h
@@ -243,16 +277,23 @@ export function advance(
         hit.h = STUMP
         hit.wait = REGROW
         s.score[sh.side] += pts
+        sh.cuts = (sh.cuts ?? 0) + 1
         ev.push({
           kind: 'slice',
           side: sh.side,
-          x: sh.x,
-          y: sh.y,
+          x: hit.x,
+          y: hit.y,
           gold: hit.gold,
           points: pts,
+          combo: sh.cuts,
+          power: (v / SHURI_SPEED - 0.7) / 0.6,
         })
-        s.shuris.splice(i, 1)
-        continue
+        // A hard flick cuts clean through and flies on; otherwise it sticks.
+        if ((sh.pierce ?? 0) > 0) sh.pierce = (sh.pierce ?? 0) - 1
+        else {
+          s.shuris.splice(i, 1)
+          continue
+        }
       }
       if (sh.x < -120 || sh.x > W + 120 || sh.y < -120 || sh.y > 1920) {
         ev.push({ kind: 'miss', side: sh.side, x: sh.x, y: sh.y })
@@ -287,13 +328,55 @@ function growStalk(st: Stalk, dt: number, rng: Rng): void {
   }
 }
 
-/** The first stalk a shuriken is in the middle of, if it can slice it. */
-function stalkAt(s: State, sh: Shuri): Stalk | null {
+/** Distance from (px, py) to the segment a-b, and how far along it (0..1) the nearest point is. */
+function segHit(px: number, py: number, ax: number, ay: number, bx: number, by: number): number[] {
+  const dx = bx - ax
+  const dy = by - ay
+  const l2 = dx * dx + dy * dy || 1
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2))
+  return [Math.hypot(px - (ax + dx * t), py - (ay + dy * t)), t]
+}
+
+/** The first sliceable stalk the segment a-b passes through, nearest a first. */
+function stalkOnPath(s: State, ax: number, ay: number, bx: number, by: number): Stalk | null {
+  let best: Stalk | null = null
+  let bt = Infinity
   for (const st of s.stalks) {
     if (!sliceable(st)) continue
-    if (Math.hypot(sh.x - st.x, sh.y - st.y) < HIT_R) return st
+    const [d = Infinity, t = 0] = segHit(st.x, st.y, ax, ay, bx, by)
+    if (d < HIT_R && t < bt) {
+      bt = t
+      best = st
+    }
   }
-  return null
+  return best
+}
+
+/**
+ * The stalks a throw would cut as the table stands now, in order (one, or two
+ * for a piercing flick), and how long until the first is reached (s).
+ */
+export function pathOf(
+  s: State,
+  side: Side,
+  aim: Aim,
+  /** Start the flight here instead of the thrower's line (a shuriken already in the air). */
+  from?: { x: number; y: number },
+): { cut: Stalk[]; eta: number } {
+  const power = Math.max(0, Math.min(1, aim.power ?? 0.5))
+  const x0 = from ? from.x : originX(aim.x)
+  const y0 = from ? from.y : (THROW_Y[side] ?? 0)
+  const far = 2400
+  const hits: { st: Stalk; t: number }[] = []
+  for (const st of s.stalks) {
+    if (!sliceable(st)) continue
+    const [d = Infinity, t = 0] = segHit(st.x, st.y, x0, y0, x0 + aim.dx * far, y0 + aim.dy * far)
+    if (d < HIT_R && t > 0) hits.push({ st, t })
+  }
+  hits.sort((a, b) => a.t - b.t)
+  const cut = hits.slice(0, power >= PIERCE ? 2 : 1).map((h) => h.st)
+  const eta = hits[0] ? (hits[0].t * far) / speedOf(power) : Infinity
+  return { cut, eta }
 }
 
 /** Sway of a stalk's top, in world units, for drawing only. */

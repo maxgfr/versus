@@ -13,6 +13,7 @@ import {
   leader,
   MATCH,
   newState,
+  PIERCE,
   type Preview,
   type State,
 } from './rules.ts'
@@ -50,8 +51,8 @@ class ShurikenBamboo extends BaseGame<Game> {
         this.s.aiming[side] = null
         continue
       }
-      aims[side] = swipeOf(pi.ups)
-      this.s.aiming[side] = previewOf(pi.held.values())
+      aims[side] = swipeOf(pi.ups, this.time, dt)
+      this.s.aiming[side] = previewOf(pi.held.values(), dt)
     }
     for (const e of advance(this.s, dt, aims, this.ctx.rng)) this.juice(e)
     if (this.s.left <= 0) {
@@ -87,12 +88,27 @@ class ShurikenBamboo extends BaseGame<Game> {
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
     switch (e.kind) {
-      case 'throw':
-        audio.play('swish', 1 + this.ctx.rng.range(0, 0.25))
-        audio.play('whoosh', 1.6)
-        fx.puff(e.x, e.y - 30, 'rgba(255,255,255,0.4)', 4)
+      case 'throw': {
+        // The flick's force drives the sound, the dust and the buzz.
+        const k = e.power
+        audio.play('swish', 0.85 + k * 0.5)
+        audio.play('whoosh', 1.3 + k * 0.5)
+        fx.puff(e.x, e.y - 30, 'rgba(255,255,255,0.4)', Math.round(3 + k * 5))
+        if (k >= PIERCE) {
+          fx.ring(e.x, e.y - 40, C.yellow, 110)
+          audio.buzz(14)
+        }
         return
+      }
       case 'slice': {
+        if (e.combo > 1) {
+          // Two stalks with one star.
+          audio.play('powerup', 1.2)
+          fx.float('Double!', e.x, e.y - 140, C.yellow, 64, e.side)
+          fx.ring(e.x, e.y - 33, C.yellow, 260)
+          fx.shake(0.3)
+          fx.stop(4)
+        }
         if (e.gold) {
           audio.play('coin', 1.05)
           audio.play('powerup', 1)
@@ -115,9 +131,10 @@ class ShurikenBamboo extends BaseGame<Game> {
           fx.float(`+${e.points}`, e.x, e.y - 60, C.yellow, 84, e.side)
           return
         }
-        audio.play('slap', 1.15)
-        audio.play('chomp', 1.3)
-        audio.buzz(14)
+        const k = Math.max(0, Math.min(1, e.power))
+        audio.play('slap', 1 + k * 0.3)
+        audio.play('chomp', 1.2 + k * 0.2)
+        audio.buzz(Math.round(10 + k * 14))
         fx.burst(e.x, e.y - 33, '#7fdc78', {
           count: 5,
           speed: 300,
@@ -138,9 +155,9 @@ class ShurikenBamboo extends BaseGame<Game> {
           kind: 'square',
           colors: [C.green, '#b9f5c9', C.grassDark],
         })
-        fx.sparks(e.x, e.y - 33, '#ffffff', 8)
-        fx.shake(0.2)
-        fx.stop(3)
+        fx.sparks(e.x, e.y - 33, '#ffffff', Math.round(6 + k * 10))
+        fx.shake(0.12 + k * 0.16)
+        fx.stop(Math.round(2 + k * 2))
         floatFor(fx, e.side, `+${e.points}`, e.x, e.y - 60)
         return
       }
@@ -153,9 +170,9 @@ class ShurikenBamboo extends BaseGame<Game> {
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha: number): void {
     const s = this.s
-    render(g, s, this.time, s.endAt, [!this.isBot(0), !this.isBot(1)])
+    render(g, s, this.time, s.endAt, [!this.isBot(0), !this.isBot(1)], (1 - alpha) / 60)
     const w = s.left <= 0 ? leader(s) : null
     for (const side of [0, 1] as Side[]) {
       namePill(g, side, this.ctx.names[side], { active: w === side })
@@ -169,26 +186,42 @@ class ShurikenBamboo extends BaseGame<Game> {
   }
 }
 
+/**
+ * How hard a swipe is (0..1), from the finger's speed in world units per
+ * second: the whole swipe's average, or its last step when it snaps at the end.
+ */
+function powerOf(len: number, duration: number, last: number): number {
+  const v = Math.max(len / Math.max(0.04, duration), last * 0.8)
+  return Math.max(0, Math.min(1, (v - 500) / 2500))
+}
+
 /** The throw a player's finished swipe makes, if it was long enough. */
-function swipeOf(ups: readonly Ptr[]): Aim | null {
+function swipeOf(ups: readonly Ptr[], now: number, dt: number): Aim | null {
   for (const p of ups) {
     const dx = p.x - p.x0
     const dy = p.y - p.y0
     const len = Math.hypot(dx, dy)
     if (len < MIN_SWIPE) continue
-    return { x: p.x0, dx: dx / len, dy: dy / len }
+    const last = Math.hypot(p.x - p.px, p.y - p.py) / dt
+    return { x: p.x0, dx: dx / len, dy: dy / len, power: powerOf(len, now - p.t0, last) }
   }
   return null
 }
 
 /** The throw a held swipe would make right now, for the dotted preview. */
-function previewOf(held: Iterable<Ptr>): Preview | null {
+function previewOf(held: Iterable<Ptr>, dt: number): Preview | null {
   for (const p of held) {
     const dx = p.x - p.x0
     const dy = p.y - p.y0
     const len = Math.hypot(dx, dy)
     if (len < MIN_SWIPE / 2) continue
-    return { x: p.x0, dx: dx / len, dy: dy / len }
+    const last = Math.hypot(p.x - p.px, p.y - p.py) / dt
+    return {
+      x: p.x0,
+      dx: dx / len,
+      dy: dy / len,
+      power: Math.max(0, Math.min(1, (last * 0.8 - 500) / 2500)),
+    }
   }
   return null
 }

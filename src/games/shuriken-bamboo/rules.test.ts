@@ -14,6 +14,8 @@ import {
   leader,
   MATCH,
   newState,
+  pathOf,
+  PIERCE,
   REGROW,
   SHURI_SPEED,
   SHURI_Z,
@@ -205,6 +207,66 @@ describe('shuriken bamboo rules', () => {
     const ev: Event[] = []
     for (let i = 0; i < 300; i++) ev.push(...advance(s, STEP, [null, null], rng()))
     expect(ev.filter((e) => e.kind === 'tick').length).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('the force of the flick', () => {
+  /** Stalks 1 and 7 stand in one line above red's thrower at x = 400. */
+  function lined(): State {
+    const s = still()
+    const a = s.stalks[1] as Stalk
+    const b = s.stalks[7] as Stalk
+    a.x = b.x = 400
+    a.y = 660
+    b.y = 1140
+    return s
+  }
+
+  it('a hard flick cuts clean through the first stalk and slices the next one too', () => {
+    const s = lined()
+    advance(s, STEP, [{ x: 400, dx: 0, dy: -1, power: 1 }, null], rng())
+    const ev = settle(s)
+    const slices = ev.filter((e) => e.kind === 'slice')
+    expect(slices).toHaveLength(2)
+    expect(s.score[0]).toBe(2)
+    expect(slices.map((e) => (e.kind === 'slice' ? e.combo : 0))).toEqual([1, 2])
+  })
+
+  it('a soft swipe sticks in the first stalk it meets', () => {
+    const s = lined()
+    advance(s, STEP, [{ x: 400, dx: 0, dy: -1, power: PIERCE - 0.3 }, null], rng())
+    const ev = settle(s)
+    expect(ev.filter((e) => e.kind === 'slice')).toHaveLength(1)
+    expect((s.stalks[7] as Stalk).state).toBe('stump')
+    expect((s.stalks[1] as Stalk).state).toBe('up')
+  })
+
+  it('a harder flick flies faster', () => {
+    const fast = lined()
+    const slow = lined()
+    advance(fast, STEP, [{ x: 400, dx: 0, dy: -1, power: 1 }, null], rng())
+    advance(slow, STEP, [{ x: 400, dx: 0, dy: -1, power: 0 }, null], rng())
+    const yf = fast.shuris[0]?.y ?? 0
+    const ys = slow.shuris[0]?.y ?? 0
+    expect(yf).toBeLessThan(ys)
+    expect(pathOf(fast, 0, { x: 400, dx: 0, dy: -1, power: 1 }).cut).toHaveLength(2)
+  })
+
+  it('a shuriken grazing a stalk is caught even when it covers more than the stalk per step', () => {
+    const s = still()
+    const st = s.stalks[1] as Stalk
+    s.shuris.push({
+      side: 0,
+      x: st.x + HIT_R - 2,
+      y: st.y + 30,
+      dx: 0,
+      dy: -1,
+      spin: 0,
+      t: 0,
+      v: 7200,
+    })
+    const ev = advance(s, STEP, [null, null], rng())
+    expect(ev.some((e) => e.kind === 'slice')).toBe(true)
   })
 })
 
