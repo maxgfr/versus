@@ -469,6 +469,7 @@ class FruitMerge extends BaseGame<State> {
         dropAt: well.dropAt,
         live: well.overAt < 0 && this.s.endAt < 0,
         hint: !this.isBot(side) && well.seq === 0 && this.time < 8,
+        controls: g.viewer === null || g.viewer === side,
       },
       this.time,
     )

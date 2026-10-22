@@ -115,6 +115,8 @@ export interface JarView {
   live: boolean
   /** Show the how-to line. */
   hint: boolean
+  /** Draw the aiming aids (drop line, landing ghost)? Online, only on the viewer's own jar. */
+  controls: boolean
 }
 
 /** A fruit: a tinted glass bubble with the fruit inside, a gloss on top. */
@@ -264,9 +266,11 @@ function hand(g: Draw, geo: Geo, side: Side, v: JarView, now: number): void {
   // A fresh fruit drops in from the rail.
   const fresh = outBack(prog(now - v.dropAt, 0.12, 0.3))
   const py = previewY(geo, k) + Math.sin(now * 4) * 3
-  const landing = landingY(v.jar, geo, v.aim, k)
-  g.dashed(v.aim, py + r + 10, v.aim, landing - r - 6, alpha(col.light, 0.45), 6, [14, 14])
-  g.alpha(0.35, () => g.ring(v.aim, landing, r, col.light, 4))
+  if (v.controls) {
+    const landing = landingY(v.jar, geo, v.aim, k)
+    g.dashed(v.aim, py + r + 10, v.aim, landing - r - 6, alpha(col.light, 0.45), 6, [14, 14])
+    g.alpha(0.35, () => g.ring(v.aim, landing, r, col.light, 4))
+  }
   // The fruit hangs from the claw and swings when the aim moves fast.
   const len = py - railY
   const fx = v.aim + Math.sin(v.swing) * len
@@ -350,7 +354,7 @@ export function drawJar(g: Draw, geo: Geo, side: Side, w: number, v: JarView, no
   dangerLine(g, geo, warn, now)
   hand(g, geo, side, v, now)
   if (v.live) nextBubble(g, geo, w, v.after, now, v.dropAt)
-  if (v.hint) {
+  if (v.hint && v.controls) {
     const cy = (geo.danger + geo.floor) / 2
     const bob = Math.sin(now * 3) * 40
     g.text('Drag to aim,', (geo.left + geo.right) / 2, cy - 30, {
