@@ -205,7 +205,8 @@ class Archery extends TurnGame<State> {
     let draw: Parameters<typeof render>[2]['draw'] = null
     if (s.phase === 'aim' && !this.over) {
       const side = s.turn
-      const live = this.aims[side].aim
+      // The synced draw, so the online guest sees its own aim too (its widgets never update there).
+      const live = s.aim
       if (live) {
         const shot = { dx: live.dx, dy: live.dy, power: live.power }
         draw = {
@@ -230,11 +231,7 @@ class Archery extends TurnGame<State> {
       {
         draw,
         // Each human gets the hint before their own first arrow, not only whoever shoots first.
-        hint:
-          s.phase === 'aim' &&
-          !this.isBot(s.turn) &&
-          s.shot[s.turn] === 0 &&
-          !this.aims[s.turn].aim,
+        hint: s.phase === 'aim' && !this.isBot(s.turn) && s.shot[s.turn] === 0 && !s.aim,
         ft: s.flight && !this.over ? Math.min(s.flight.dur, s.flight.t + alpha * dt) : 0,
         thump: this.thump.value,
         squash: [this.squash[0].value, this.squash[1].value],

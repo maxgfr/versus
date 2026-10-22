@@ -216,7 +216,9 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
   floodlit(g, 0.36)
 
   // The shooter's aim: a dotted line down the arrow's path and a reticle where it would land.
-  if (look.draw && s.phase === 'aim') {
+  // The aim line, reticle and power arc are the shooter's controls: online, only their phone shows them.
+  const own = g.viewer === null || g.viewer === s.turn
+  if (look.draw && s.phase === 'aim' && own) {
     const b = BOW[s.turn]
     const L = look.draw.landing
     g.alpha(0.55, () => g.dashed(b.x, b.y, L.x, L.y, SIDE[s.turn].light, 6, [20, 18]))
@@ -264,7 +266,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
         : 0
     drawBow(g, side, angle, pull + twang, on && s.phase === 'aim')
     // Power meter beside the bow.
-    if (drawing) {
+    if (drawing && own) {
       const b = BOW[side]
       g.arc(b.x, b.y, 130, angle - Math.PI * 0.5, angle + Math.PI * 0.5, alpha(C.ink, 0.35), 10)
       g.arc(
@@ -316,7 +318,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
   const ws = s.turn === 0 ? { x: 850, y: 1585 } : { x: 150, y: 215 }
   windSock(g, s.wind, WIND_MAX, ws.x, ws.y)
 
-  if (look.hint) {
+  if (look.hint && own) {
     const side = s.turn
     banner(g, side, 'Pull back to aim, let go to shoot', side === 0 ? MID + 470 : MID - 470, {
       size: 36,
