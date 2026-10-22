@@ -8,9 +8,14 @@ import { drawHud, fmt, render } from './render.ts'
 import {
   accuracy,
   advance,
+  handOf,
+  PUMP_BONUS,
+  SPIN0,
+  SPIN1,
   canSpin,
   type Event,
   leader,
+  mustRelease,
   newState,
   over,
   passed,
@@ -19,6 +24,7 @@ import {
   starterOf,
   stepSpin,
   type State,
+  swirl,
   THROWS,
 } from './rules.ts'
 
@@ -30,6 +36,9 @@ class HammerThrow extends TurnGame<State> {
   private plan: Plan | null = null
   /** The pointer that is holding the spin (human turns). */
   private ptr = -1
+  /** Where that finger was last step, to read how hard it swirls. */
+  private lx = 0
+  private ly = 0
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -50,8 +59,9 @@ class HammerThrow extends TurnGame<State> {
     if (this.plan && s.spin) {
       // The computer winds up, then lets go as the handle passes its planned angle.
       const from = s.spin.theta
-      for (const e of stepSpin(s, dt)) this.juice(e)
-      if (passed(from, s.spin.theta, this.plan.theta) && ++this.plan.seen >= this.plan.passes) {
+      for (const e of stepSpin(s, dt, this.plan.pump)) this.juice(e)
+      const go = passed(from, s.spin.theta, this.plan.theta) && ++this.plan.seen >= this.plan.passes
+      if (go || mustRelease(s)) {
         this.plan = null
         const e = release(s)
         if (e) this.juice(e)
@@ -87,14 +97,24 @@ class HammerThrow extends TurnGame<State> {
       const down = pi.downs[0]
       if (!down || !canSpin(s, side)) return
       this.ptr = down.id
+      this.lx = down.x
+      this.ly = down.y
       startSpin(s, side)
       this.ctx.audio.play('tick', 0.8)
       // A tap that lets go in the same step throws straight away.
       if (pi.ups.some((p) => p.id === this.ptr)) this.letGo()
       return
     }
-    for (const e of stepSpin(s, dt)) this.juice(e)
-    if (pi.ups.some((p) => p.id === this.ptr)) this.letGo()
+    // Swirling the held finger works the spin up: its speed is the drive.
+    const p = pi.held.get(this.ptr)
+    let drive = 0
+    if (p) {
+      drive = swirl(Math.hypot(p.x - this.lx, p.y - this.ly) / dt)
+      this.lx = p.x
+      this.ly = p.y
+    }
+    for (const e of stepSpin(s, dt, drive)) this.juice(e)
+    if (pi.ups.some((u) => u.id === this.ptr) || mustRelease(s)) this.letGo()
   }
 
   private letGo(): void {
@@ -113,16 +133,27 @@ class HammerThrow extends TurnGame<State> {
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
     switch (e.kind) {
-      case 'whirl':
-        audio.play('tick', 0.9 + (this.s.spin?.omega ?? 3) / 10)
+      case 'whirl': {
+        const sp = this.s.spin
+        audio.play('tick', 0.9 + (sp?.omega ?? 3) / 10)
+        // A hard-worked hammer throws sparks and hums in the hands.
+        if (sp && sp.pump > 0.4) {
+          const h = handOf(sp.side, sp.theta)
+          fx.sparks(h.x, h.y, C.yellow, Math.round(2 + sp.pump * 5))
+          audio.buzz(4)
+        }
         return
+      }
       case 'throw': {
+        // Release force scales everything: the faster the spin, the bigger the snap.
+        const k = Math.min(1, Math.max(0, (e.omega - SPIN0) / (SPIN1 + PUMP_BONUS - SPIN0)))
         audio.play('swish', 0.9 + e.omega * 0.03)
-        audio.play('whoosh', 1)
-        audio.buzz(12)
-        fx.puff(e.x, e.y, 'rgba(255,255,255,0.5)', 6)
-        fx.sparks(e.x, e.y, C.white, 8)
-        fx.shake(0.12)
+        audio.play('whoosh', 0.9 + k * 0.3)
+        audio.buzz(Math.round(8 + k * 22))
+        fx.puff(e.x, e.y, 'rgba(255,255,255,0.5)', Math.round(4 + k * 6))
+        fx.sparks(e.x, e.y, C.white, Math.round(6 + k * 12))
+        fx.shake(0.08 + k * 0.22)
+        if (k > 0.85) fx.stop(3)
         const f = this.s.flight
         if (f && accuracy(f.side, f.theta) > 0.985) {
           audio.play('zap', 1.4)
@@ -144,9 +175,11 @@ class HammerThrow extends TurnGame<State> {
           })
           return
         }
-        audio.play('thud', 0.8)
+        // The longer the throw, the heavier the landing.
+        const k = Math.min(1, e.range / (50 * 30))
+        audio.play('thud', 0.7 + (1 - k) * 0.3)
         audio.play(e.best ? 'score' : 'coin', 1)
-        audio.buzz(25)
+        audio.buzz(Math.round(15 + k * 25))
         fx.burst(e.x, e.y, '#7a5532', {
           count: 22,
           speed: 480,
@@ -158,9 +191,9 @@ class HammerThrow extends TurnGame<State> {
           colors: ['#7a5532', '#5b3d23', C.grass, shade(C.grass, -0.3)],
         })
         fx.puff(e.x, e.y, 'rgba(200,170,120,0.6)', 8)
-        fx.ring(e.x, e.y, SIDE[e.side].light, 200)
-        fx.shake(0.35)
-        fx.stop(4)
+        fx.ring(e.x, e.y, SIDE[e.side].light, 140 + k * 140)
+        fx.shake(0.2 + k * 0.25)
+        fx.stop(Math.round(2 + k * 4))
         if (e.best && this.s.thrown[e.side] > 1) {
           fx.float('New best!', e.x, e.y + (e.side === 0 ? 120 : -120), C.yellow, 56, e.side)
         }
@@ -170,6 +203,12 @@ class HammerThrow extends TurnGame<State> {
         audio.play('tick', 1)
         return
     }
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.ptr = -1
+    this.plan = null
   }
 
   render(g: Draw): void {

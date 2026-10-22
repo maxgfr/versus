@@ -26,6 +26,11 @@ import {
   stepSpin,
   THROWS,
   WIND,
+  MAX_HOLD,
+  mustRelease,
+  PUMP_BONUS,
+  swirl,
+  SWIRL_FULL,
 } from './rules.ts'
 import type { Event, State } from './rules.ts'
 
@@ -259,7 +264,7 @@ function duel(a: Difficulty, b: Difficulty, seed: number): { s: State; steps: nu
     const sp = s.spin
     if (p && sp && s.phase === 'aim') {
       const from = sp.theta
-      stepSpin(s, STEP)
+      stepSpin(s, STEP, p.pump)
       if (passed(from, sp.theta, p.theta) && ++p.seen >= p.passes) {
         release(s)
         plans[side] = null
@@ -270,6 +275,43 @@ function duel(a: Difficulty, b: Difficulty, seed: number): { s: State; steps: nu
   }
   return { s, steps }
 }
+
+describe('hammer throw swirl', () => {
+  it('swirling the finger spins the hammer past the full wind, up to the bonus', () => {
+    const calm = newState(0)
+    const hard = newState(0)
+    startSpin(calm, 0)
+    startSpin(hard, 0)
+    for (let i = 0; i < 240; i++) {
+      stepSpin(calm, STEP, 0)
+      stepSpin(hard, STEP, 1)
+    }
+    expect(calm.spin?.omega).toBeCloseTo(SPIN1, 6)
+    expect(hard.spin?.omega).toBeGreaterThan(SPIN1 + PUMP_BONUS * 0.95)
+    expect(hard.spin?.omega).toBeLessThanOrEqual(SPIN1 + PUMP_BONUS + 1e-9)
+  })
+
+  it('a hard-swirled throw goes further than a calm one at the same angle', () => {
+    const calm = predict(0, idealAngle(0), SPIN1)
+    const hard = predict(0, idealAngle(0), SPIN1 + PUMP_BONUS)
+    expect(hard.range).toBeGreaterThan(calm.range * 1.15)
+  })
+
+  it('finger speed maps to a 0..1 drive', () => {
+    expect(swirl(0)).toBe(0)
+    expect(swirl(SWIRL_FULL / 2)).toBeCloseTo(0.5, 9)
+    expect(swirl(1e9)).toBe(1)
+  })
+
+  it('a spin held too long has to be let go', () => {
+    const s = newState(0)
+    startSpin(s, 0)
+    for (let i = 0; i < Math.round(MAX_HOLD / STEP) - 2; i++) stepSpin(s, STEP)
+    expect(mustRelease(s)).toBe(false)
+    for (let i = 0; i < 4; i++) stepSpin(s, STEP)
+    expect(mustRelease(s)).toBe(true)
+  })
+})
 
 describe('hammer throw bot', () => {
   it('bot vs bot finishes its six throws within bounded steps', () => {
@@ -283,6 +325,14 @@ describe('hammer throw bot', () => {
     const r = duel('hard', 'hard', 8)
     expect(r.s.best[0]).toBeGreaterThan(20 * METRE)
     expect(r.s.best[1]).toBeGreaterThan(20 * METRE)
+  })
+
+  it('a hard bot out-throws a normal one most of the time', () => {
+    let wins = 0
+    for (let seed = 1; seed <= 12; seed++) {
+      if (leader(duel('hard', 'normal', seed).s) === 0) wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(8)
   })
 
   it('a hard bot out-throws an easy one most of the time', () => {

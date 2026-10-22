@@ -32,10 +32,21 @@ export const METRE = 30
 export const SPIN0 = 3.2
 export const SPIN1 = 7
 export const WIND = 1.8
+/**
+ * Extra spin (rad/s) a vigorous swirl of the finger adds on top of the wind-up:
+ * the harder you work the hammer, the faster it goes (and the harder it is to time).
+ * Capped so even the best swirled throw (about 50 m) lands on the table.
+ */
+export const PUMP_BONUS = 0.7
+/** Finger speed (world units / s) that counts as a full swirl. */
+export const SWIRL_FULL = 2400
+/** Nobody can hold a spin forever: the hammer goes after this many seconds. */
+export const MAX_HOLD = 6
 /** Ball speed as a share of the handle's speed at release. */
 const LAUNCH = 0.95
 /** Flight of the thrown ball: elevation 45°, low gravity for a long arc. */
-export const THROW_BALLISTICS: Ballistics = { g: 900, vmax: 750, elev: 1, z0: 60 }
+// vmax leaves room above a full wind for a hard-swirled spin (power is speed / vmax).
+export const THROW_BALLISTICS: Ballistics = { g: 900, vmax: 860, elev: 1, z0: 60 }
 /** Past this, a ball has left the field: it is down wherever it is. */
 const FIELD = { x0: -200, x1: 1200, y0: -200, y1: 2000 }
 /** Where marks are drawn: the table itself. */
@@ -49,6 +60,8 @@ export interface Spin {
   theta: number
   /** Angular speed (rad/s). */
   omega: number
+  /** 0..1: how hard the finger is working the spin (smoothed). */
+  pump: number
 }
 
 export interface Flight {
@@ -200,16 +213,32 @@ export function canSpin(s: State, side: Side): boolean {
 
 /** Begin winding a spin for `side`. */
 export function startSpin(s: State, side: Side): void {
-  s.spin = { side, hold: 0, theta: idealAngle(side) + Math.PI, omega: SPIN0 }
+  s.spin = { side, hold: 0, theta: idealAngle(side) + Math.PI, omega: SPIN0, pump: 0 }
 }
 
-/** Keep the spin going for dt seconds. */
-export function stepSpin(s: State, dt: number): Event[] {
+/** How hard a finger moving at `speed` (world units / s) works the spin, 0..1. */
+export function swirl(speed: number): number {
+  return Math.min(1, Math.max(0, speed / SWIRL_FULL))
+}
+
+/** The spin has been held as long as anyone can: it must be let go now. */
+export function mustRelease(s: State): boolean {
+  return s.spin !== null && s.spin.hold >= MAX_HOLD
+}
+
+/**
+ * Keep the spin going for dt seconds. `drive` (0..1) is how hard the player is
+ * working it right now (a swirling finger, or the computer's effort): the
+ * spin's pump eases toward it and adds up to `PUMP_BONUS` on top of the wind-up.
+ */
+export function stepSpin(s: State, dt: number, drive = 0): Event[] {
   const sp = s.spin
   if (!sp) return []
   const before = Math.floor(sp.theta / Math.PI)
   sp.hold += dt
-  sp.omega = spinSpeed(sp.hold)
+  sp.pump =
+    (sp.pump ?? 0) + (Math.min(1, Math.max(0, drive)) - (sp.pump ?? 0)) * Math.min(1, dt * 3)
+  sp.omega = spinSpeed(sp.hold) + PUMP_BONUS * sp.pump
   sp.theta += sp.omega * dt
   const ev: Event[] = []
   if (Math.floor(sp.theta / Math.PI) !== before) ev.push({ kind: 'whirl', side: sp.side })

@@ -236,6 +236,12 @@ function drawAthlete(g: Draw, s: State, side: Side, now: number): void {
     g.shadow(h.x + 8, h.y + 14, 26, 12, 0.4)
     g.line(a.x, a.y, h.x, h.y, alpha('#000000', 0.3), 9)
     g.line(a.x, a.y, h.x, h.y, '#e8e6f0', 5)
+    // Worked hard, the hammer head glows hot.
+    const pump = sp.pump ?? 0
+    if (pump > 0.05)
+      g.alpha(pump * (0.55 + 0.25 * Math.sin(now * 30)), () =>
+        g.circle(h.x, h.y, 26 + pump * 16, C.yellow),
+      )
     g.ball(h.x, h.y, 26, STEEL, 0.9)
     g.shadow(a.x + 6, a.y + 34, 58, 20, 0.4)
     g.blob(a.x, a.y, 54, col.main, {
@@ -450,7 +456,9 @@ export function render(g: Draw, s: State, now: number, human: [boolean, boolean]
         ? n === s.throws
           ? 'Last throw!'
           : `Throw ${n} of ${s.throws}`
-        : 'Hold to spin, let go on the yellow'
+        : g.viewer !== null && g.viewer !== side
+          ? `Throw ${n} of ${s.throws}`
+          : 'Hold and swirl, let go on the yellow'
     banner(g, side, label, y, {
       size: 40,
       alpha: intro ? 1 : 0.75 + 0.25 * Math.sin(now * 4),
