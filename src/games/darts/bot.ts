@@ -15,7 +15,7 @@ import {
 } from './rules.ts'
 
 /** How far the computer's dart lands from its aim, in board units (a gaussian). */
-export const SPREAD: Record<Difficulty, number> = { easy: 62, normal: 34, hard: 14 }
+export const SPREAD: Record<Difficulty, number> = { easy: 62, normal: 28, hard: 12 }
 
 /** Release speed the computer throws with: crisp, in the sweet spot (no sag, no extra wobble). */
 export const BOT_SPEED = 1300
