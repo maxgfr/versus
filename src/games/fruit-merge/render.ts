@@ -3,7 +3,7 @@ import { inCubic, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, mix, shade } from '../../core/render/palette.ts'
 import { fmtTime, HEADER } from '../../engines/puzzle/index.ts'
-import { type Body, DANGER_TIME, type Geo, type Jar, landingY, previewY, radius } from './rules.ts'
+import { type Body, type Geo, type Jar, landingY, previewY, radius } from './rules.ts'
 
 export const GLYPH = ['🍒', '🍓', '🍇', '🍊', '🍎', '🍐', '🍑', '🍍', '🍈', '🍉']
 export const FRUIT_COLOR = [
@@ -113,6 +113,8 @@ export interface JarView {
   dropAt: number
   /** The jar is still taking drops (no preview once it is over). */
   live: boolean
+  /** Seconds a fruit may rest over the line right now (it shrinks as the match runs). */
+  danger: number
   /** Show the how-to line. */
   hint: boolean
   /** Draw the aiming aids (drop line, landing ghost)? Online, only on the viewer's own jar. */
@@ -309,7 +311,7 @@ function nextBubble(g: Draw, geo: Geo, w: number, k: number, now: number, dropAt
 export function drawJar(g: Draw, geo: Geo, side: Side, w: number, v: JarView, now: number): void {
   let worst = 0
   for (const b of v.jar.bodies) worst = Math.max(worst, b.hi)
-  const warn = Math.min(1, worst / DANGER_TIME)
+  const warn = Math.min(1, worst / v.danger)
   g.save()
   // A hard landing jolts the whole jar a little.
   g.ctx.translate(0, v.wobble)
@@ -343,7 +345,7 @@ export function drawJar(g: Draw, geo: Geo, side: Side, w: number, v: JarView, no
         v.pos(b, at)
         fruit(g, b.k, at[0], at[1], r, s, b.sq, b.a)
         if (b.hi > 0.15) {
-          const t = Math.min(1, b.hi / DANGER_TIME)
+          const t = Math.min(1, b.hi / v.danger)
           g.arc(at[0], at[1], r + 10, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, C.red, 8)
         }
       }

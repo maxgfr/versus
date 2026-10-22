@@ -19,6 +19,7 @@ import { drawCard, drawHeader, drawJar, FRUIT_COLOR, type Ghost, GLYPH } from '.
 import {
   type Body,
   clampX,
+  dangerTime,
   decided,
   drop,
   geometry,
@@ -111,6 +112,11 @@ class FruitMerge extends BaseGame<State> {
   private ghosts: Ghost[][] = [[], []]
 
   /** Match length in seconds, as chosen before the game. */
+  /** How long a fruit may rest over the line now: the patience shrinks as the clock runs. */
+  private get danger(): number {
+    return dangerTime(this.time / this.limit)
+  }
+
   private get limit(): number {
     return this.ctx.target || match.default
   }
@@ -189,7 +195,9 @@ class FruitMerge extends BaseGame<State> {
     const w = this.s.wells[side]
     if (this.s.botT[side] < PACE[this.ctx.difficulty] || w.cool > 0) return
     this.s.botT[side] = 0
-    w.aim = chooseX(w.jar, this.geo(side), w.next, this.ctx.difficulty, this.ctx.rng)
+    // The fruit after this one is in the Next bubble: players see it too.
+    const next = this.seq[(w.seq + 1) % this.seq.length]
+    w.aim = chooseX(w.jar, this.geo(side), w.next, this.ctx.difficulty, this.ctx.rng, next)
     this.dropFruit(side)
   }
 
@@ -258,7 +266,7 @@ class FruitMerge extends BaseGame<State> {
   private advance(side: Side, dt: number): void {
     const w = this.s.wells[side]
     if (w.overAt >= 0) return
-    const res = tick(w.jar, this.geo(side), dt, this.time)
+    const res = tick(w.jar, this.geo(side), dt, this.time, this.danger)
     if (res.merges.length) w.scoreAt = this.time
     for (const m of res.merges) this.juiceMerge(side, m)
     // A fruit lingering over the line: a warning beep every half second.
@@ -468,6 +476,7 @@ class FruitMerge extends BaseGame<State> {
         after: this.seq[(well.seq + 1) % this.seq.length] ?? 0,
         dropAt: well.dropAt,
         live: well.overAt < 0 && this.s.endAt < 0,
+        danger: this.danger,
         hint: !this.isBot(side) && well.seq === 0 && this.time < 8,
         controls: g.viewer === null || g.viewer === side,
       },

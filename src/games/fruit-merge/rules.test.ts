@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { chooseX, PACE, rate } from './bot.ts'
+import { chooseX, PACE, placed, rate } from './bot.ts'
 import {
   type Body,
   BONUS,
   DANGER_TIME,
+  dangerTime,
   decided,
   drop,
   geometry,
@@ -19,6 +20,7 @@ import {
   newJar,
   POINTS,
   previewY,
+  RAMP_DROPS,
   radius,
   TIME_LIMIT,
   tick,
@@ -384,5 +386,87 @@ describe('bot judgement', () => {
       }
     }
     expect(total.hard).toBeGreaterThan(total.easy)
+  })
+})
+
+describe('the match ramps', () => {
+  it('the danger line grows less patient as the clock runs', () => {
+    expect(dangerTime(0)).toBe(DANGER_TIME)
+    expect(dangerTime(1)).toBeCloseTo(DANGER_TIME * 0.6, 6)
+    expect(dangerTime(0.5)).toBeLessThan(dangerTime(0.2))
+    expect(dangerTime(7)).toBe(dangerTime(1))
+    expect(dangerTime(Number.NaN)).toBe(DANGER_TIME)
+  })
+
+  it('a jar ends sooner under the late patience', () => {
+    const g = versus()
+    const early = newJar()
+    const late = newJar()
+    for (const jar of [early, late]) for (const k of [9, 8, 9]) rest(jar, g, k, 500)
+    for (let i = 0; i < Math.round(1.5 / DT); i++) {
+      tick(early, g, DT, i * DT, dangerTime(0))
+      tick(late, g, DT, i * DT, dangerTime(1))
+    }
+    expect(early.over).toBe(false)
+    expect(late.over).toBe(true)
+  })
+
+  it('bigger fruit come more often later in the sequence, the same for both players', () => {
+    const seq = kindSequence(77, RAMP_DROPS * 20)
+    const big = (a: number[]) => a.filter((k) => k >= 3).length / a.length
+    expect(big(seq.slice(RAMP_DROPS * 2))).toBeGreaterThan(big(seq.slice(0, 40)) + 0.03)
+    expect(kindSequence(77)).toEqual(kindSequence(77))
+  })
+})
+
+describe('bot strength', () => {
+  it('placed() fuses a drop onto its twin and stacks anything else', () => {
+    const g = versus()
+    const jar = newJar()
+    rest(jar, g, 2, 400)
+    expect(placed(jar, g, 400, 2).bodies.map((b) => b.k)).toEqual([3])
+    expect(
+      placed(jar, g, 700, 1)
+        .bodies.map((b) => b.k)
+        .sort(),
+    ).toEqual([1, 2])
+    expect(jar.bodies).toHaveLength(1)
+  })
+
+  /** One jar for 120 s, each difficulty at its own pace, with the ramps on. */
+  function solo(d: Difficulty, seed: number): number {
+    const g = versus()
+    const seq = kindSequence(seed)
+    const rng = new Rng(seed * 7 + 1)
+    const jar = newJar()
+    let t = 0
+    let i = 0
+    let botT = 0
+    while (t < TIME_LIMIT && !jar.over) {
+      t += DT
+      botT += DT
+      if (botT >= PACE[d]) {
+        botT = 0
+        const k = seq[i % seq.length] ?? 0
+        const next = seq[(i + 1) % seq.length]
+        i++
+        drop(jar, g, chooseX(jar, g, k, d, rng, next), k, t)
+      }
+      tick(jar, g, DT, t, dangerTime(t / TIME_LIMIT))
+    }
+    return jar.score
+  }
+
+  it('hard beats easy, and normal beats easy, on most seeded runs', () => {
+    let hard = 0
+    let normal = 0
+    const seeds = [51, 52, 53, 54, 55]
+    for (const seed of seeds) {
+      const e = solo('easy', seed)
+      if (solo('hard', seed) > e) hard++
+      if (solo('normal', seed) > e) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(4)
+    expect(normal).toBeGreaterThanOrEqual(4)
   })
 })

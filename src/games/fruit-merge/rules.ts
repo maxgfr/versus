@@ -304,8 +304,11 @@ function merge(jar: Jar, i: number, j: number, time: number, out: Tick): void {
   out.merges.push({ x, y, k, points, ax: a.x, ay: a.y, bx: b.x, by: b.y })
 }
 
-/** Advance a jar by `dt` seconds (split into substeps). Frozen once it is over. */
-export function tick(jar: Jar, geo: Geo, dt: number, time: number): Tick {
+/**
+ * Advance a jar by `dt` seconds (split into substeps). Frozen once it is over.
+ * `danger` is how long a fruit may rest over the line (see `dangerTime`).
+ */
+export function tick(jar: Jar, geo: Geo, dt: number, time: number, danger = DANGER_TIME): Tick {
   const out: Tick = { merges: [], hits: 0, impact: 0, ix: 0, iy: 0, over: jar.over }
   if (jar.over) return out
   const h = dt / SUBSTEPS
@@ -324,7 +327,7 @@ export function tick(jar: Jar, geo: Geo, dt: number, time: number): Tick {
     const r = radius(b.k, geo)
     const speed = Math.hypot(b.vx, b.vy)
     b.hi = b.y - r < geo.danger && speed < 90 ? b.hi + dt : 0
-    if (b.hi >= DANGER_TIME) over = true
+    if (b.hi >= danger) over = true
     // Flew out over the top of the jar: no point waiting for the timer.
     if (b.y < geo.top - 110 * geo.sc) over = true
     b.sq = Math.max(0, b.sq - dt * 4)
@@ -355,16 +358,41 @@ export function decided(a: JarResult, b: JarResult): 0 | 1 | 'draw' | null {
   return null
 }
 
-/** The fruit kinds dropped, in order, for a seed. Both players get the same sequence. */
+/**
+ * The fruit kinds dropped, in order, for a seed. Both players get the same
+ * sequence. It ramps: over the first `RAMP_DROPS` drops the bigger kinds
+ * become more common, so a jar fills faster as the match goes on.
+ */
 export function kindSequence(seed: number, length = 400): number[] {
   const rng = new Rng((seed ^ 0x51ed270b) >>> 0)
-  const total = SPAWN_WEIGHTS.reduce((a, b) => a + b, 0)
-  return Array.from({ length }, () => {
+  return Array.from({ length }, (_, i) => {
+    const ramp = Math.min(1, i / RAMP_DROPS)
+    let total = 0
+    for (let k = 0; k < SPAWN_KINDS; k++) total += spawnWeight(k, ramp)
     let t = rng.next() * total
-    for (let k = 0; k < SPAWN_WEIGHTS.length; k++) {
-      t -= SPAWN_WEIGHTS[k] ?? 0
+    for (let k = 0; k < SPAWN_KINDS; k++) {
+      t -= spawnWeight(k, ramp)
       if (t < 0) return k
     }
     return 0
   })
+}
+
+/** Drops over which the fruit sequence ramps up to `LATE_WEIGHTS`. */
+export const RAMP_DROPS = 150
+const LATE_WEIGHTS = [26, 24, 19, 13, 10, 8]
+
+function spawnWeight(k: number, ramp: number): number {
+  const a = SPAWN_WEIGHTS[k] ?? 0
+  return a + ((LATE_WEIGHTS[k] ?? a) - a) * ramp
+}
+
+/**
+ * Seconds a fruit may rest over the danger line before its jar ends, as the
+ * match runs (`frac` 0 at the start, 1 at the bell): the patience shrinks from
+ * `DANGER_TIME` to 60 % of it, so the end of a match is tense.
+ */
+export function dangerTime(frac: number): number {
+  const f = Math.max(0, Math.min(1, Number.isFinite(frac) ? frac : 0))
+  return DANGER_TIME * (1 - 0.4 * f)
 }
