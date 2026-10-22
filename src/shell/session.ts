@@ -264,6 +264,11 @@ export class Session {
         if (this.game.result && this.phase === 'play') this.showResult(this.game.result)
       })
     }
+    // A lost "ready" would leave both phones waiting: repeat it until the countdown.
+    const again = window.setInterval(() => {
+      if (this.phase === 'ready' && this.ready[this.local]) link.send('ready')
+    }, 2000)
+    this.offs.push(() => clearInterval(again))
     on('pause', () => this.pause(false))
     on('resume', () => this.resume(false))
     on('quit', () => {
@@ -464,7 +469,7 @@ export class Session {
   }
 
   private markReady(side: Side): void {
-    if (this.phase !== 'ready') return
+    if (this.phase !== 'ready' || this.ready[side]) return
     this.ready[side] = true
     if (this.o.mode === 'online') this.showReady()
     if (this.ready[0] && this.ready[1] && !this.guest) {
