@@ -12,13 +12,13 @@ import {
   type Bird,
 } from './rules.ts'
 
-const NOISE: Record<Difficulty, number> = { easy: 0.3, normal: 0.16, hard: 0.02 }
+const NOISE: Record<Difficulty, number> = { easy: 0.3, normal: 0.13, hard: 0.02 }
 /** Share of pipes where the bot misjudges badly. */
-const LAPSE: Record<Difficulty, number> = { easy: 0.09, normal: 0.025, hard: 0 }
+const LAPSE: Record<Difficulty, number> = { easy: 0.09, normal: 0.02, hard: 0 }
 /** Seconds the bot looks ahead: a long horizon makes it flap too early and clip the top. */
 const LOOK: Record<Difficulty, number> = { easy: 0.08, normal: 0.045, hard: 0.025 }
 /** Seconds the bot plays ahead with the real rules before trusting a flap (0: never). */
-const PLAN: Record<Difficulty, number> = { easy: 0, normal: 0.3, hard: 0.75 }
+const PLAN: Record<Difficulty, number> = { easy: 0, normal: 0.35, hard: 0.75 }
 /** Steps between two imagined decisions while planning. */
 const BEAT = 6
 const DT = 1 / 60

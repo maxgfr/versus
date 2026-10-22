@@ -94,6 +94,16 @@ describe('happy birds bot', () => {
     expect(avg('easy')).toBeLessThan(avg('hard'))
   })
 
+  it('hard outlasts easy on most courses, and normal sits in between', () => {
+    const seeds = [1, 2, 3, 4, 5, 6, 7, 8]
+    const hardWins = seeds.filter((s) => fly(s, 'hard') > fly(s, 'easy')).length
+    expect(hardWins).toBeGreaterThanOrEqual(7)
+    const avg = (d: Difficulty) =>
+      seeds.map((s) => fly(s, d)).reduce((a, b) => a + b) / seeds.length
+    expect(avg('normal')).toBeGreaterThan(avg('easy') * 2)
+    expect(avg('normal')).toBeLessThan(avg('hard'))
+  })
+
   it('an easy bot eventually crashes, so rounds end', () => {
     const times = [1, 2, 3, 4, 5].map((s) => fly(s, 'easy'))
     expect(times.some((t) => t < ROUND_CAP)).toBe(true)
