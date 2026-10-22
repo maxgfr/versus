@@ -193,6 +193,21 @@ export function tap(s: RaceState, side: Side, now: number): Tap {
   return 'miss'
 }
 
+/**
+ * Every side that pressed during one step. Who pressed first inside the step is
+ * unknowable, so a dead heat is settled by a coin flip from the seeded rng
+ * rather than always favouring red.
+ */
+export function tapAll(
+  s: RaceState,
+  sides: readonly Side[],
+  now: number,
+  rng: Rng,
+): { side: Side; r: Tap }[] {
+  const order = sides.length === 2 && rng.chance(0.5) ? [...sides].reverse() : sides
+  return order.map((side) => ({ side, r: tap(s, side, now) }))
+}
+
 function penalise(s: RaceState, side: Side, now: number): void {
   s.score[side]--
   s.frozen[side] = now + FREEZE

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { planReaction, REACT } from './bot.ts'
+import { BLIND, planReaction, REACT } from './bot.ts'
 import {
   advance,
   ANIMALS,
@@ -18,6 +18,7 @@ import {
   RULE_KINDS,
   TARGET,
   tap,
+  tapAll,
 } from './rules.ts'
 
 /** Run the clock forward in fixed steps until `done` or the limit, returning the time. */
@@ -171,29 +172,53 @@ describe('reflex race rules', () => {
 })
 
 describe('reflex race bot', () => {
-  it('reacts inside its difficulty window and always catches a match', () => {
+  it('reacts inside its difficulty window; hard always catches a match, easy misses some', () => {
     const rng = new Rng(6)
     for (const d of ['easy', 'normal', 'hard'] as const) {
       const [lo, hi] = REACT[d]
-      for (let i = 0; i < 300; i++) {
+      let blind = 0
+      for (let i = 0; i < 1000; i++) {
         const at = planReaction(d, rng, true)
-        expect(at).not.toBeNull()
-        expect(at as number).toBeGreaterThanOrEqual(lo)
-        expect(at as number).toBeLessThanOrEqual(hi)
+        if (at === null) {
+          blind++
+          continue
+        }
+        expect(at).toBeGreaterThanOrEqual(lo)
+        expect(at).toBeLessThanOrEqual(hi)
       }
+      if (d === 'hard') expect(blind).toBe(0)
+      else expect(Math.abs(blind / 1000 - BLIND[d])).toBeLessThan(0.04)
     }
   })
 
-  it('false-taps only on easy, and never after the picture has gone', () => {
+  it('false-taps most on easy, rarely on normal, never on hard', () => {
     const rng = new Rng(7)
     let easyFalse = 0
+    let normalFalse = 0
     for (let i = 0; i < 2000; i++) {
       if (planReaction('easy', rng, false) !== null) easyFalse++
+      if (planReaction('normal', rng, false) !== null) normalFalse++
       expect(planReaction('hard', rng, false)).toBeNull()
-      expect(planReaction('normal', rng, false)).toBeNull()
     }
     expect(easyFalse / 2000).toBeGreaterThan(0.03)
     expect(easyFalse / 2000).toBeLessThan(0.12)
+    expect(normalFalse).toBeLessThan(easyFalse)
+  })
+
+  it('a dead heat on a match is a coin flip, not always red', () => {
+    const wins: [number, number] = [0, 0]
+    for (let seed = 1; seed <= 200; seed++) {
+      const rng = new Rng(seed)
+      const s = newRace(rng, 0)
+      runUntil(s, rng, 0, (x) => x.phase === 'play' && x.picMatch)
+      const out = tapAll(s, [0, 1], 10, rng)
+      const hit = out.find((o) => o.r === 'hit')
+      expect(hit).toBeDefined()
+      expect(out.filter((o) => o.r === 'hit')).toHaveLength(1)
+      wins[hit?.side ?? 0]++
+    }
+    expect(wins[0]).toBeGreaterThan(60)
+    expect(wins[1]).toBeGreaterThan(60)
   })
 
   /** Two bots race until one reaches `target` points; returns the final state. */
