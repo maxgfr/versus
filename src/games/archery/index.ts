@@ -25,6 +25,7 @@ import {
   type State,
   swayAt,
   WIND_MAX,
+  windScale,
 } from './rules.ts'
 
 const EVERYWHERE = { x: -600, y: -600, w: 2200, h: 3000 }
@@ -53,12 +54,14 @@ class Archery extends TurnGame<State> {
   protected setup(): State {
     // The player whose turn it is may pull anywhere.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind(), this.target)
+    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind(0), this.target)
   }
 
-  private rollWind(): number {
+  /** The wind builds toward the last arrows (`loosed` so far), so the finish is tense. */
+  private rollWind(loosed = this.s.shot[0] + this.s.shot[1]): number {
+    const max = WIND_MAX * windScale(loosed, this.target)
     const rng = this.ctx.rng
-    return rng.chance(0.2) ? 0 : rng.range(-WIND_MAX, WIND_MAX)
+    return rng.chance(0.2) ? 0 : rng.range(-max, max)
   }
 
   protected override busy(): boolean {

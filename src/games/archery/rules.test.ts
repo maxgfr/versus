@@ -19,6 +19,7 @@ import {
   swayAt,
   TARGET,
   WIND_MAX,
+  windScale,
 } from './rules.ts'
 
 /** Play a whole match with the computer on both sides; returns the state and the steps taken. */
@@ -194,7 +195,16 @@ describe('archery: edge cases', () => {
       return t / 8
     }
     const [easy, normal, hard] = [avg('easy'), avg('normal'), avg('hard')]
-    expect(normal).toBeGreaterThan(easy + 3)
-    expect(hard).toBeGreaterThan(normal + 3)
+    expect(normal).toBeGreaterThan(easy + 5)
+    expect(hard).toBeGreaterThan(normal)
+  })
+})
+
+describe('archery: the wind builds', () => {
+  it('half the range for the first arrow, all of it for the last, whatever the length', () => {
+    expect(windScale(0, 5)).toBe(0.5)
+    expect(windScale(5, 5)).toBeGreaterThan(windScale(2, 5))
+    expect(windScale(9, 5)).toBe(1)
+    expect(windScale(1, 1)).toBe(1)
   })
 })

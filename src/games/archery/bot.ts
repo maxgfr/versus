@@ -4,10 +4,10 @@ import type { ShotParams } from '../../engines/aim/index.ts'
 import { BOW, DRIFT, MIN_POWER, RANGE_MAX, swayAt, TARGET } from './rules.ts'
 
 /** How far the computer's arrow lands from its aim (world units, a gaussian), and how much wind it reads. */
-const SPREAD: Record<Difficulty, number> = { easy: 115, normal: 62, hard: 34 }
-const WIND_READ: Record<Difficulty, number> = { easy: 0.3, normal: 0.7, hard: 1 }
+const SPREAD: Record<Difficulty, number> = { easy: 100, normal: 40, hard: 21 }
+const WIND_READ: Record<Difficulty, number> = { easy: 0.3, normal: 0.85, hard: 1 }
 /** How much of the aim's sway the computer holds against at the moment it lets go. */
-const STEADY: Record<Difficulty, number> = { easy: 0, normal: 0.5, hard: 0.9 }
+const STEADY: Record<Difficulty, number> = { easy: 0, normal: 0.75, hard: 0.95 }
 
 /** Box-Muller: one standard normal draw. */
 function gauss(rng: Rng): number {

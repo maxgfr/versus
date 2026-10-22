@@ -70,6 +70,12 @@ export interface State {
   endAt: number
 }
 
+/** Share of the full wind range after `loosed` arrows of a match of `arrows` each: half at first, all of it for the last. */
+export function windScale(loosed: number, arrows: number): number {
+  const last = Math.max(1, 2 * arrows - 1)
+  return 0.5 + 0.5 * Math.min(1, loosed / last)
+}
+
 /** A small, slow sway of the aim, bigger with a bigger draw. */
 export function swayAt(t: number, side: Side, power: number): number {
   const a = 0.028 + 0.02 * power
