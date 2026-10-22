@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './ai.ts'
+import { choose, depthFor, SOLVE } from './ai.ts'
 import {
   type Board,
   type Cell,
@@ -116,6 +116,51 @@ describe('reversi bot', () => {
     ])
     expect(choose({ cells: b, turn: 0 }, 'normal', 3)).toBe(0)
   })
+
+  it('easy is greedy: it mostly takes the move that flips the most', () => {
+    // Red can play 2 (flips 1) or 20 (flips 3).
+    const b = board([
+      'rb......',
+      '........',
+      'rbbb....',
+      '........',
+      '........',
+      '........',
+      '........',
+      '........',
+    ])
+    expect(legalMoves(b, 0).map((m) => m.at)).toEqual([2, 20])
+    let greedy = 0
+    for (let seed = 1; seed <= 40; seed++)
+      if (choose({ cells: b, turn: 0 }, 'easy', seed) === 20) greedy++
+    expect(greedy).toBeGreaterThan(24)
+    expect(greedy).toBeLessThan(40)
+  })
+
+  it('hard reads the ending to the last square', () => {
+    const cells = startBoard()
+    expect(depthFor({ cells, turn: 0 }, 'hard')).toBe(5)
+    const late = cells.map((c, i): Cell => c ?? (i < 64 - SOLVE ? ((i % 2) as Side) : null))
+    expect(depthFor({ cells: late, turn: 0 }, 'hard')).toBe(SOLVE)
+    expect(depthFor({ cells: late, turn: 0 }, 'normal')).toBe(3)
+  })
+
+  it('hard beats normal', () => {
+    const rng = new Rng(100)
+    let cells = startBoard()
+    let turn: Side = 0
+    while (!ending(cells)) {
+      cells = play(
+        cells,
+        choose({ cells, turn }, turn === 0 ? 'hard' : 'normal', rng.int(1, 1e6)),
+        turn,
+      ).cells
+      const n = nextTurn(cells, turn)
+      if (!n) break
+      turn = n.turn
+    }
+    expect(ending(cells)?.winner).toBe(0)
+  }, 30_000)
 
   it('finishes whole games computer against computer within bounded moves', () => {
     for (const [seed, difficulty] of [

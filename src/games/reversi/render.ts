@@ -153,6 +153,12 @@ export function renderBoard(
       const k = outBack(u)
       sx = 0.6 + 0.4 * k
       sy = sx
+    } else if (pt >= 0 && now - pt < POP + 0.4) {
+      // Landed: a quick squash that settles.
+      const u = now - pt - POP
+      const w = 0.14 * Math.exp(-u * 10) * Math.sin(u * 30)
+      sx = 1 + w
+      sy = 1 - w
     }
     const ft = s.flipAt[i] ?? -1
     let edge = 1

@@ -11,6 +11,8 @@ import { type Cell, counts, hasMove, legalMoves, type Move, N, apply } from './r
  */
 
 const DEPTH: Record<Difficulty, number> = { easy: 1, normal: 3, hard: 5 }
+/** Hard plays the ending perfectly once this few squares are left. */
+export const SOLVE = 9
 
 /** Corners are gold, the squares beside them are poison. */
 const WEIGHT: readonly number[] = [
@@ -86,12 +88,29 @@ export function scores(pos: Position, depth: number): { move: Move; value: numbe
   }))
 }
 
-/** The square the computer plays. Ties are broken by the seeded rng; easy also plays at random a quarter of the time. */
+/** Search depth: hard reads the last `SOLVE` squares to the very end. */
+export function depthFor(pos: Position, difficulty: Difficulty): number {
+  let empty = 0
+  for (const c of pos.cells) if (c === null) empty++
+  if (difficulty === 'hard' && empty <= SOLVE) return empty
+  return DEPTH[difficulty]
+}
+
+/**
+ * The square the computer plays. Ties are broken by the seeded rng. Easy plays
+ * like a beginner: greedy for the most discs right now (ignoring corners and
+ * the poison squares beside them), and at random a third of the time.
+ */
 export function choose(pos: Position, difficulty: Difficulty, seed: number): number {
   const rng = new Rng(seed)
   const legal = legalMoves(pos.cells, pos.turn)
-  if (difficulty === 'easy' && rng.chance(0.25)) return rng.pick(legal).at
-  const table = scores(pos, DEPTH[difficulty])
+  if (difficulty === 'easy') {
+    if (rng.chance(0.35)) return rng.pick(legal).at
+    let most = 0
+    for (const m of legal) most = Math.max(most, m.flips.length)
+    return rng.pick(legal.filter((m) => m.flips.length === most)).at
+  }
+  const table = scores(pos, depthFor(pos, difficulty))
   let best = -Infinity
   let ties: number[] = []
   for (const { move, value } of table) {

@@ -67,8 +67,17 @@ function notice(g: Draw, text: string, alpha: number, color?: string): void {
 const GEO = geom(N, N, 780, 780, MID)
 
 class Reversi extends TurnGame<State> {
+  // Cosmetic only: how many flips the current move started with, for the rising chain pitch.
+  private chain = 0
+
   private get target(): number {
     return this.ctx.target || match.default
+  }
+
+  /** The flips already make the board read as busy: the computer answers briskly. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.5 : d === 'normal' ? 0.4 : 0.2) + this.ctx.rng.range(0, 0.25)
   }
 
   protected setup(): State {
@@ -123,8 +132,10 @@ class Reversi extends TurnGame<State> {
       const i = s.queue.shift() as number
       const { x, y } = cellCenter(GEO, i % N, Math.floor(i / N))
       const col = s.cells[i] as Side
-      this.ctx.audio.play('flip', col === 0 ? 1 : 1.12)
-      this.ctx.fx.sparks(x, y, SIDE[col].light, 6)
+      // Each disc of a chain clicks a little higher: long captures sing.
+      const n = Math.max(0, this.chain - s.queue.length - 1)
+      this.ctx.audio.play('flip', (col === 0 ? 1 : 1.12) + Math.min(0.6, n * 0.07))
+      this.ctx.fx.sparks(x, y, SIDE[col].light, 5 + Math.min(6, n))
     }
     if (s.endedAt >= 0 && s.doneAt < 0 && this.time >= s.readyAt) this.conclude()
     if (s.resetAt >= 0 && this.time >= s.resetAt) this.nextRound()
@@ -206,15 +217,32 @@ class Reversi extends TurnGame<State> {
       s.queue.push(j)
       settle = Math.max(settle, at + FLIP)
     }
+    this.chain = res.flips.length
     const { x, y } = cellCenter(GEO, c0, r0)
-    this.ctx.audio.play('place', side === 0 ? 1 : 1.12)
-    this.ctx.fx.burst(x, y, SIDE[side].main, { count: 10, speed: 360, size: 12, life: 0.45 })
-    this.ctx.fx.ring(x, y, SIDE[side].light, GEO.cell * 0.9)
-    this.ctx.fx.shake(0.06 + Math.min(0.24, res.flips.length * 0.025))
-    // A big capture deserves a shout.
-    if (res.flips.length >= 5) {
-      this.ctx.fx.float(`+${res.flips.length}`, x, y - GEO.cell * 0.6, SIDE[side].light, 70, side)
-      this.ctx.audio.play('coin', side === 0 ? 1 : 1.12)
+    const { fx, audio } = this.ctx
+    // Impact scales with the capture: 1 flip is a tap, 8+ is a slam.
+    const k = Math.min(1, res.flips.length / 8)
+    const corner = (r0 === 0 || r0 === N - 1) && (c0 === 0 || c0 === N - 1)
+    audio.play('place', (side === 0 ? 0.95 : 1.07) - k * 0.15)
+    fx.burst(x, y, SIDE[side].main, {
+      count: Math.round(8 + k * 14),
+      speed: 320 + k * 380,
+      size: 12,
+      life: 0.45,
+      colors: [SIDE[side].main, SIDE[side].light],
+    })
+    fx.ring(x, y, SIDE[side].light, GEO.cell * (0.8 + k * 0.8))
+    fx.shake(0.06 + k * 0.26)
+    audio.buzz(Math.round(8 + k * 22))
+    if (k >= 0.75) fx.stop(3)
+    // A big capture deserves a shout; a corner is forever.
+    if (corner) {
+      fx.float('Corner!', x, y - GEO.cell * 0.6, C.yellow, 64, side)
+      fx.sparks(x, y, C.yellow, 16)
+      audio.play('powerup', 1.1)
+    } else if (res.flips.length >= 5) {
+      fx.float(`+${res.flips.length}`, x, y - GEO.cell * 0.6, SIDE[side].light, 70, side)
+      audio.play('coin', side === 0 ? 1 : 1.12)
     }
 
     const e = ending(res.cells)

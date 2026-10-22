@@ -10,7 +10,7 @@ function botContext(target?: number): GameContext {
     stage: {} as GameContext['stage'],
     input: {} as GameContext['input'],
     fx: new Proxy({}, { get: () => noop }) as GameContext['fx'],
-    audio: { play: noop, unlock: noop } as unknown as GameContext['audio'],
+    audio: { play: noop, unlock: noop, buzz: noop } as unknown as GameContext['audio'],
     rng: new Rng(11),
     mode: '1p',
     difficulty: 'normal',
