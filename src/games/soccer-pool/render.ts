@@ -5,7 +5,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
 import type { Disc } from '../../engines/puck/index.ts'
-import { GOAL_PAUSE, RINK, type World } from './rules.ts'
+import { DISC_R, GOAL_PAUSE, RINK, type World } from './rules.ts'
 
 /** The shot being lined up: where the finger grabbed, where it is now, and the flick. */
 export interface Aim {
@@ -22,6 +22,10 @@ export interface Aim {
 export interface Look {
   ball: Disc
   discs: Disc[]
+  /** Fading afterimages behind fast discs, per disc. */
+  ghosts: { x: number; y: number }[][]
+  /** Seconds left on the shot clock while a side aims, or -1. */
+  clock: number
   squash: number[]
   pulse: [number, number]
   spin: number
@@ -429,20 +433,55 @@ function ending(g: Draw, end: { side: Side; t: number }, name: string): void {
     })
 }
 
+/** The last seconds of the shot clock, big on the shooter's half. */
+function drawClock(g: Draw, side: Side, left: number): void {
+  if (left > 5 || left <= 0) return
+  const n = Math.ceil(left)
+  const f = n - left
+  const s = 1 + 0.25 * Math.max(0, 1 - f * 4)
+  // Beside the touchline on the shooter's right, clear of the formation.
+  g.forSide(side, side === 0 ? W - 130 : 130, side === 0 ? MID + 300 : MID - 300, () => {
+    g.circle(0, 0, 54 * s, alpha(C.ink, 0.8))
+    g.arc(
+      0,
+      0,
+      54 * s,
+      -Math.PI / 2,
+      -Math.PI / 2 + (left / 5) * Math.PI * 2,
+      n <= 2 ? C.red : C.yellow,
+      8,
+    )
+    g.text(n, 0, 3, { size: 56 * s, weight: 700, color: n <= 2 ? C.red : C.yellow })
+  })
+}
+
 export function render(g: Draw, w: World, look: Look): void {
   drawPitch(g, w)
   const turnSide = w.turn
   const shooting = w.phase === 'aim' && !look.end
+  // Online, each phone shows only its own player's controls (pull guide, ready glows).
+  const own = g.viewer === null || g.viewer === turnSide
+  // Afterimages behind discs that were flicked hard.
+  look.ghosts.forEach((gh, i) => {
+    const side = w.discs[i]?.side ?? 0
+    for (let k = 0; k < gh.length; k++) {
+      const t = gh[k]
+      if (!t) continue
+      const f = (k + 1) / (gh.length + 1)
+      g.alpha(f * 0.22, () => g.circle(t.x, t.y, DISC_R * (0.6 + 0.4 * f), SIDE[side].light))
+    }
+  })
   w.discs.forEach((piece, i) => {
     const p = look.discs[i]
     if (!p) return
-    const selected = look.aim?.disc === i
-    const ready = shooting && piece.side === turnSide ? 1 : 0
+    const selected = own && look.aim?.disc === i
+    const ready = shooting && own && piece.side === turnSide ? 1 : 0
     drawDisc(g, p, piece.side, look.squash[i] ?? 1, ready, selected)
   })
   const { ball, scale } = ballInGoal(w, look.ball)
   drawBall(g, ball, look.spin, w.phase === 'roll' ? look.trail : [], scale)
-  if (look.aim && shooting) drawAim(g, look.discs, look.aim, turnSide)
+  if (look.aim && shooting && own) drawAim(g, look.discs, look.aim, turnSide)
+  if (shooting) drawClock(g, turnSide, look.clock)
   // Whose shot: a short banner on the shooter's half when the turn starts.
   if (shooting && w.t < 1.1 && !look.aim) {
     const a = prog(w.t, 0, 0.15) * (1 - prog(w.t, 0.8, 1.1))

@@ -6,7 +6,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
 import { W } from '../../core/stage.ts'
 import type { Disc } from '../../engines/puck/index.ts'
-import { choose, TUNING } from './bot.ts'
+import { type Pick, plan, TUNING } from './bot.ts'
 import { render, type Aim } from './render.ts'
 import {
   BALL_R,
@@ -17,6 +17,7 @@ import {
   RINK,
   SHOT_SPEED,
   shoot,
+  shotClock,
   step,
   winner,
   type World,
@@ -73,6 +74,13 @@ class SoccerPool extends BaseGame<State> {
   /** Seconds the computer has been thinking about its flick. */
   private thinking = 0
   private thinkFor = 0
+  /** The computer's search, advanced a couple of trials per step while it thinks. */
+  private search: Generator<void, Pick> | null = null
+  private picked: Pick | null = null
+  /** Last whole second of the shot clock that ticked (cosmetic). */
+  private lastTick = -1
+  /** Fading afterimages behind fast discs, per disc (cosmetic). */
+  private ghosts: { x: number; y: number }[][] = []
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -83,31 +91,57 @@ class SoccerPool extends BaseGame<State> {
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.w.turn
     const turn: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     this.squash = formation().map(() => new Spring(1, 380, 12))
-    return { w: newWorld(turn), aim: null, end: null }
+    this.ghosts = formation().map(() => [])
+    return { w: newWorld(turn, this.target), aim: null, end: null }
   }
 
   protected step(dt: number): void {
     const w = this.s.w
     this.prev = { ball: { ...w.ball }, discs: copyDiscs(w.discs) }
-    this.spin += (Math.hypot(w.ball.vx, w.ball.vy) * dt) / BALL_R
+    const turn = w.turn
     for (const e of step(w, dt)) this.juice(e)
-    if (w.phase !== 'aim') {
+    if (w.phase !== 'aim' || w.turn !== turn) {
       this.s.aim = null
       this.thinking = 0
-      return
+      this.search = null
+      this.picked = null
+      if (w.phase !== 'aim') return
     }
+    this.shotClock()
     if (this.isBot(w.turn)) {
-      if (this.thinking === 0)
+      if (this.thinking === 0) {
         this.thinkFor = TUNING[this.ctx.difficulty].think + this.ctx.rng.range(0, 0.3)
+        this.search = plan(w, w.turn, this.ctx.difficulty, this.ctx.rng)
+        this.picked = null
+      }
       this.thinking += dt
-      if (this.thinking >= this.thinkFor) {
+      // Spread the search over the thinking time: a couple of trials per step.
+      for (let k = 0; k < 2 && this.search && !this.picked; k++) {
+        const r = this.search.next()
+        if (r.done) this.picked = r.value
+      }
+      if (this.thinking >= this.thinkFor && this.picked) {
+        const p = this.picked
         this.thinking = 0
-        this.botPlay()
+        this.search = null
+        this.picked = null
+        this.fire(p.disc, p.dx, p.dy, p.power)
       }
       return
     }
     this.thinking = 0
     this.stepTurn()
+  }
+
+  /** The last seconds of the shot clock tick, quicker and higher at the very end. */
+  private shotClock(): void {
+    const w = this.s.w
+    const left = Math.ceil(shotClock(w) - w.t)
+    if (left <= 5 && left > 0 && left !== this.lastTick) {
+      this.lastTick = left
+      this.ctx.audio.play('tick', left <= 2 ? 1.4 : 1.15)
+    }
+    if (left > 5) this.lastTick = -1
   }
 
   private stepTurn(): void {
@@ -137,13 +171,6 @@ class SoccerPool extends BaseGame<State> {
     } else this.s.aim = null
   }
 
-  private botPlay(): void {
-    const w = this.s.w
-    if (w.phase !== 'aim') return
-    const p = choose(w, w.turn, this.ctx.difficulty, this.ctx.rng)
-    this.fire(p.disc, p.dx, p.dy, p.power)
-  }
-
   private fire(idx: number, dx: number, dy: number, power: number): void {
     for (const e of shoot(this.s.w, idx, dx, dy, power)) this.juice(e)
     this.s.aim = null
@@ -166,19 +193,27 @@ class SoccerPool extends BaseGame<State> {
       audio.play('wall', e.kind === 'post' ? 1.3 : 0.9 + Math.min(0.4, e.speed / 3000))
       if (e.speed > 700) fx.sparks(e.x, e.y, C.white, 5)
     } else if (e.kind === 'kick') {
-      audio.play('shoot', 0.9 + e.speed / 6000)
+      // The pull sets the power; the power sets the kick's sound, dust, ring and shake.
+      const p = e.speed / SHOT_SPEED
+      audio.play('shoot', 0.9 + p * 0.4)
       const d = w.discs[e.disc]
-      fx.puff(d?.x ?? e.x, d?.y ?? e.y, 'rgba(255,255,255,0.7)', 8)
-      fx.burst(d?.x ?? e.x, d?.y ?? e.y, SIDE[e.side].light, {
-        count: 10,
-        speed: 380,
+      const x = d?.x ?? e.x
+      const y = d?.y ?? e.y
+      fx.puff(x, y, 'rgba(255,255,255,0.7)', 5 + Math.round(p * 6))
+      fx.burst(x, y, SIDE[e.side].light, {
+        count: Math.round(6 + p * 10),
+        speed: 300 + p * 300,
         size: 9,
         life: 0.4,
         gravity: 0,
         drag: 4,
       })
-      if (e.speed > SHOT_SPEED * 0.85) fx.shake(0.12)
-      this.squashNearest(e.x, e.y, -3 - e.speed / 900)
+      fx.ring(x, y, alpha(p > 0.9 ? C.yellow : SIDE[e.side].light, 0.7), 80 + p * 70)
+      if (p > 0.85) {
+        fx.shake(0.1 + (p - 0.85) * 0.6)
+        audio.buzz(10)
+      }
+      this.squashNearest(e.x, e.y, -3 - p * 3)
     } else if (e.kind === 'goal') {
       const col = SIDE[e.side]
       // Side 0 scores in the top goal, side 1 in the bottom one.
@@ -209,6 +244,12 @@ class SoccerPool extends BaseGame<State> {
         fx.confetti(won)
         this.finish(won, { score: [w.score[0], w.score[1]], delay: 2.4 })
       } else audio.play('whoosh', 0.8)
+    } else if (e.kind === 'timeout') {
+      // A pull left hanging when time ran out must not fire on that side's next turn.
+      for (const aim of this.aims) aim.cancel()
+      this.s.aim = null
+      audio.play('buzz', 0.8)
+      floatFor(fx, e.side, 'Time!')
     } else if (e.kind === 'turn') {
       audio.play('tick', 1.1)
       // A soft chime on the new shooter's side, so 2P players feel the hand-over.
@@ -236,16 +277,26 @@ class SoccerPool extends BaseGame<State> {
     const ip = (a: Disc, b: Disc | undefined): Disc =>
       b ? { ...a, x: lerp(b.x, a.x, alpha), y: lerp(b.y, a.y, alpha) } : a
     const ball = ip(w.ball, prev?.ball)
-    if (Math.hypot(w.ball.vx, w.ball.vy) > 600 && w.phase === 'roll')
-      this.trail.push({ x: ball.x, y: ball.y })
+    const sp = Math.hypot(w.ball.vx, w.ball.vy)
+    if (sp > 600 && w.phase === 'roll') this.trail.push({ x: ball.x, y: ball.y })
     else this.trail.shift()
     while (this.trail.length > 7) this.trail.shift()
+    if (w.phase === 'roll') this.spin += sp / 60 / BALL_R
     for (const s of this.squash) s.update(1 / 60)
     for (const p of this.pulse) p.update(1 / 60)
+    const discs = w.discs.map((d, i) => ip(d, prev?.discs[i]))
+    discs.forEach((d, i) => {
+      const gh = (this.ghosts[i] ??= [])
+      if (Math.hypot(d.vx, d.vy) > 900 && w.phase === 'roll') gh.push({ x: d.x, y: d.y })
+      else gh.shift()
+      while (gh.length > 5) gh.shift()
+    })
     render(g, w, {
       ball,
       trail: this.trail,
-      discs: w.discs.map((d, i) => ip(d, prev?.discs[i])),
+      discs,
+      ghosts: this.ghosts,
+      clock: w.phase === 'aim' ? Math.max(0, shotClock(w) - w.t) : -1,
       squash: this.squash.map((s) => s.value),
       pulse: [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)],
       spin: this.spin,

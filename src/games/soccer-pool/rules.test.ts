@@ -2,17 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { STEP, type Difficulty, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { W } from '../../core/stage.ts'
-import { choose } from './bot.ts'
+import { choose, plan } from './bot.ts'
 import {
   BALL_R,
   DISC_R,
   GOAL_PAUSE,
   RINK,
+  SHOT_CLOCK,
   formation,
   newWorld,
   ownDiscs,
   reset,
   shoot,
+  shotClock,
   step,
   winner,
   type World,
@@ -195,6 +197,65 @@ describe('soccer pool rules', () => {
     expect(winner(w, 3)).not.toBeNull()
     expect(Math.max(...w.score)).toBe(3)
     expect(steps).toBeLessThan(60 * 60 * 15)
+  })
+
+  it('a shot not taken in time passes the turn (no stalled match)', () => {
+    const w = newWorld(0, 3)
+    let ev: ReturnType<typeof step> = []
+    for (let i = 0; i < 60 * (SHOT_CLOCK + 0.5) && w.turn === 0; i++) ev = ev.concat(step(w, STEP))
+    expect(w.turn).toBe(1)
+    expect(w.phase).toBe('aim')
+    expect(ev.some((e) => e.kind === 'timeout' && e.side === 0)).toBe(true)
+    // ...and the clock starts again for the new shooter.
+    expect(w.t).toBeLessThan(0.1)
+  })
+
+  it('the shot clock tightens once someone is one goal away', () => {
+    const w = newWorld(0, 3)
+    expect(shotClock(w)).toBe(SHOT_CLOCK)
+    w.score = [0, 2]
+    expect(shotClock(w)).toBeLessThan(SHOT_CLOCK)
+  })
+
+  it('the bot never takes an own goal when a safe shot exists', () => {
+    // Ball sitting right in front of red's own goal, a red disc behind it on the
+    // goal side: driving straight through the ball would put it in red's net.
+    for (const d of ['normal', 'hard'] as Difficulty[]) {
+      const w = newWorld(0, 3)
+      w.ball.x = W / 2
+      w.ball.y = RINK.y1 - 160
+      const i = ownDiscs(w, 0)[0] ?? 0
+      const disc = w.discs[i]
+      if (!disc) throw new Error('no disc')
+      disc.x = W / 2
+      disc.y = RINK.y1 - 420
+      const pick = choose(w, 0, d, new Rng(3))
+      shoot(w, pick.disc, pick.dx, pick.dy, pick.power)
+      let own = false
+      for (let k = 0; k < 60 * 6 && w.phase === 'roll'; k++)
+        own ||= step(w, STEP).some((e) => e.kind === 'goal' && e.side === 1)
+      expect(own).toBe(false)
+    }
+  })
+
+  it('the search can be spread over many steps and gives the same shot', () => {
+    const w = newWorld(1, 3)
+    const a = choose(w, 1, 'normal', new Rng(9))
+    const it = plan(w, 1, 'normal', new Rng(9))
+    let n = 0
+    let r = it.next()
+    while (!r.done) {
+      n++
+      r = it.next()
+    }
+    expect(n).toBeGreaterThan(10)
+    expect(r.value).toEqual(a)
+  })
+
+  it('the harder bot usually wins', () => {
+    let hard = 0
+    for (let s = 1; s <= 4; s++) if (winner(botMatch('hard', 'easy', s, 2).w, 2) === 0) hard++
+    expect(hard).toBeGreaterThanOrEqual(3)
   })
 
   it('a two-goal match ends at two, not the default', () => {

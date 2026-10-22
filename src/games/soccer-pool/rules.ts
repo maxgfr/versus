@@ -35,6 +35,12 @@ const SUBSTEPS = 4
 const MAX_ROLL = 9
 export const GOAL_PAUSE = 1.7
 export const DISCS_PER_SIDE = 5
+/**
+ * Shot clock (s): a turn not taken in time passes to the rival, so a match can
+ * never stall (an idle player online). Tighter once someone is one goal away.
+ */
+export const SHOT_CLOCK = 20
+export const SHOT_CLOCK_TENSE = 12
 
 export interface Piece extends Disc {
   side: Side
@@ -52,6 +58,8 @@ export interface World {
   phase: 'aim' | 'roll' | 'goal'
   /** Seconds in the current phase. */
   t: number
+  /** Goals to win (the shot clock tightens at match point). */
+  target: number
 }
 
 export type Event =
@@ -59,6 +67,8 @@ export type Event =
   | { kind: 'goal'; side: Side; x: number; y: number; speed: number }
   | { kind: 'kick'; side: Side; disc: number; x: number; y: number; speed: number }
   | { kind: 'turn'; side: Side }
+  /** The shot clock ran out on `side`: the turn passed to its rival. */
+  | { kind: 'timeout'; side: Side }
 
 /** Red's formation in red's frame (bottom half). Blue's is the same, rotated. */
 const FORMATION: [number, number][] = [
@@ -85,7 +95,7 @@ function placeAll(w: World): void {
   w.discs = formation().map((f) => Object.assign(disc(f.x, f.y, DISC_R), { side: f.side }))
 }
 
-export function newWorld(turn: Side): World {
+export function newWorld(turn: Side, target = 3): World {
   const w: World = {
     ball: disc(W / 2, 900, BALL_R),
     discs: [],
@@ -93,6 +103,7 @@ export function newWorld(turn: Side): World {
     turn,
     phase: 'aim',
     t: 0,
+    target,
   }
   placeAll(w)
   return w
@@ -142,12 +153,28 @@ function freeze(w: World): void {
   w.ball.vx = w.ball.vy = 0
 }
 
+/** Seconds a side has for a shot: the full clock, or the tight one at match point. */
+export function shotClock(w: World): number {
+  const t = w.target
+  return w.score[0] >= t - 1 || w.score[1] >= t - 1 ? SHOT_CLOCK_TENSE : SHOT_CLOCK
+}
+
 /** Advance one fixed step (1/60 s). Returns what happened, for juice. */
 export function step(w: World, dt: number): Event[] {
   const ev: Event[] = []
   if (w.phase === 'goal') {
     w.t += dt
     if (w.t >= GOAL_PAUSE) reset(w)
+    return ev
+  }
+  if (w.phase === 'aim') {
+    w.t += dt
+    if (w.t >= shotClock(w)) {
+      ev.push({ kind: 'timeout', side: w.turn })
+      w.turn = w.turn === 0 ? 1 : 0
+      w.t = 0
+      ev.push({ kind: 'turn', side: w.turn })
+    }
     return ev
   }
   if (w.phase !== 'roll') return ev
@@ -240,6 +267,7 @@ export function clone(w: World): World {
     turn: w.turn,
     phase: w.phase,
     t: w.t,
+    target: w.target,
   }
 }
 
@@ -248,6 +276,9 @@ export interface Trial {
   goal: Side | null
   /** Closest the ball got to the rival goal (units). */
   near: number
+  /** Where the ball came to rest (or was when the trial stopped). */
+  x: number
+  y: number
 }
 
 /**
@@ -262,8 +293,9 @@ export function trial(w: World, idx: number, dx: number, dy: number, power: numb
   let near = Math.hypot(c.ball.x - goalAt.x, c.ball.y - goalAt.y)
   for (let i = 0; i < 220 && c.phase === 'roll'; i++) {
     const ev = step(c, 1 / 60)
-    for (const e of ev) if (e.kind === 'goal') return { goal: e.side, near: 0 }
+    for (const e of ev)
+      if (e.kind === 'goal') return { goal: e.side, near: 0, x: c.ball.x, y: c.ball.y }
     near = Math.min(near, Math.hypot(c.ball.x - goalAt.x, c.ball.y - goalAt.y))
   }
-  return { goal: null, near }
+  return { goal: null, near, x: c.ball.x, y: c.ball.y }
 }
