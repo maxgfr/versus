@@ -12,6 +12,9 @@ import {
   type Ev,
   FLAME_T,
   FLOOR,
+  HURRY,
+  HURRY_EVERY,
+  HURRY_T,
   idx,
   ITEMS,
   newWorld,
@@ -46,6 +49,63 @@ const tile = (w: World, c: number, r: number) => w.tiles[idx(c, r)]
 const run = (w: World, n: number, ev: Ev[] = [], drives = idle(w)) => {
   for (let i = 0; i < n; i++) stepWorld(w, drives, STEP, ev)
 }
+
+describe('festival flow', () => {
+  it('corner assist: pushing up a little off a lane slides onto it instead of snagging', () => {
+    // Column 2 between the pillars of columns 1 and 3: start 22 units right of its centre.
+    const w = field({ red: [2, 10], blue: [8, 0] })
+    const red = w.players[0] as Player
+    red.x += 22
+    run(w, 45, [], [{ jx: 0, jy: -1, bomb: false }, undefined])
+    // Past the pillar row above (row 9) and centred on the lane.
+    expect(red.y).toBeLessThan(centreOf(2, 9).y)
+    expect(Math.abs(red.x - centreOf(2, 9).x)).toBeLessThan(2)
+  })
+
+  it('a bomb dropped under the rival lets the rival walk off it too', () => {
+    const w = field({ red: [4, 4], blue: [4, 4] })
+    const [red, blue] = w.players as [Player, Player]
+    blue.x += 20
+    const bx = blue.x
+    stepWorld(w, [{ jx: 0, jy: 0, bomb: true }, undefined], STEP, [])
+    expect(w.bombs[0]?.through).toEqual([0, 1])
+    // Blue is not shoved out sideways by the bomb under it.
+    expect(blue.x).toBeCloseTo(bx, 6)
+    expect(red.alive).toBe(true)
+  })
+
+  it('hurry-up drops blocks in mirror pairs from the outside in and crushes who stands there', () => {
+    // The order covers every cell once, each followed by its mirror.
+    const n = BOARD.cols * BOARD.rows
+    expect(new Set(HURRY).size).toBe(n)
+    for (let k = 0; k + 1 < HURRY.length; k += 2)
+      expect((HURRY[k] as number) + (HURRY[k + 1] as number)).toBe(n - 1)
+    const w = field({ red: [0, 0], blue: [8, 8] })
+    const red = w.players[0] as Player
+    const ev: Ev[] = []
+    w.t = HURRY_T - STEP / 2
+    w.hurryT = HURRY_T
+    run(w, 2, ev)
+    expect(ev.some((e) => e.k === 'hurry')).toBe(true)
+    // The very first block lands on the top-left corner, where red stands.
+    expect(tile(w, 0, 0)).toBe(PILLAR)
+    expect(tile(w, BOARD.cols - 1, BOARD.rows - 1)).toBe(PILLAR)
+    expect(red.alive).toBe(false)
+    expect(roundWinner(w)).toBe(1)
+    run(w, Math.ceil((HURRY_EVERY / STEP) * 3), ev)
+    expect(ev.filter((e) => e.k === 'drop').length).toBeGreaterThanOrEqual(6)
+  })
+
+  it('once the round is decided, a ticking bomb cannot knock out the survivor', () => {
+    const w = field({ red: [4, 4], blue: [8, 0] })
+    const red = w.players[0] as Player
+    stepWorld(w, [{ jx: 0, jy: 0, bomb: true }, undefined], STEP, [])
+    w.frozen = true
+    run(w, Math.ceil((BOMB_T + 0.2) / STEP))
+    expect(w.flames.length).toBeGreaterThan(0)
+    expect(red.alive).toBe(true)
+  })
+})
 
 describe('festival board', () => {
   it('has pillars on the odd grid, spawns with two free cells around them', () => {
@@ -225,6 +285,30 @@ describe('festival power-ups and results', () => {
 })
 
 describe('festival bot vs bot', () => {
+  it('hard beats easy in most seeded rounds, from either side', () => {
+    let wins = 0
+    let decided = 0
+    for (let seed = 0; seed < 20; seed++) {
+      const rng = new Rng(seed * 31 + 7)
+      const w = newWorld(rng.fork())
+      const side = seed % 2
+      const bots = w.players.map((p) => new BombBot(rng.fork(), p.side === side ? 'hard' : 'easy'))
+      for (let i = 0; i < 60 * 150 && roundWinner(w) === null; i++)
+        stepWorld(
+          w,
+          w.players.map((p, j) => bots[j]?.decide(w, p, STEP)),
+          STEP,
+          [],
+        )
+      const r = roundWinner(w)
+      if (r === null || r === 'draw') continue
+      decided++
+      if (r === side) wins++
+    }
+    expect(decided).toBeGreaterThan(16)
+    expect(wins / decided).toBeGreaterThan(0.7)
+  })
+
   for (const difficulty of ['easy', 'normal', 'hard'] as const) {
     it(`a ${difficulty} round is decided within bounded steps`, () => {
       for (let seed = 0; seed < 4; seed++) {

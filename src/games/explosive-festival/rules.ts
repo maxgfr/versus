@@ -16,6 +16,19 @@ export const BOMB_T = 2
 export const FLAME_T = 0.5
 export const MAX_RANGE = 6
 export const MAX_BOMBS = 4
+/**
+ * Hurry up: a round still going after this many seconds starts dropping
+ * blocks from the outside in (point-symmetric pairs), one pair every
+ * `HURRY_EVERY` seconds. A player under a falling block is out.
+ */
+export const HURRY_T = 45
+export const HURRY_EVERY = 0.35
+/**
+ * Corner assist: pushing along a lane while a little off its centre line
+ * slides the player onto it (up to this share of a cell), so turning into a
+ * corridor between pillars doesn't need pixel-perfect aim.
+ */
+export const ASSIST = 0.42
 
 export const FLOOR = 0
 export const PILLAR = 1
@@ -74,6 +87,11 @@ export interface World {
   players: Player[]
   /** Seconds since the round began. */
   t: number
+  /** Hurry-up blocks dropped so far (an index into `HURRY`), and when the next falls. */
+  hurry: number
+  hurryT: number
+  /** Round decided: nobody can be knocked out any more (the ending plays). */
+  frozen: boolean
 }
 
 export interface Drive {
@@ -88,6 +106,10 @@ export type Ev =
   | { k: 'crate'; x: number; y: number }
   | { k: 'pick'; x: number; y: number; kind: number; side: Side }
   | { k: 'death'; x: number; y: number; side: Side }
+  /** A hurry-up block lands on cell (x, y). */
+  | { k: 'drop'; x: number; y: number }
+  /** The hurry-up starts. */
+  | { k: 'hurry' }
 
 export const idx = (c: number, r: number): number => r * BOARD.cols + c
 export const inBoard = (c: number, r: number): boolean =>
@@ -157,7 +179,61 @@ export function newWorld(rng: Rng): World {
       deadT: -1,
     }
   })
-  return { tiles, hidden, items: [], bombs: [], flames: [], players, t: 0 }
+  return {
+    tiles,
+    hidden,
+    items: [],
+    bombs: [],
+    flames: [],
+    players,
+    t: 0,
+    hurry: 0,
+    hurryT: HURRY_T,
+    frozen: false,
+  }
+}
+
+/**
+ * Hurry-up drop order: a clockwise spiral from the top-left corner inward,
+ * each cell followed by its point mirror so both players lose ground evenly.
+ */
+export const HURRY: readonly number[] = (() => {
+  const n = BOARD.cols * BOARD.rows
+  const seen = new Uint8Array(n)
+  const out: number[] = []
+  let c0 = 0
+  let r0 = 0
+  let c1 = BOARD.cols - 1
+  let r1 = BOARD.rows - 1
+  const add = (c: number, r: number) => {
+    const i = idx(c, r)
+    if (seen[i]) return
+    seen[i] = seen[n - 1 - i] = 1
+    out.push(i)
+    if (n - 1 - i !== i) out.push(n - 1 - i)
+  }
+  while (c0 <= c1 && r0 <= r1) {
+    for (let c = c0; c <= c1; c++) add(c, r0)
+    for (let r = r0 + 1; r <= r1; r++) add(c1, r)
+    for (let c = c1 - 1; c >= c0; c--) add(c, r1)
+    for (let r = r1 - 1; r > r0; r--) add(c0, r)
+    c0++
+    r0++
+    c1--
+    r1--
+  }
+  return out
+})()
+
+/** The next `k` cells the hurry-up will drop a block on (empty before it starts). */
+export function hurryNext(w: World, k: number): number[] {
+  if (w.t < HURRY_T - 2) return []
+  const out: number[] = []
+  for (let j = w.hurry; j < HURRY.length && out.length < k; j++) {
+    const i = HURRY[j] as number
+    if (w.tiles[i] !== PILLAR) out.push(i)
+  }
+  return out
 }
 
 /** Is cell (c, r) a wall for this player (pillar, crate, board edge, or a bomb it has left)? */
@@ -257,11 +333,43 @@ export function stepWorld(
     const m = d ? Math.min(1, Math.hypot(d.jx, d.jy)) : 0
     if (d && m > 0.12) {
       const sp = p.speed * m
-      const ax = d.jx / Math.hypot(d.jx, d.jy)
-      const ay = d.jy / Math.hypot(d.jx, d.jy)
+      let ax = d.jx / Math.hypot(d.jx, d.jy)
+      let ay = d.jy / Math.hypot(d.jx, d.jy)
+      p.a = Math.atan2(ay, ax)
+      // Corner assist: a mostly-axial push into a lane that is open ahead
+      // eases the player onto the lane's centre line instead of snagging on
+      // a pillar corner.
+      const cell = cellOf(p.x, p.y)
+      const ctr = centreOf(cell.c, cell.r)
+      if (Math.abs(ax) > 0.8) {
+        const dc = ax > 0 ? 1 : -1
+        const off = p.y - ctr.y
+        if (
+          Math.abs(off) > 1 &&
+          Math.abs(off) < BOARD.cell * ASSIST &&
+          !solidFor(w, cell.c + dc, cell.r, p.id)
+        ) {
+          const fix = Math.min(Math.abs(off), sp * dt)
+          p.y -= Math.sign(off) * fix
+          ax = Math.sign(ax)
+          ay = 0
+        }
+      } else if (Math.abs(ay) > 0.8) {
+        const dr = ay > 0 ? 1 : -1
+        const off = p.x - ctr.x
+        if (
+          Math.abs(off) > 1 &&
+          Math.abs(off) < BOARD.cell * ASSIST &&
+          !solidFor(w, cell.c, cell.r + dr, p.id)
+        ) {
+          const fix = Math.min(Math.abs(off), sp * dt)
+          p.x -= Math.sign(off) * fix
+          ay = Math.sign(ay)
+          ax = 0
+        }
+      }
       p.x += ax * sp * dt
       p.y += ay * sp * dt
-      p.a = Math.atan2(ay, ax)
     }
     collide(w, p, p.id)
     const here = cellOf(p.x, p.y)
@@ -277,12 +385,15 @@ export function stepWorld(
       return false
     })
     if (d?.bomb && p.bombsOut < p.bombsMax && !w.bombs.some((b) => b.i === idx(here.c, here.r))) {
+      const bi = idx(here.c, here.r)
       w.bombs.push({
-        i: idx(here.c, here.r),
+        i: bi,
         owner: p.id,
         t: BOMB_T,
         range: p.range,
-        through: [p.id],
+        // Everyone overlapping the cell may walk off it (not just the one who
+        // dropped it): otherwise a rival standing there is shoved out sideways.
+        through: w.players.filter((q) => q.alive && overlaps(q, bi)).map((q) => q.id),
       })
       p.bombsOut++
       p.placeT = w.t
@@ -316,6 +427,17 @@ export function stepWorld(
     if (owner && owner.bombsOut > 0) owner.bombsOut--
   }
   w.bombs = w.bombs.filter((b) => !gone.has(b))
+  // Hurry up: blocks fall from the outside in.
+  if (w.t + dt >= HURRY_T && w.t < HURRY_T) ev.push({ k: 'hurry' })
+  if (w.t >= w.hurryT && w.hurry < HURRY.length) {
+    w.hurryT = w.t + HURRY_EVERY
+    // A pair of mirror cells per drop.
+    for (let k = 0; k < 2 && w.hurry < HURRY.length; k++) drop(w, HURRY[w.hurry++] as number, ev)
+  }
+  if (w.frozen) {
+    w.t += dt
+    return
+  }
   // Anyone standing in fire is out.
   for (const p of w.players) {
     if (!p.alive) continue
@@ -327,6 +449,43 @@ export function stepWorld(
     }
   }
   w.t += dt
+}
+
+/** Does the player's disc overlap cell `i`? */
+function overlaps(p: Player, i: number): boolean {
+  const c = i % BOARD.cols
+  const r = (i - c) / BOARD.cols
+  const x0 = BOARD.x0 + c * BOARD.cell
+  const y0 = BOARD.y0 + r * BOARD.cell
+  const nx = Math.max(x0, Math.min(p.x, x0 + BOARD.cell))
+  const ny = Math.max(y0, Math.min(p.y, y0 + BOARD.cell))
+  return (p.x - nx) ** 2 + (p.y - ny) ** 2 < PR * PR
+}
+
+/** A hurry-up block lands on cell `i`: it crushes whoever stands there and wipes the cell. */
+function drop(w: World, i: number, ev: Ev[]): void {
+  if (w.tiles[i] === PILLAR) return
+  w.tiles[i] = PILLAR
+  w.hidden[i] = -1
+  w.items = w.items.filter((it) => it.i !== i)
+  w.flames = w.flames.filter((f) => f.i !== i)
+  for (const b of w.bombs)
+    if (b.i === i) {
+      const owner = w.players[b.owner]
+      if (owner && owner.bombsOut > 0) owner.bombsOut--
+    }
+  w.bombs = w.bombs.filter((b) => b.i !== i)
+  const cc = centreOf(i % BOARD.cols, Math.floor(i / BOARD.cols))
+  ev.push({ k: 'drop', x: cc.x, y: cc.y })
+  if (w.frozen) return
+  for (const p of w.players) {
+    if (!p.alive) continue
+    const here = cellOf(p.x, p.y)
+    if (idx(here.c, here.r) !== i) continue
+    p.alive = false
+    p.deadT = w.t
+    ev.push({ k: 'death', x: p.x, y: p.y, side: p.side })
+  }
 }
 
 function applyItem(p: Player, kind: number): void {

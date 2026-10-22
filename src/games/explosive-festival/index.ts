@@ -1,4 +1,5 @@
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { floatFor } from '../../core/fx/fx.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, shade } from '../../core/render/palette.ts'
 import {
@@ -10,7 +11,7 @@ import {
 } from '../../engines/arena/index.ts'
 import { roundEnd, roundsNew, roundsStep, type Rounds } from '../../engines/reflex/index.ts'
 import { BombBot } from './bot.ts'
-import { renderBoard } from './render.ts'
+import { type Look, renderBoard } from './render.ts'
 import {
   BOARD_BOTTOM,
   type Drive,
@@ -35,6 +36,9 @@ class Festival extends BaseGame<State> {
   private controls: SideControl[] = []
   private bots: (BombBot | null)[] = []
   private ev: Ev[] = []
+  // Cosmetic only (never synced): last step's positions for interpolation.
+  private prev: ({ x: number; y: number } | undefined)[] = []
+  private look: Look = { alpha: 1, prev: this.prev }
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -59,8 +63,10 @@ class Festival extends BaseGame<State> {
   protected step(dt: number): void {
     const s = this.s
     const { ctx } = this
+    this.remember()
     if (roundsStep(s.rounds, this.time, 2.4)) {
       s.w = newWorld(ctx.rng)
+      this.prev.length = 0
       ctx.audio.play('go')
       return
     }
@@ -94,32 +100,52 @@ class Festival extends BaseGame<State> {
     if (!playing) return
     const w = roundWinner(s.w)
     if (w === null) return
+    // Decided: bombs still ticking can't knock out the survivor any more.
+    s.w.frozen = true
     if (roundEnd(s.rounds, w, this.time, ctx.names) && w !== 'draw') {
       ctx.fx.confetti(w)
+      ctx.fx.flash(SIDE[w].main, 0.3)
       this.finish(w, { score: [s.rounds.wins[0], s.rounds.wins[1]], delay: 2.4 })
-    } else ctx.audio.play(w === 'draw' ? 'draw' : 'score')
+    } else {
+      ctx.audio.play(w === 'draw' ? 'draw' : 'score')
+      if (w !== 'draw') floatFor(ctx.fx, w, 'Round!')
+    }
+  }
+
+  /** Last step's positions, for interpolation (cosmetic, outside the state). */
+  private remember(): void {
+    for (const p of this.s.w.players) {
+      const q = this.prev[p.id]
+      if (q) {
+        q.x = p.x
+        q.y = p.y
+      } else this.prev[p.id] = { x: p.x, y: p.y }
+    }
   }
 
   protected override afterEnd(dt: number): void {
+    this.remember()
     this.ev.length = 0
     stepWorld(this.s.w, [], dt, this.ev)
     for (const e of this.ev) this.feedback(e)
   }
 
   private feedback(e: Ev): void {
-    const { fx, audio, rng } = this.ctx
+    const { fx, audio } = this.ctx
     switch (e.k) {
       case 'place':
-        audio.play('place', 0.9 + rng.next() * 0.2)
+        audio.play('place', 0.9 + Math.random() * 0.2)
         fx.puff(e.x, e.y + 20, 'rgba(255,255,255,0.45)', 4)
         fx.ring(e.x, e.y, SIDE[e.side].light, 60)
         break
-      case 'boom':
-        audio.play('explode', 1.1 + rng.next() * 0.1)
-        audio.buzz(30)
+      case 'boom': {
+        // A bigger cross (more range, more cells) is a deeper, harder boom.
+        const k = Math.min(1, (e.n - 1) / 16)
+        audio.play('explode', 1.2 - k * 0.35 + Math.random() * 0.1)
+        audio.buzz(20 + Math.round(k * 40))
         fx.burst(e.x, e.y, C.orange, {
           count: 14 + e.n * 3,
-          speed: 520,
+          speed: 460 + k * 260,
           size: 14,
           life: 0.5,
           gravity: 0,
@@ -133,10 +159,21 @@ class Festival extends BaseGame<State> {
           gravity: -60,
           drag: 2.5,
         })
-        fx.ring(e.x, e.y, C.yellow, 130)
-        fx.flash(C.orange, 0.12)
-        fx.shake(0.34)
-        fx.stop(3)
+        fx.ring(e.x, e.y, C.yellow, 110 + k * 120)
+        fx.flash(C.orange, 0.08 + k * 0.1)
+        fx.shake(0.25 + k * 0.3)
+        fx.stop(2 + Math.round(k * 3))
+        break
+      }
+      case 'hurry':
+        audio.play('buzz')
+        fx.flash('#ff3b2f', 0.2)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Hurry up!')
+        break
+      case 'drop':
+        audio.play('thud', 0.8 + Math.random() * 0.1)
+        fx.puff(e.x, e.y + 20, 'rgba(200,190,210,0.6)', 5)
+        fx.shake(0.12)
         break
       case 'crate':
         audio.play('thud', 1.3)
@@ -190,8 +227,15 @@ class Festival extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderBoard(g, this.s, this.time, { names: this.ctx.names, over: this.over })
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    // The guest has no previous step to blend from.
+    this.prev.length = 0
+  }
+
+  render(g: Draw, alpha: number): void {
+    this.look.alpha = alpha
+    renderBoard(g, this.s, this.time, { names: this.ctx.names, over: this.over }, this.look)
   }
 }
 

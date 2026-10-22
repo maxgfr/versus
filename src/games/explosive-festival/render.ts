@@ -12,6 +12,7 @@ import {
   blastCells,
   CRATE,
   FLAME_T,
+  hurryNext,
   ITEM_ICON,
   PILLAR,
   type Player,
@@ -159,7 +160,10 @@ function bomb(g: Draw, i: number, t: number, owner: Side | undefined, now: numbe
   const left = clamp01(t / BOMB_T)
   const urgent = 1 - left
   const beat = Math.sin(now * (6 + urgent * 26))
-  const pulse = 1 + urgent * 0.12 * beat
+  // Plops down with an overshoot, then swells harder as the fuse runs out.
+  const age = BOMB_T - t
+  const plop = age < 0.25 ? 0.4 + 0.6 * backOut(age / 0.25) : 1
+  const pulse = (1 + urgent * 0.12 * beat) * plop
   const flash = urgent > 0.6 && beat > 0.4
   g.shadow(cx + 4, cy + 26, 28, 9, 0.38)
   if (owner !== undefined) g.ring(cx, cy + 18, 30, alpha(SIDE[owner].main, 0.7), 5)
@@ -182,6 +186,20 @@ function bomb(g: Draw, i: number, t: number, owner: Side | undefined, now: numbe
     const spark = 0.5 + 0.5 * Math.sin(now * 40 + i)
     g.star(fx, fy, 12 + spark * 6, C.yellow, 6, 0.4, now * 8)
     g.circle(fx, fy, 4, '#ffffff')
+  })
+}
+
+const backOut = (k: number): number => 1 + 2.70158 * (k - 1) ** 3 + 1.70158 * (k - 1) ** 2
+
+/** Hurry-up: the next cells a block will fall on blink red, the very next one hardest. */
+function hurryWarn(g: Draw, w: World): void {
+  const cs = BOARD.cell
+  const next = hurryNext(w, 4)
+  next.forEach((i, k) => {
+    const { x, y } = cellXY(i)
+    const blink = 0.5 + 0.5 * Math.sin(g.t * 14 - k)
+    g.rrect(x + 4, y + 4, cs - 8, cs - 8, 14, alpha('#ff3b2f', (0.35 - k * 0.07) * blink))
+    if (k < 2) g.ring(x + cs / 2, y + cs / 2, cs * (0.25 + 0.2 * blink), alpha('#ffffff', 0.4), 4)
   })
 }
 
@@ -327,26 +345,41 @@ export interface View {
   over: boolean
 }
 
+/** Cosmetic extras from the game (never in the state). */
+export interface Look {
+  alpha: number
+  /** Last step's position of each player (by id), for interpolation. */
+  prev: readonly ({ x: number; y: number } | undefined)[]
+}
+
 /** The festival board: strips, ground, bunting, danger wash, blocks, pick-ups, bombs, fire, players, controls and HUD. */
-export function renderBoard(g: Draw, s: State, now: number, v: View): void {
+export function renderBoard(g: Draw, s: State, now: number, v: View, look: Look): void {
   const w = s.w
   const r = s.rounds
+  const shown = w.players.map((p) => {
+    const q = look.prev[p.id]
+    return q && p.alive
+      ? { ...p, x: q.x + (p.x - q.x) * look.alpha, y: q.y + (p.y - q.y) * look.alpha }
+      : p
+  })
   g.fillView(C.ink)
   drawStrip(g, BOARD.y0 - 20, BOARD_BOTTOM + 20)
   ground(g)
   danger(g, w, w.t)
+  hurryWarn(g, w)
   blocks(g, w, w.t)
   for (const it of w.items) item(g, it.i, it.k, w.t)
   for (const b of w.bombs) bomb(g, b.i, b.t, w.players[b.owner]?.side, w.t)
   const champ = v.over && r.last !== 'draw' ? r.last : null
-  for (const p of w.players) if (!p.alive) player(g, p, w.t, false)
+  for (const p of shown) if (!p.alive) player(g, p, w.t, false)
   flames(g, w, w.t)
-  const alive = w.players.filter((p) => p.alive).sort((a, b) => a.y - b.y)
+  const alive = shown.filter((p) => p.alive).sort((a, b) => a.y - b.y)
   for (const p of alive) player(g, p, w.t, champ === p.side)
   bunting(g, BOARD.y0 - 20, w.t, true)
   bunting(g, BOARD_BOTTOM + 20, w.t, false)
   g.vignette(0.3)
-  for (const c of s.ctl) controls(g, c)
+  // Online, each phone shows only its own player's stick and button.
+  for (const c of s.ctl) if (g.viewer === null || c.side === g.viewer) controls(g, c)
   // Between stick and button: round pips, pocket stats, then the name pill at the edge.
   namePill(g, 0, v.names[0], { x: HUD_X, inset: 40, active: champ === 0 })
   namePill(g, 1, v.names[1], { x: W - HUD_X, inset: 40, active: champ === 1 })
@@ -363,6 +396,10 @@ export function renderBoard(g: Draw, s: State, now: number, v: View): void {
       alpha: Math.min(1, (now - r.at) * 4),
       color: col,
     })
-  } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1)
-    banner(g, undefined, `Round ${r.round}`, MID, { size: 64 })
+  } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1) {
+    // Pops in, then fades as the players set off.
+    const k = now - r.at
+    const size = 64 * backOut(Math.min(1, k / 0.3))
+    banner(g, undefined, `Round ${r.round}`, MID, { size, alpha: Math.min(1, (1.1 - k) / 0.3) })
+  }
 }
