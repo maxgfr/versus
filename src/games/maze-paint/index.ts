@@ -6,7 +6,7 @@ import { Rng } from '../../core/rng.ts'
 import { MID } from '../../core/stage.ts'
 import { fmtTime, newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
 import { toLocal } from '../../engines/runner/frame.ts'
-import { PACE, Pilot, POWER } from './bot.ts'
+import { PACE, Pilot, POWER, READ } from './bot.ts'
 import { CLEAR_SECONDS, drawPanel, layout, type PanelView, resetRect } from './render.ts'
 import {
   countPainted,
@@ -14,7 +14,7 @@ import {
   DY,
   generateLevel,
   impactOf,
-  LEVEL_SIZES,
+  levelSizes,
   type Level,
   paintTime,
   raceVerdict,
@@ -24,6 +24,7 @@ import {
   startPaint,
   stuck,
   swipePower,
+  twistOf,
 } from './rules.ts'
 
 /** A match is first to N round wins; each round is a whole run through the levels. */
@@ -161,6 +162,9 @@ class MazePaint extends PuzzleRace<State> {
   private alpha = 0
 
   protected setup(): State {
+    // Mazes are sized by difficulty, so each difficulty keeps its own record.
+    const d = this.ctx.difficulty
+    this.recordId = d === 'normal' ? 'maze-paint' : `maze-paint-${d}`
     this.load(0)
     const first = this.levels[0] as Level
     return {
@@ -183,7 +187,9 @@ class MazePaint extends PuzzleRace<State> {
   /** The levels of a round, carved from its seed: both phones get the same ones. */
   private load(round: number): void {
     const rng = new Rng(roundSeed(this.ctx.seed, round))
-    this.levels = LEVEL_SIZES.map((n) => generateLevel(rng, n))
+    const d = this.ctx.difficulty
+    const twist = twistOf(d, round)
+    this.levels = levelSizes(d, round).map((n) => generateLevel(rng, n, twist))
     this.loaded = round
   }
 
@@ -339,7 +345,9 @@ class MazePaint extends PuzzleRace<State> {
     if (p.stopAt >= 0 && this.time >= p.stopAt) this.settle(side)
     if (this.isBot(side)) {
       p.botT += dt
-      if (p.botT >= PACE[this.ctx.difficulty] && this.time >= p.busyUntil) {
+      // A fresh level is read before the first roll, as a person would.
+      const reading = p.moves === 0 && this.time < p.levelAt + READ[this.ctx.difficulty]
+      if (!reading && p.botT >= PACE[this.ctx.difficulty] && this.time >= p.busyUntil) {
         p.botT = 0
         const m = this.pilot(side).decide(p.pos, p.painted)
         if (m === 'reset') this.restart(side)

@@ -3,11 +3,15 @@ import type { Rng } from '../../core/rng.ts'
 import { type Level, roll, stuck } from './rules.ts'
 
 /** Seconds between the computer's rolls. */
-export const PACE: Record<Difficulty, number> = { easy: 1.3, normal: 0.85, hard: 0.5 }
+export const PACE: Record<Difficulty, number> = { easy: 1.5, normal: 0.62, hard: 0.42 }
+/** Seconds the computer studies a fresh level before its first roll, as a person would. */
+export const READ: Record<Difficulty, number> = { easy: 1.4, normal: 0.7, hard: 0.35 }
 /** How hard the computer swipes (0..1): a harder swipe rolls faster. */
-export const POWER: Record<Difficulty, number> = { easy: 0.15, normal: 0.45, hard: 0.8 }
+export const POWER: Record<Difficulty, number> = { easy: 0.1, normal: 0.6, hard: 0.9 }
 /** Chance per roll that the computer rolls at random instead of following its plan. */
-const SLIP: Record<Difficulty, number> = { easy: 0.2, normal: 0.04, hard: 0 }
+const SLIP: Record<Difficulty, number> = { easy: 0.25, normal: 0.02, hard: 0 }
+/** Breadth-first budget for the fewest-rolls plan; easy just follows the first plan it finds. */
+const SHORTEST: Record<Difficulty, number> = { easy: 0, normal: 8000, hard: 40000 }
 /** Expansions allowed per plan; past it the generator's own solution is used. */
 const BUDGET = 40000
 
@@ -20,10 +24,10 @@ interface Node {
   d: number
 }
 
-// Painted tiles as two 26-bit words (levels have at most 49 tiles).
-const bit = (t: number): [number, number] => (t < 26 ? [1 << t, 0] : [0, 1 << (t - 26)])
+// Painted tiles as two 32-bit words (levels have at most 64 tiles).
+const bit = (t: number): [number, number] => (t < 32 ? [1 << t, 0] : [0, 1 << (t - 32)])
 const isSet = (lo: number, hi: number, t: number): boolean =>
-  t < 26 ? (lo & (1 << t)) !== 0 : (hi & (1 << (t - 26))) !== 0
+  t < 32 ? (lo & (1 << t)) !== 0 : (hi & (1 << (t - 32))) !== 0
 
 /**
  * Roll sequence from `pos` that paints every remaining floor tile, or null when
@@ -166,9 +170,9 @@ export function greedy(level: Level, pos: number, painted: readonly number[]): n
 /**
  * The computer's hands for one level. `decide` returns the next roll direction,
  * or 'reset' when it has walked into a dead end (the level is not solvable from
- * here, so the player restarts it, as a person would). Hard plays the fewest
- * rolls; easy and normal follow the first full plan they find and slip now and
- * then. Out of search budget but not lost, it keeps painting greedily.
+ * here, so the player restarts it, as a person would). Hard searches for the
+ * fewest rolls, normal too within a smaller budget; easy follows the first
+ * plan it finds and slips. Out of search budget but not lost, it paints greedily.
  */
 export class Pilot {
   private queue: number[] = []
@@ -187,8 +191,9 @@ export class Pilot {
   decide(pos: number, painted: readonly number[]): number | 'reset' {
     if (this.queue.length === 0) {
       const found =
-        (this.difficulty === 'hard' ? shortest(this.level, pos, painted) : null) ??
-        plan(this.level, pos, painted)
+        (SHORTEST[this.difficulty] > 0
+          ? shortest(this.level, pos, painted, SHORTEST[this.difficulty])
+          : null) ?? plan(this.level, pos, painted)
       if (found && found.length > 0) this.queue = found
       else if (pos === this.level.start) this.queue = this.level.solution.slice()
       else if (stuck(this.level, pos, painted)) return 'reset'

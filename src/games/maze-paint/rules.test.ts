@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { greedy, plan, Pilot, shortest } from './bot.ts'
+import { greedy, PACE, plan, Pilot, POWER, READ, shortest } from './bot.ts'
 import {
   countPainted,
   generateLevel,
   impactOf,
   LEVEL_SIZES,
+  levelSizes,
+  MAX_SIZE,
   type Level,
   neighbour,
   paintTime,
@@ -17,6 +19,7 @@ import {
   startPaint,
   stuck,
   swipePower,
+  twistOf,
 } from './rules.ts'
 
 describe('match rounds', () => {
@@ -308,5 +311,98 @@ describe('stuck', () => {
       const g = generateLevel(rng, n)
       expect(stuck(g, g.start, startPaint(g))).toBe(false)
     }
+  })
+})
+
+describe('difficulty and ramp', () => {
+  it('sizes mazes by difficulty and grows them round by round, capped', () => {
+    expect(levelSizes('normal', 0)).toEqual(LEVEL_SIZES)
+    expect(levelSizes('easy', 0)).toEqual([4, 5, 6])
+    expect(levelSizes('hard', 0)).toEqual([6, 7, 8])
+    expect(levelSizes('normal', 1)).toEqual([6, 7, 8])
+    expect(levelSizes('easy', 5)).toEqual([6, 7, 8])
+    expect(Math.max(...levelSizes('hard', 9))).toBe(MAX_SIZE)
+  })
+
+  it('twists more on hard and as rounds go on; normal round one carves as before', () => {
+    expect(twistOf('normal', 0)).toBe(0)
+    expect(twistOf('hard', 0)).toBeGreaterThan(0)
+    expect(twistOf('easy', 2)).toBeGreaterThan(twistOf('easy', 1))
+    expect(twistOf('hard', 9)).toBe(1)
+    expect(generateLevel(new Rng(42), 6, 0)).toEqual(generateLevel(new Rng(42), 6))
+  })
+
+  it('twisted and largest mazes are still solvable by their recorded solution', () => {
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const rng = new Rng(seed)
+      for (const n of [4, 6, MAX_SIZE]) {
+        for (const twist of [0.35, 1]) {
+          const lv = generateLevel(rng, n, twist)
+          const { painted, moved } = replay(lv, lv.solution)
+          expect(moved.every(Boolean)).toBe(true)
+          expect(countPainted(painted)).toBe(lv.floors)
+        }
+      }
+    }
+  })
+
+  it('twistier mazes take more turns to solve', () => {
+    let plain = 0
+    let twisty = 0
+    for (let seed = 0; seed < 30; seed++) {
+      plain += generateLevel(new Rng(seed), 7, 0).solution.length
+      twisty += generateLevel(new Rng(seed), 7, 1).solution.length
+    }
+    expect(twisty).toBeGreaterThan(plain)
+  })
+
+  /**
+   * Seconds a bot needs for a round's three mazes: reading each one, then each
+   * decision waits for its pace and its roll; a dead end costs the restart.
+   */
+  function race(d: Difficulty, seed: number, sizes: number[]): number {
+    const rng = new Rng(seed)
+    const levels = sizes.map((n) => generateLevel(rng, n, 0.35))
+    const hands = new Rng(seed * 3 + 1)
+    let t = 0
+    for (const lv of levels) {
+      t += READ[d]
+      const pilot = new Pilot(lv, d, hands)
+      let pos = lv.start
+      let painted = startPaint(lv)
+      for (let guard = 0; countPainted(painted) < lv.floors && guard < 5000; guard++) {
+        const m = pilot.decide(pos, painted)
+        if (m === 'reset') {
+          t += 5 + 0.35
+          pos = lv.start
+          painted = startPaint(lv)
+          pilot.reset()
+          continue
+        }
+        const r = roll(lv, pos, m)
+        t += Math.max(PACE[d], r.path.length ? rollSeconds(r.path.length, POWER[d]) : 0.12)
+        for (const x of r.path) painted[x] = 1
+        pos = r.end
+      }
+      expect(countPainted(painted)).toBe(lv.floors)
+    }
+    return t
+  }
+
+  it('hard beats easy, and normal beats easy, on most seeded mazes', () => {
+    let hard = 0
+    let normal = 0
+    for (const seed of [71, 72, 73, 74, 75]) {
+      const sizes = levelSizes('normal', 1)
+      const easy = race('easy', seed, sizes)
+      if (race('hard', seed, sizes) < easy) hard++
+      if (race('normal', seed, sizes) < easy) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(4)
+    expect(normal).toBeGreaterThanOrEqual(4)
+  })
+
+  it('the hard bot clears its own biggest mazes within bounded steps', () => {
+    for (const seed of [81, 82]) race('hard', seed, levelSizes('hard', 2))
   })
 })

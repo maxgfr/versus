@@ -14,8 +14,30 @@ import type { Rng } from '../../core/rng.ts'
 /** Directions: 0 up, 1 right, 2 down, 3 left, in the player's own frame. */
 export const DX = [0, 1, 0, -1]
 export const DY = [-1, 0, 1, 0]
-/** One maze per level, small to large. */
+/** One maze per level, small to large (the normal run's first round). */
 export const LEVEL_SIZES = [5, 6, 7]
+/** Largest maze: the bot's painted-tile masks hold 64 tiles. */
+export const MAX_SIZE = 8
+
+/**
+ * Maze sizes of a round: easy starts a size smaller, hard a size bigger, and
+ * every round after the first grows them by one more (two at most), up to
+ * `MAX_SIZE`. Both players always get the same mazes.
+ */
+export function levelSizes(difficulty: 'easy' | 'normal' | 'hard', round: number): number[] {
+  const shift = difficulty === 'easy' ? -1 : difficulty === 'hard' ? 1 : 0
+  const grow = Math.min(2, Math.max(0, Math.floor(round)))
+  return LEVEL_SIZES.map((n) => Math.min(MAX_SIZE, n + shift + grow))
+}
+
+/**
+ * How twisty a round's mazes are, 0..1: carved runs get shorter (more corners
+ * and dead ends) as rounds go on, and on hard.
+ */
+export function twistOf(difficulty: 'easy' | 'normal' | 'hard', round: number): number {
+  const base = difficulty === 'hard' ? 0.35 : 0
+  return Math.min(1, base + Math.max(0, Math.floor(round)) * 0.3)
+}
 
 /**
  * Seed of round `round` (0-based) of a match. Round 0 is the match seed itself,
@@ -196,8 +218,12 @@ function pathTo(prev: Map<number, { from: number; d: number }>, tile: number): n
   return dirs.reverse()
 }
 
-/** Carve a solvable level of size `n` from `rng`. */
-export function generateLevel(rng: Rng, n: number): Level {
+/**
+ * Carve a solvable level of size `n` from `rng`. `twist` (0..1) shortens the
+ * carved runs: more turns, a twistier maze. 0 carves exactly as it always did.
+ */
+export function generateLevel(rng: Rng, n: number, twist = 0): Level {
+  const maxRun = Math.max(1, Math.round((n - 1) * (1 - 0.6 * Math.max(0, Math.min(1, twist)))))
   const N = n * n
   const st: number[] = Array<number>(N).fill(UNKNOWN)
   const start = rng.int(0, N - 1)
@@ -218,7 +244,7 @@ export function generateLevel(rng: Rng, n: number): Level {
       cur = nx
       nx = neighbour(n, cur, l.d)
     }
-    const run = rng.int(1, n - 1)
+    const run = rng.int(1, maxRun)
     for (let k = 0; k < run && nx >= 0 && st[nx] === UNKNOWN; k++) {
       st[nx] = FLOOR
       floors++
