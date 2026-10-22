@@ -16,6 +16,7 @@ import {
   nextRound,
   winner,
   WIND_MAX,
+  windScale,
 } from './rules.ts'
 
 describe('aim engine', () => {
@@ -162,5 +163,14 @@ describe('cannon duel: edge cases', () => {
     expect(s.hitAt.every((t) => t === -1)).toBe(true)
     expect(s.wins).toEqual([0, 1])
     expect(s.turn).toBe(1)
+  })
+})
+
+describe('cannon duel: the wind picks up', () => {
+  it('half the range at first, the full range by the tenth shell, never more', () => {
+    expect(windScale(0)).toBe(0.5)
+    expect(windScale(4)).toBeGreaterThan(windScale(2))
+    expect(windScale(10)).toBe(1)
+    expect(windScale(40)).toBe(1)
   })
 })

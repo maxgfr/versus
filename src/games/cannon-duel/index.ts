@@ -24,6 +24,7 @@ import {
   type State,
   winner,
   WIND_MAX,
+  windScale,
 } from './rules.ts'
 
 const EVERYWHERE = { x: -600, y: -600, w: 2200, h: 3000 }
@@ -56,12 +57,14 @@ class CannonDuel extends TurnGame<State> {
   protected setup(): State {
     // The player whose turn it is may drag anywhere on the table.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind())
+    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.rollWind(0))
   }
 
-  private rollWind(): number {
+  /** The wind picks up as the duel drags on (`shots` fired this round), so long fights get tense. */
+  private rollWind(shots = this.s.shots[0] + this.s.shots[1]): number {
     const rng = this.ctx.rng
-    return rng.chance(0.15) ? 0 : rng.range(-WIND_MAX, WIND_MAX)
+    const max = WIND_MAX * windScale(shots)
+    return rng.chance(0.15) ? 0 : rng.range(-max, max)
   }
 
   protected override busy(): boolean {
@@ -107,7 +110,7 @@ class CannonDuel extends TurnGame<State> {
   /** The other side opens the next round; the computer picks its first shot straight away. */
   private startRound(): void {
     const starter = other(this.s.starter)
-    nextRound(this.s, starter, this.rollWind())
+    nextRound(this.s, starter, this.rollWind(0))
     this.botShot = this.isBot(starter)
       ? choose(this.s, starter, this.ctx.difficulty, this.ctx.rng)
       : null

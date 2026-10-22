@@ -201,6 +201,11 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
   return ev
 }
 
+/** Share of the full wind range in play after `shots` shells this round: half at first, all of it by the tenth. */
+export function windScale(shots: number): number {
+  return Math.min(1, 0.5 + shots * 0.05)
+}
+
 export function coreHp(s: State, side: Side): number {
   return s.blocks.find((b) => b.kind === 'core' && b.side === side)?.hp ?? 0
 }

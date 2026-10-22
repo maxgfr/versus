@@ -6,8 +6,8 @@ import { BALL, cannonOf, coreOf, type State } from './rules.ts'
 
 const ERR: Record<Difficulty, { angle: number; power: number; wind: number }> = {
   easy: { angle: 0.05, power: 0.045, wind: 0.5 },
-  normal: { angle: 0.03, power: 0.025, wind: 0.8 },
-  hard: { angle: 0.014, power: 0.012, wind: 1 },
+  normal: { angle: 0.02, power: 0.018, wind: 0.9 },
+  hard: { angle: 0.009, power: 0.008, wind: 1 },
 }
 
 /** Aim at the rival core by simulation (wind as well as the bot can read it), then miss a little. */
