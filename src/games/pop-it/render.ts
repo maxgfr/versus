@@ -155,6 +155,10 @@ export function countChip(g: Draw, left: number, now: number, side?: Side): void
 }
 
 /** The silicone pop-it: one rainbow slab, a band per row, every bubble a dome or a dimple. */
+/** Scratch for the per-row ripple: latest pop time and its column (no per-frame allocation). */
+const rowPopAt = new Float64Array(ROWS)
+const rowPopCol = new Int8Array(ROWS)
+
 export function drawTray(g: Draw, s: State, now: number): void {
   const { x, y, w, h } = TRAY
   g.shadow(W / 2, y + h + TRAY_DEPTH + 10, w * 0.5, 36, 0.45)
@@ -184,12 +188,28 @@ export function drawTray(g: Draw, s: State, now: number): void {
   g.rrect(x + 22, y + 24, w - 44, h - 44, TRAY_R - 20, undefined, alpha('#000000', 0.12), 5)
 
   const over = s.endAt >= 0
+  // The latest pop of each row sends a ripple through the bubbles left beside it.
+  rowPopAt.fill(-10)
+  for (let i = 0; i < BUBBLES; i++) {
+    const t = s.poppedAt[i] ?? -10
+    const r = rowOf(i)
+    if (s.popped[i] && t > (rowPopAt[r] ?? -10)) {
+      rowPopAt[r] = t
+      rowPopCol[r] = colOf(i)
+    }
+  }
   for (let i = 0; i < BUBBLES; i++) {
     const { x: bx, y: by } = bubbleCenter(i)
-    const color = ROW_COLORS[rowOf(i)] ?? C.white
+    const r = rowOf(i)
+    const color = ROW_COLORS[r] ?? C.white
     const back = over ? now - (s.endAt + refillTime(i)) : -1
     if (s.popped[i] === true && back < 0) drawDimple(g, bx, by, color, now - (s.poppedAt[i] ?? -10))
-    else drawDome(g, bx, by, color, back >= 0 ? back : 9)
+    else {
+      const d = Math.abs(colOf(i) - (rowPopCol[r] ?? 0))
+      const t = now - (rowPopAt[r] ?? -10) - d * 0.035
+      const jig = !over && t > 0 && t < 0.6 ? (0.09 / d) * Math.exp(-t * 8) * Math.sin(t * 34) : 0
+      drawDome(g, bx, by, color, back >= 0 ? back : 9, jig)
+    }
   }
 
   // Locked turn: the other rows go dark, the row in play glows.
@@ -223,7 +243,7 @@ export function drawTray(g: Draw, s: State, now: number): void {
 }
 
 /** A whole bubble: a glossy silicone dome in a darker socket. `age` > 0 springs it up (the refill wave). */
-export function drawDome(g: Draw, x: number, y: number, color: string, age: number): void {
+export function drawDome(g: Draw, x: number, y: number, color: string, age: number, jig = 0): void {
   const r = BUB_R
   const up = outBack(prog(age, 0, 0.3))
   g.circle(x, y + 2, r + 7, shade(color, -0.32))
@@ -254,8 +274,8 @@ export function drawDome(g: Draw, x: number, y: number, color: string, age: numb
       g.ellipse(-r * 0.34, -r * 0.4, r * 0.32, r * 0.18, alpha('#ffffff', 0.75), -0.6)
       g.circle(r * 0.32, r * 0.36, r * 0.1, alpha('#ffffff', 0.2))
     },
-    0.85 + 0.15 * up,
-    0.85 + 0.15 * up,
+    (0.85 + 0.15 * up) * (1 + jig),
+    (0.85 + 0.15 * up) * (1 - jig),
   )
 }
 

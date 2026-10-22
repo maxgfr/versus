@@ -2,7 +2,7 @@ import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { banner, pips } from '../../core/hud.ts'
-import { C, SIDE } from '../../core/render/palette.ts'
+import { C, SIDE, alpha } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import { TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
@@ -114,7 +114,7 @@ class PopIt extends TurnGame<State> {
   protected override botDelay(): number {
     const r = this.ctx.rng
     // Pops come quickly; the first look at the board takes a moment.
-    return this.plan ? 0.42 + r.range(0, 0.25) : 0.9 + r.range(0, 0.35)
+    return this.plan ? 0.3 + r.range(0, 0.18) : 0.55 + r.range(0, 0.3)
   }
 
   protected stepTurn(_dt: number, _tap: Ptr | undefined): void {
@@ -172,9 +172,19 @@ class PopIt extends TurnGame<State> {
     const { x, y } = bubbleCenter(i)
     const fx = this.ctx.fx
     const color = ROW_COLORS[rowOf(i)] ?? C.white
-    fx.burst(x, y, color, { count: 12, speed: 360, size: 11, life: 0.45, gravity: 300 })
+    // A run of pops in one turn builds up: each one snaps a little harder.
+    const k = Math.min(1, (s.pops - 1) / 5)
+    fx.burst(x, y, color, {
+      count: Math.round(10 + k * 8),
+      speed: 320 + k * 220,
+      size: 11,
+      life: 0.45,
+      gravity: 300,
+    })
     fx.burst(x, y, C.white, { count: 5, speed: 260, size: 6, life: 0.3, kind: 'spark' })
-    fx.shake(0.06)
+    fx.ring(x, y, alpha(color, 0.8), 70 + k * 40)
+    fx.shake(0.05 + k * 0.08)
+    this.ctx.audio.buzz(6 + Math.round(k * 8))
     // Each row has its own note, and each pop in a turn climbs a little higher.
     this.ctx.audio.play('pop', 0.8 + (ROWS - 1 - rowOf(i)) * 0.07 + s.pops * 0.03)
     if (bubblesLeft(s.popped) > 0) return
@@ -189,6 +199,7 @@ class PopIt extends TurnGame<State> {
     fx.flash(SIDE[winner].main, 0.3)
     fx.confetti(winner)
     this.ctx.audio.play('thud')
+    this.ctx.audio.buzz(45)
     if (s.wins[winner] < this.target) return
     // A single round keeps the plain result; a match shows its round wins.
     const note = `${this.ctx.names[side]} popped the last bubble`
@@ -279,8 +290,11 @@ class PopIt extends TurnGame<State> {
       const side = s.turn
       // The Done key of the player who just finished stays a moment, pressed in.
       const prev = other(side)
-      if (now - s.doneAt < 0.3) doneButton(g, prev, { pops: 1, now, turnAt: -10, doneAt: s.doneAt })
-      doneButton(g, side, { pops: s.pops, now, turnAt: s.turnAt, doneAt: -10 })
+      // Online, each phone shows only its own player's Done key.
+      const mine = (k: Side) => g.viewer === null || g.viewer === k
+      if (now - s.doneAt < 0.3 && mine(prev))
+        doneButton(g, prev, { pops: 1, now, turnAt: -10, doneAt: s.doneAt })
+      if (mine(side)) doneButton(g, side, { pops: s.pops, now, turnAt: s.turnAt, doneAt: -10 })
     }
     this.drawTurns(g, undefined, live)
     const since = now - s.roundAt

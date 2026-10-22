@@ -144,6 +144,35 @@ describe('pop it bot', () => {
     }
   })
 
+  it('normal plays the ending perfectly once few bubbles are left', () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const heaps = [2, 0, 3, 1, 0, 2]
+      expect(mistereWin(heaps)).toBe(true)
+      const m = choose(heaps, 'normal', new Rng(seed))
+      const next = heaps.slice()
+      next[m.row] = (next[m.row] ?? 0) - m.count
+      expect(mistereWin(next)).toBe(false)
+    }
+  })
+
+  it('hard, when lost, pops one bubble from the fullest row to keep it complicated', () => {
+    // Two equal rows of four: the rival mirrors every move, so the player to move has lost.
+    const lost = [4, 4, 0, 0, 0, 0]
+    expect(mistereWin(lost)).toBe(false)
+    expect(choose(lost, 'hard', new Rng(1))).toEqual({ row: 0, count: 1 })
+  })
+
+  it('normal beats easy more often than not, and hard beats normal', () => {
+    let normal = 0
+    let hard = 0
+    for (let seed = 1; seed <= 40; seed++) {
+      if (play('normal', 'easy', seed).winner === 0) normal++
+      if (play('hard', 'normal', seed).winner === 0) hard++
+    }
+    expect(normal / 40).toBeGreaterThan(0.6)
+    expect(hard / 40).toBeGreaterThan(0.7)
+  })
+
   it('finishes whole games bot vs bot for every pairing, and hard wins more than easy', () => {
     const levels: Difficulty[] = ['easy', 'normal', 'hard']
     for (const a of levels) for (const b of levels) play(a, b, 5)
@@ -172,7 +201,7 @@ function ctxFor(seed: number, mode: GameContext['mode'], bots: [boolean, boolean
     stage: {} as Stage,
     input: new Input({} as Stage, mode, 0),
     fx: new Fx(),
-    audio: { play: () => {} } as unknown as GameContext['audio'],
+    audio: { play: () => {}, buzz: () => {} } as unknown as GameContext['audio'],
     rng: new Rng(seed),
     mode,
     difficulty: 'normal',
