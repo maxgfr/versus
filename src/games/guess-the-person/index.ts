@@ -56,8 +56,8 @@ export interface State extends Round {
 }
 
 /** The answer bubble shows alone for this long before the faces start to fall. */
-const ANSWER_DELAY = 0.95
-const FLIP_STEP = 0.075
+const ANSWER_DELAY = 0.75
+const FLIP_STEP = 0.065
 /** Seconds the ending of a round shows before the next round (or the result) comes. */
 const END_DELAY = 2.4
 
@@ -101,6 +101,13 @@ class GuessThePerson extends BaseGame<State> {
   private peekAt: [number, number] = [-10, -10]
   /** Scheduled flip sounds, in game time. */
   private flipSounds: number[] = []
+  /** Effects timed to land later (host side; the guest gets them as fx). */
+  private queue: { at: number; run: () => void }[] = []
+
+  private later(at: number, run: () => void): void {
+    this.queue.push({ at, run })
+    this.queue.sort((a, b) => a.at - b.at)
+  }
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -165,6 +172,8 @@ class GuessThePerson extends BaseGame<State> {
   }
 
   private playFlips(): void {
+    while (this.queue.length && (this.queue[0]?.at ?? Infinity) <= this.time)
+      this.queue.shift()?.run()
     while (this.flipSounds.length && (this.flipSounds[0] ?? Infinity) <= this.time) {
       this.flipSounds.shift()
       this.ctx.audio.play('flip', 0.9 + Math.random() * 0.25)
@@ -242,6 +251,7 @@ class GuessThePerson extends BaseGame<State> {
     fx.burst(at.x, at.y, r.yes ? C.green : C.redLight, { count: 12, speed: 320, size: 9 })
     this.ctx.audio.play('click', 1.1)
     this.ctx.audio.play(r.yes ? 'coin' : 'thud', r.yes ? 1 : 0.9)
+    this.ctx.audio.buzz(r.yes ? 12 : 8)
     const last = Math.max(0, r.flipped.length - 1) * FLIP_STEP
     s.last = { side, q, yes: r.yes, at: this.time, hold: ANSWER_DELAY + 0.05 }
     r.flipped.forEach((i, k) => {
@@ -250,7 +260,15 @@ class GuessThePerson extends BaseGame<State> {
       this.flipSounds.push(t)
     })
     if (r.flipped.length === 0) fx.float('No faces fall', at.x, at.y - 90, C.white, 40, side)
-    s.resolveAt = this.time + ANSWER_DELAY + last + 0.7
+    // A big cascade earns a cheer as it lands.
+    if (r.flipped.length >= 8) {
+      const t = this.time + ANSWER_DELAY + last
+      this.later(t, () => {
+        fx.float(`−${r.flipped.length}`, at.x, at.y - 90, SIDE[side].light, 56, side)
+        this.ctx.audio.play('powerup', 1.1)
+      })
+    }
+    s.resolveAt = this.time + ANSWER_DELAY + last + 0.5
     s.guess = false
   }
 
@@ -271,6 +289,7 @@ class GuessThePerson extends BaseGame<State> {
       fx.shake(0.4)
       fx.confetti(side)
       this.ctx.audio.play('score')
+      this.ctx.audio.buzz(40)
       this.settle(side)
       return
     }
@@ -280,6 +299,7 @@ class GuessThePerson extends BaseGame<State> {
     fx.flash(C.red, 0.25)
     fx.shake(0.5)
     this.ctx.audio.play('buzz')
+    this.ctx.audio.buzz(30)
     fx.confetti(other(side))
     this.settle(other(side))
   }
@@ -312,6 +332,12 @@ class GuessThePerson extends BaseGame<State> {
     return { active: false }
   }
 
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.queue = []
+    this.flipSounds = []
+  }
+
   render(g: Draw): void {
     const s = this.s
     const now = this.time
@@ -323,7 +349,10 @@ class GuessThePerson extends BaseGame<State> {
       const active = live && s.turn === side
       renderBoard(g, s, now, side, { active, guessing: active && s.guess })
     }
+    // Online, each phone draws only its own player's question chips and Guess button.
+    const mine = (side: Side) => g.viewer === null || g.viewer === side
     for (const side of [0, 1] as Side[]) {
+      if (!mine(side)) continue
       const active = live && s.turn === side
       renderChips(g, s, now, side, active && !s.guess, active && s.guess)
     }
@@ -340,7 +369,7 @@ class GuessThePerson extends BaseGame<State> {
         now,
       })
       renderCount(g, this.ctx.stage, s, side, now)
-      renderGuessButton(g, this.ctx.stage, side, turn, turn && s.guess)
+      if (mine(side)) renderGuessButton(g, this.ctx.stage, side, turn, turn && s.guess)
     }
     renderEnding(g, s, now)
     if (this.target > 1) {

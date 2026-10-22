@@ -98,7 +98,7 @@ describe('guess the person rules', () => {
     expect(m).toEqual({ kind: 'guess', i: r.secret[1] })
   })
 
-  it('hard asks the question that splits its candidates most evenly', () => {
+  it('hard asks one of the most even splits (it looks a question further to break ties)', () => {
     const r = roundFor(21)
     const rng = new Rng(2)
     const cands = candidates(r, 0)
@@ -111,15 +111,48 @@ describe('guess the person rules', () => {
     for (let k = 0; k < 10; k++) {
       const m = choose(r, 0, 'hard', rng)
       expect(m.kind).toBe('ask')
-      if (m.kind === 'ask') expect(balance(m.q)).toBe(best)
+      if (m.kind === 'ask') expect(balance(m.q)).toBeLessThanOrEqual(best + 2)
     }
+  })
+
+  it('normal and hard name a face at once when the rival is down to one; easy does not see it', () => {
+    const r = roundFor(33)
+    for (let i = 0; i < FACES; i++) if (i !== r.secret[0]) r.down[1][i] = true
+    expect(choose(r, 0, 'hard', new Rng(1)).kind).toBe('guess')
+    expect(choose(r, 0, 'normal', new Rng(1)).kind).toBe('guess')
+    expect(choose(r, 0, 'easy', new Rng(1)).kind).toBe('ask')
+  })
+
+  /** A whole round by the rules, two computers taking turns; returns who wins it. */
+  const duel = (a: Difficulty, b: Difficulty, seed: number): Side => {
+    const r = roundFor(seed)
+    const rng = new Rng(seed * 7)
+    let turn: Side = seed % 2 === 0 ? 0 : 1
+    for (let n = 0; n < 60; n++) {
+      const m = choose(r, turn, turn === 0 ? a : b, rng)
+      if (m.kind === 'guess') return guess(r, turn, m.i) ? turn : turn === 0 ? 1 : 0
+      ask(r, turn, m.q)
+      turn = turn === 0 ? 1 : 0
+    }
+    throw new Error('no guess')
+  }
+
+  it('hard beats easy and normal beats easy most of the time, either side opening', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 1; seed <= 60; seed++) {
+      if (duel('hard', 'easy', seed) === 0) hard++
+      if (duel('normal', 'easy', seed) === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(40)
+    expect(normal).toBeGreaterThanOrEqual(36)
   })
 })
 
 // ---------- game level ----------
 
 function ctxFor(bots: [boolean, boolean], difficulty: Difficulty, seed: number): GameContext {
-  const audio = { play: () => {}, unlock: () => {} } as unknown as Audio
+  const audio = { play: () => {}, unlock: () => {}, buzz: () => {} } as unknown as Audio
   return {
     stage: { edge: (side: Side) => (side === 0 ? 1800 : 0) } as unknown as Stage,
     input: new Input({} as Stage, '2p', 0),
