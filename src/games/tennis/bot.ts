@@ -35,8 +35,8 @@ interface Tuning {
 
 export const TUNING: Record<Difficulty, Tuning> = {
   easy: { speed: 720, react: 0.28, noise: 90, miss: 0.15, fatigue: 0.02, drive: 0 },
-  normal: { speed: 1050, react: 0.12, noise: 30, miss: 0.05, fatigue: 0.012, drive: 0.3 },
-  hard: { speed: 1320, react: 0.05, noise: 8, miss: 0.015, fatigue: 0.007, drive: 0.6 },
+  normal: { speed: 1150, react: 0.1, noise: 22, miss: 0.035, fatigue: 0.009, drive: 0.45 },
+  hard: { speed: 1320, react: 0.04, noise: 6, miss: 0.008, fatigue: 0.004, drive: 0.75 },
 }
 
 /** Per-bot memory carried between steps (not part of the synced state). */
