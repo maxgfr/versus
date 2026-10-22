@@ -4,7 +4,6 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, shade, SIDE } from '../../core/render/palette.ts'
 import { W } from '../../core/stage.ts'
 import {
-  drawDice,
   drawRollButton,
   drawRollsLeft,
   drawSheet,
@@ -17,6 +16,7 @@ import {
   trayLayout,
 } from '../../engines/dice/index.ts'
 import type { State } from './index.ts'
+import { drawThrownDice, TAP_POW } from './throw.ts'
 import { CATS, MAX_ROLLS, score, total, turnsPlayed } from './rules.ts'
 
 /** Layout, written in red's frame (bottom half); blue's is the same turned 180°. */
@@ -35,6 +35,7 @@ export function renderYazy(
   over: boolean,
   isBot: (side: Side) => boolean,
   rounds: number,
+  rattle = 0,
 ): void {
   for (const side of [0, 1] as Side[]) {
     const mine = s.turn === side && !over
@@ -59,16 +60,23 @@ export function renderYazy(
     const left = mine ? MAX_ROLLS - s.rolls : MAX_ROLLS
     const canRoll = mine && s.rolls < MAX_ROLLS && !isBot(side)
     const label = mine && s.rolls >= MAX_ROLLS ? 'Pick a row' : 'Roll'
-    drawRollButton(g, side, ROLL, label, {
-      enabled: mine && (s.rolls < MAX_ROLLS || isBot(side)),
-      pulse: canRoll && s.rolls === 0,
-      sub,
-    })
+    // Online, each phone shows only its own Roll button.
+    if (g.viewer === null || g.viewer === side)
+      drawRollButton(g, side, ROLL, label, {
+        enabled: mine && (s.rolls < MAX_ROLLS || isBot(side)),
+        pulse: canRoll && s.rolls === 0,
+        sub,
+      })
     g.alpha(mine ? 1 : 0.45, () => drawRollsLeft(g, side, LEFT_X, ROLL.y, left))
     drawTotal(g, side, TOTAL_X, ROLL.y, total(s.sheets[side]))
   }
   drawTray(g, TRAY, over ? null : s.turn)
-  drawDice(g, TRAY, s, now, { turn: s.turn, dim: s.rolls === 0 && !over })
+  // Before the first roll the dice jiggle a little: they are waiting to be thrown.
+  const idle = !over && s.rolls === 0 && !isBot(s.turn) ? 0.25 : 0
+  drawThrownDice(g, TRAY, s, now, s.pow ?? TAP_POW, {
+    dim: s.rolls === 0 && !over,
+    rattle: Math.max(rattle, idle),
+  })
   drawEnding(g, s, now)
 }
 

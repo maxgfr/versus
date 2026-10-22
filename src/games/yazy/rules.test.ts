@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { Fx } from '../../core/fx/fx.ts'
+import type { GameContext } from '../../core/game.ts'
+import { Input } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
+import type { Stage } from '../../core/stage.ts'
+import makeGame, { type State } from './index.ts'
+import { TRAY } from './render.ts'
+import { flickPow, TAP_POW } from './throw.ts'
 import { decide, planHold } from './bot.ts'
 import {
   CATS,
@@ -68,6 +75,61 @@ describe('yazy bot', () => {
     expect(plan.held).toEqual([true, true, true, true, false])
   })
 
+  it('with two rerolls left, hard chases a run it would not chase with one', () => {
+    // 1 2 3 + two sixes: one reroll keeps the sixes or the run start; two rerolls look further.
+    const one = planHold([1, 2, 3, 6, 6], emptySheet(), 1)
+    const two = planHold([1, 2, 3, 6, 6], emptySheet(), 2)
+    expect(two.ev).toBeGreaterThan(one.ev)
+  })
+
+  it('on the last turn of the match only the points count', () => {
+    // Odds and Big run open, dice 1 3 5 5 2: odds scores 14, the run 0. With turns to spare
+    // the bot weighs what each row is worth later; on the last turn it just takes the 14.
+    const sheet: Sheet = [null, 0, 0, 0, 0, 0, 0, null, 0]
+    const a = decide(
+      [1, 3, 5, 5, 2],
+      [false, false, false, false, false],
+      3,
+      sheet,
+      'hard',
+      new Rng(1),
+      1,
+    )
+    expect(a).toEqual({ kind: 'score', cat: cat('odds') })
+  })
+
+  it('scores more on average from easy to normal to hard', () => {
+    const solo = (difficulty: 'easy' | 'normal' | 'hard', seed: number): number => {
+      const rng = new Rng(seed)
+      const sheet = emptySheet()
+      while (!full(sheet)) {
+        let dice = [1, 1, 1, 1, 1]
+        let held = [false, false, false, false, false]
+        let rolls = 0
+        for (;;) {
+          const a = decide(dice, held, rolls, sheet, difficulty, rng)
+          if (a.kind === 'roll') {
+            dice = dice.map((v, i) => (held[i] ? v : rng.int(1, 6)))
+            rolls++
+          } else if (a.kind === 'hold') held = a.held
+          else {
+            sheet[a.cat] = score(dice, a.cat)
+            break
+          }
+        }
+      }
+      return total(sheet)
+    }
+    const avg = (d: 'easy' | 'normal' | 'hard') => {
+      let t = 0
+      for (let seed = 1; seed <= 40; seed++) t += solo(d, seed)
+      return t / 40
+    }
+    const [e, n, h] = [avg('easy'), avg('normal'), avg('hard')]
+    expect(n).toBeGreaterThan(e + 10)
+    expect(h).toBeGreaterThan(n)
+  }, 60_000)
+
   it('takes a yazy when it has one', () => {
     const a = decide(
       [5, 5, 5, 5, 5],
@@ -109,4 +171,77 @@ describe('yazy bot', () => {
       expect(total(sheets[0]) + total(sheets[1])).toBeGreaterThan(0)
     })
   }
+})
+
+describe('yazy throw', () => {
+  const ctx = (): GameContext => ({
+    stage: {} as Stage,
+    input: new Input({} as Stage, '1p', 0),
+    fx: new Fx(),
+    audio: { play: () => {}, buzz: () => {} } as unknown as GameContext['audio'],
+    rng: new Rng(4),
+    mode: '1p',
+    difficulty: 'normal',
+    bots: [false, false],
+    teams: false,
+    names: ['Red', 'Blue'],
+    local: 0,
+    seed: 4,
+  })
+  const step = (game: ReturnType<typeof makeGame>, c: GameContext) => {
+    game.update(1 / 60)
+    c.input.endStep()
+  }
+  const redTurn = (game: ReturnType<typeof makeGame>): State => {
+    const s = (game.snapshot() as { s: State }).s
+    s.turn = 0
+    return s
+  }
+
+  it('a fast flick across the tray throws harder than a tap', () => {
+    const c = ctx()
+    const game = makeGame()
+    game.init(c)
+    const s = redTurn(game)
+    const y = TRAY.y + TRAY.h / 2
+    const p = c.input.player(0)
+    p.press(1, 200, y)
+    step(game, c)
+    for (let k = 1; k <= 4; k++) {
+      p.move(1, 200 + k * 110, y - k * 20)
+      step(game, c)
+    }
+    p.release(1)
+    step(game, c)
+    expect(s.rolls).toBe(1)
+    expect(s.pow).toBeGreaterThan(TAP_POW)
+  })
+
+  it('a tap on the tray before the first roll throws gently; later a tap holds a die', () => {
+    const c = ctx()
+    const game = makeGame()
+    game.init(c)
+    const s = redTurn(game)
+    const slot = TRAY.slots[2] as { x: number; y: number }
+    const p = c.input.player(0)
+    p.press(1, slot.x, slot.y)
+    step(game, c)
+    p.release(1)
+    step(game, c)
+    expect(s.rolls).toBe(1)
+    expect(s.pow).toBe(TAP_POW)
+    for (let k = 0; k < 60; k++) step(game, c)
+    p.press(2, slot.x, slot.y)
+    step(game, c)
+    p.release(2)
+    step(game, c)
+    expect(s.held[2]).toBe(true)
+    expect(s.rolls).toBe(1)
+  })
+
+  it('throw energy follows the release speed, with a gentle floor', () => {
+    expect(flickPow(0)).toBe(0.25)
+    expect(flickPow(2600)).toBeCloseTo(0.5, 5)
+    expect(flickPow(99999)).toBe(1)
+  })
 })

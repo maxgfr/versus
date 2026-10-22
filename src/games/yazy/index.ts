@@ -16,8 +16,19 @@ import {
   sheetCellAt,
 } from '../../engines/dice/index.ts'
 import { decide } from './bot.ts'
+import { botPow, Flick, TAP_POW, turnInputs } from './throw.ts'
 import { renderYazy, ROLL, SHEET, TRAY } from './render.ts'
-import { CATS, emptySheet, full, MAX_ROLLS, NCATS, score, type Sheet, total } from './rules.ts'
+import {
+  CATS,
+  emptySheet,
+  full,
+  MAX_ROLLS,
+  NCATS,
+  score,
+  type Sheet,
+  total,
+  turnsPlayed,
+} from './rules.ts'
 
 /** A match is a number of turns each; every turn scores one row of the sheet. */
 export const match: MatchSpec = { unit: 'rounds', default: NCATS, min: 1, max: NCATS }
@@ -29,10 +40,18 @@ export interface State extends DiceState {
   last: { side: Side; cat: number; at: number } | null
   /** When and how the match ended, for the closing plaques. */
   end: { at: number; winner: Side | 'draw' } | null
+  /** Energy of the last throw (0..1): how hard the dice fly and land. */
+  pow: number
 }
+
+/** Inside the tray (with a margin): where a press starts a throw or a hold. */
+const inTray = (x: number, y: number): boolean =>
+  x > TRAY.x - 30 && x < TRAY.x + TRAY.w + 30 && y > TRAY.y - 40 && y < TRAY.y + TRAY.h + 40
 
 class Yazy extends TurnGame<State> {
   private wasRolling = false
+  // Cosmetic host state: one finger tracker per input that may throw.
+  private flicks = [new Flick(), new Flick()]
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -45,29 +64,40 @@ class Yazy extends TurnGame<State> {
       sheets: [emptySheet(), emptySheet()],
       last: null,
       end: null,
+      pow: TAP_POW,
     }
   }
 
   protected override busy(): boolean {
     const r = rolling(this.s, this.time)
-    if (this.wasRolling && !r) this.ctx.audio.play('place', 0.9)
+    if (this.wasRolling && !r) this.land()
     this.wasRolling = r
     return r
   }
 
-  protected stepTurn(_dt: number, tap: Ptr | undefined): void {
-    if (!tap) return
+  protected stepTurn(dt: number, tap: Ptr | undefined): void {
     const s = this.s
     const side = s.turn
-    if (buttonHit(ROLL, side, tap.x, tap.y)) {
-      if (s.rolls < MAX_ROLLS) this.roll()
-      else this.ctx.audio.play('error')
+    // The tray answers gestures: a flick throws (its speed is the throw's
+    // energy), a tap holds a die (or throws gently before the first roll).
+    const inputs = turnInputs(this.ctx.mode, this.ctx.input.players, side)
+    for (let k = 0; k < inputs.length; k++) {
+      const gst = this.flicks[k]?.update(inputs[k] as (typeof inputs)[number], dt, inTray)
+      if (!gst) continue
+      if (gst.kind === 'flick') {
+        if (s.rolls < MAX_ROLLS) this.roll(gst.pow)
+        else this.ctx.audio.play('error')
+        return
+      }
+      const die = dieAt(TRAY, gst.x, gst.y)
+      if (s.rolls === 0) this.roll(TAP_POW)
+      else if (die >= 0 && s.rolls < MAX_ROLLS) this.toggle(die)
       return
     }
-    const die = dieAt(TRAY, tap.x, tap.y)
-    if (die >= 0) {
-      if (s.rolls === 0) this.roll()
-      else if (s.rolls < MAX_ROLLS) this.toggle(die)
+    if (!tap || inTray(tap.x, tap.y)) return
+    if (buttonHit(ROLL, side, tap.x, tap.y)) {
+      if (s.rolls < MAX_ROLLS) this.roll(TAP_POW + 0.15)
+      else this.ctx.audio.play('error')
       return
     }
     const cat = sheetCellAt(SHEET, side, tap.x, tap.y)
@@ -79,8 +109,17 @@ class Yazy extends TurnGame<State> {
 
   protected botPlay(): void {
     const s = this.s
-    const a = decide(s.dice, s.held, s.rolls, s.sheets[s.turn], this.ctx.difficulty, this.ctx.rng)
-    if (a.kind === 'roll') this.roll()
+    const turns = this.target - turnsPlayed(s.sheets[s.turn])
+    const a = decide(
+      s.dice,
+      s.held,
+      s.rolls,
+      s.sheets[s.turn],
+      this.ctx.difficulty,
+      this.ctx.rng,
+      turns,
+    )
+    if (a.kind === 'roll') this.roll(botPow(this.time))
     else if (a.kind === 'hold') {
       s.held = a.held
       this.ctx.audio.play('pop', 1.1)
@@ -89,16 +128,42 @@ class Yazy extends TurnGame<State> {
 
   /** Bots hurry up a little between steps of the same turn. */
   protected override botDelay(): number {
-    return this.s.rolls === 0 ? super.botDelay() : 0.45 + this.ctx.rng.range(0, 0.3)
+    const d = this.ctx.difficulty
+    const first = d === 'easy' ? 0.7 : d === 'normal' ? 0.55 : 0.45
+    const r = this.ctx.rng.range(0, 0.25)
+    return this.s.rolls === 0 ? first + r : 0.35 + r
   }
 
-  private roll(): void {
+  /** Throw the loose dice with energy `pow` (0..1): the faces are a fair draw, the energy is the feel. */
+  private roll(pow: number): void {
     const s = this.s
+    s.pow = pow
     rollDice(s, this.ctx.rng, this.time)
-    this.ctx.audio.play('roll')
-    this.ctx.fx.shake(0.1)
+    const { fx, audio } = this.ctx
+    audio.play('roll', 0.85 + pow * 0.35)
+    fx.shake(0.05 + pow * 0.16)
+    audio.buzz(Math.round(6 + pow * 14))
     for (const [i, slot] of TRAY.slots.entries()) {
-      if (!s.held[i]) this.ctx.fx.puff(slot.x, slot.y + 60, 'rgba(255,255,255,0.35)', 3)
+      if (!s.held[i])
+        fx.puff(slot.x, slot.y + 60, 'rgba(255,255,255,0.35)', Math.round(2 + pow * 4))
+    }
+  }
+
+  /** The dice come to rest: the harder the throw, the harder they land. */
+  private land(): void {
+    const s = this.s
+    const { fx, audio } = this.ctx
+    audio.play('place', 0.8 + s.pow * 0.25)
+    fx.shake(0.04 + s.pow * 0.12)
+    audio.buzz(Math.round(4 + s.pow * 10))
+    for (const [i, slot] of TRAY.slots.entries()) {
+      if (!s.held[i]) fx.puff(slot.x, slot.y + 55, 'rgba(255,255,255,0.3)', 2)
+    }
+    // Five alike on the felt: celebrate before it is even scored.
+    if (s.dice.every((v) => v === s.dice[0])) {
+      fx.ring(W / 2, TRAY.y + TRAY.h / 2, C.yellow, 420)
+      fx.sparks(W / 2, TRAY.y + TRAY.h / 2, C.yellow, 24)
+      audio.play('powerup')
     }
   }
 
@@ -119,9 +184,18 @@ class Yazy extends TurnGame<State> {
     const p = frame(side, SHEET.x + (c + 0.5) * SHEET.cellW, SHEET.y + (r + 0.5) * SHEET.cellH)
     const fx = this.ctx.fx
     if (pts > 0) {
-      fx.float(`+${pts}`, p.x, p.y, C.yellow, 60, side)
-      fx.burst(p.x, p.y, SIDE[side].main, { count: 12, speed: 380, size: 12 })
-      this.ctx.audio.play(pts >= 40 ? 'coin' : 'score')
+      // A big row lands bigger: more sparks, a bigger float, a buzz.
+      const k = Math.min(1, pts / 40)
+      fx.float(`+${pts}`, p.x, p.y, C.yellow, 56 + k * 24, side)
+      fx.burst(p.x, p.y, SIDE[side].main, {
+        count: Math.round(10 + k * 16),
+        speed: 340 + k * 300,
+        size: 12,
+        colors: [SIDE[side].main, SIDE[side].light, C.yellow],
+      })
+      if (k >= 0.6) fx.ring(p.x, p.y, C.yellow, 160)
+      this.ctx.audio.buzz(Math.round(8 + k * 20))
+      this.ctx.audio.play(pts >= 40 ? 'coin' : 'score', 0.9 + k * 0.25)
     } else {
       fx.float('0', p.x, p.y, C.white, 52, side)
       this.ctx.audio.play('thud')
@@ -130,6 +204,7 @@ class Yazy extends TurnGame<State> {
       fx.flash(C.yellow, 0.35)
       fx.confetti(side)
       fx.shake(0.4)
+      fx.stop(6)
     }
     if (full(s.sheets[0], this.target) && full(s.sheets[1], this.target)) {
       const a = total(s.sheets[0])
@@ -149,9 +224,15 @@ class Yazy extends TurnGame<State> {
     s.turn = other(side)
   }
 
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    for (const f of this.flicks) f.reset()
+  }
+
   render(g: Draw): void {
     tableBackdrop(g)
-    renderYazy(g, this.s, this.time, this.over, (side) => this.isBot(side), this.target)
+    const rattle = Math.max(this.flicks[0]?.charge ?? 0, this.flicks[1]?.charge ?? 0)
+    renderYazy(g, this.s, this.time, this.over, (side) => this.isBot(side), this.target, rattle)
     this.drawTurns(g)
   }
 }
