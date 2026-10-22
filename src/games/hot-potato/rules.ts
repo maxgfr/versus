@@ -5,8 +5,13 @@ import { MID } from '../../core/stage.ts'
 /**
  * Pure hot-potato rules. The potato lives in a lane down the middle. Whoever
  * holds it throws it back by tapping, which sends it toward the other half at
- * a speed that grows with every throw. A hidden seeded timer blows it up: the
- * holder at that moment loses the round.
+ * a speed that grows with every throw; flicking the finger toward the rival
+ * right after the tap (the follow-through) throws it harder still. A hidden
+ * seeded timer blows it up: the holder at that moment loses the round.
+ *
+ * Grabbing too soon burns your fingers: a tap while the potato is coming at
+ * you (or sitting in your mitt) but before the catch delay is over is a
+ * fumble, and you cannot throw for FUMBLE seconds. Mashing never pays.
  */
 
 /** Round wins needed to take the match: best of 5. */
@@ -16,10 +21,16 @@ export const LIMIT_R = 1500
 export const LIMIT_B = 300
 /** Seconds after the potato enters your half before you may throw it. A short catch delay. */
 export const CATCH = 0.25
+/** Seconds a fumbled grab locks your throw out. */
+export const FUMBLE = 0.3
 /** Flight speed (world units / s): starts at SPEED0, gains SPEED_STEP per throw, capped. */
 export const SPEED0 = 900
 export const SPEED_STEP = 130
 export const SPEED_MAX = 1900
+/** Seconds after a throw during which a flick still adds speed. */
+export const FOLLOW = 0.15
+/** A full-force flick throws this much faster than a plain tap (0.7 = +70 %). */
+export const BOOST = 0.7
 /** The hidden timer: seconds after the round starts before the potato explodes. */
 export const BOOM_MIN = 4
 export const BOOM_MAX = 10
@@ -39,6 +50,14 @@ export interface Potato {
   holder: Side
   /** Game time it entered the holder's half. */
   enteredAt: number
+  /** Current flight speed (world units / s). */
+  v: number
+  /** 0..1 flick force behind the last throw (0 = a plain tap). */
+  power: number
+  /** Game time of the last throw, -1 before the first. */
+  thrownAt: number
+  /** Who threw it last (the server before the first throw). */
+  by: Side
 }
 
 /** A round's potato, served by `server` (held at their catch point). */
@@ -50,6 +69,10 @@ export function potatoNew(server: Side, now: number): Potato {
     throws: 0,
     holder: server,
     enteredAt: now,
+    v: 0,
+    power: 0,
+    thrownAt: -1,
+    by: server,
   }
 }
 
@@ -64,7 +87,7 @@ export const heatOf = (throws: number): number => Math.min(1, throws / HEAT_THRO
 /** Move the potato, and note when it crosses into a half. */
 export function potatoStep(p: Potato, dt: number, now: number): void {
   if (!p.held) {
-    p.y += p.dir * speedOf(p.throws) * dt
+    p.y += p.dir * (p.v || speedOf(p.throws)) * dt
     if (p.dir === 1 && p.y >= LIMIT_R) {
       p.y = LIMIT_R
       p.held = true
@@ -80,21 +103,57 @@ export function potatoStep(p: Potato, dt: number, now: number): void {
   }
 }
 
-/**
- * May `side` throw now? The potato must be in their half and coming at them
- * (or resting at their catch point), and the catch delay must be over. Once
- * thrown it is on its way out, so a second tap does nothing.
- */
-export function canThrow(p: Potato, side: Side, now: number): boolean {
+/** Is the potato `side`'s problem: in their half and coming at them (or resting in their mitt)? */
+export function incoming(p: Potato, side: Side): boolean {
   const toward = p.dir === (side === 0 ? 1 : -1)
-  return holderOf(p.y) === side && (p.held || toward) && now - p.enteredAt >= CATCH
+  return holderOf(p.y) === side && (p.held || toward)
 }
 
-/** Throw it back toward the other half. Only callable when `canThrow` is true. */
-export function throwPotato(p: Potato, side: Side): void {
+/**
+ * May `side` throw now? The potato must be theirs (see `incoming`), the catch
+ * delay must be over and their fingers must not be burnt (`lock`: game time a
+ * fumble locks them out until). Once thrown it is on its way out, so a second
+ * tap does nothing.
+ */
+export function canThrow(p: Potato, side: Side, now: number, lock = -Infinity): boolean {
+  return incoming(p, side) && now - p.enteredAt >= CATCH && now >= lock
+}
+
+export type TapResult = 'throw' | 'fumble' | 'none'
+
+/**
+ * What a tap by `side` does now: throws when allowed, fumbles when the potato
+ * is theirs but not ready (too soon, or fingers still burnt; each fumble
+ * renews the lock), and does nothing while the potato is the rival's problem.
+ */
+export function tapResult(p: Potato, side: Side, now: number, lock = -Infinity): TapResult {
+  if (!incoming(p, side)) return 'none'
+  return canThrow(p, side, now, lock) ? 'throw' : 'fumble'
+}
+
+/** Throw it back toward the other half at the plain-tap speed. Only callable when `canThrow` is true. */
+export function throwPotato(p: Potato, side: Side, now = 0): void {
   p.dir = side === 0 ? -1 : 1
   p.held = false
   p.throws++
+  p.v = speedOf(p.throws)
+  p.power = 0
+  p.thrownAt = now
+  p.by = side
+}
+
+/**
+ * The follow-through: a flick of `force` (0..1) by the thrower within FOLLOW
+ * seconds of the throw speeds the potato up. Only ever adds speed. Returns
+ * true when it did.
+ */
+export function followThrough(p: Potato, side: Side, force: number, now: number): boolean {
+  if (p.held || p.by !== side || p.thrownAt < 0 || now - p.thrownAt > FOLLOW) return false
+  const f = Math.max(0, Math.min(1, force))
+  if (f <= p.power) return false
+  p.power = f
+  p.v = speedOf(p.throws) * (1 + BOOST * f)
+  return true
 }
 
 /** The hidden timer for a round, in seconds from its start. */

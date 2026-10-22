@@ -6,7 +6,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { Rounds } from '../../engines/reflex/index.ts'
-import { canThrow, heatOf, LIMIT_B, LIMIT_R, speedOf, type Potato } from './rules.ts'
+import { canThrow, heatOf, incoming, LIMIT_B, LIMIT_R, type Potato } from './rules.ts'
 import type { State } from './index.ts'
 
 /*
@@ -80,12 +80,25 @@ function lane(g: Draw, heat: number): void {
 function mitt(
   g: Draw,
   side: Side,
-  o: { ready: boolean; squash: number; soot: number; wave: number; now: number },
+  o: {
+    ready: boolean
+    /** Spring around 1: below squashes the mitt, above stretches it. */
+    squash: number
+    soot: number
+    /** 0..1 burnt fingers after a fumble: smoke and a shiver. */
+    burn: number
+    wave: number
+    now: number
+  },
 ): void {
   const col = SIDE[side].main
   inFrame(g, side, () => {
-    const x = W / 2 + 30
-    const y = CATCH_Y + 140
+    // Idle life: a slow breath, out of step between the two mitts; a raised
+    // mitt when it may throw; a shiver while the fingers are burnt.
+    const breath = Math.sin(o.now * 2.2 + side * 2.1) * 4
+    const x = W / 2 + 30 + Math.sin(o.now * 70) * o.burn * 6
+    const y = CATCH_Y + 140 + breath - (o.ready ? 14 : 0)
+    const sq = Math.max(0.7, Math.min(1.3, o.squash))
     if (o.ready) {
       const k = 0.5 + 0.5 * Math.sin(o.now * 10)
       g.alpha(0.6 + k * 0.4, () => g.ring(W / 2, CATCH_Y, 112 + k * 12, C.yellow, 12))
@@ -131,31 +144,70 @@ function mitt(
         g.rrect(-96, 70, 192, 64, 22, C.ink)
         g.rrect(-90, 76, 180, 52, 18, C.cream)
         g.rect(-90, 94, 180, 14, shade(col, -0.1))
-        if (o.soot > 0) {
-          g.alpha(o.soot, () => {
+        const soot = Math.max(o.soot, o.burn * 0.6)
+        if (soot > 0) {
+          g.alpha(soot, () => {
             g.circle(-20, -60, 40, alpha('#000000', 0.45))
             g.circle(30, -20, 30, alpha('#000000', 0.35))
           })
         }
       },
-      0.9 * (1 + o.squash * 0.1),
-      0.9 * (1 - o.squash * 0.12),
+      0.9 * (1 + (1 - sq) * 0.6),
+      0.9 * sq,
     )
+    // Smoke curling off burnt fingers.
+    if (o.burn > 0)
+      for (let i = 0; i < 3; i++) {
+        const t = (o.now * 1.4 + i / 3) % 1
+        g.alpha(o.burn * (1 - t) * 0.6, () =>
+          g.circle(
+            x - 20 + i * 24 + Math.sin(o.now * 4 + i) * 10,
+            y - 150 - t * 110,
+            14 + t * 22,
+            '#5a5050',
+          ),
+        )
+      }
   })
 }
 
 /** The potato, upright for the player who holds it. */
-function potato(g: Draw, pot: Potato, now: number, squash: number, flying: boolean): void {
+function potato(
+  g: Draw,
+  pot: Potato,
+  y: number,
+  now: number,
+  squash: number,
+  flying: boolean,
+): void {
   const heat = heatOf(pot.throws)
   const x = W / 2
-  const y = pot.y
-  // Speed ghosts behind it while it flies.
+  // Speed ghosts behind it while it flies: longer and brighter for a flicked throw.
   if (flying) {
-    const v = speedOf(pot.throws)
-    for (let i = 3; i >= 1; i--) {
-      const gy = y - pot.dir * v * 0.028 * i
-      g.circle(x, gy, 66 - i * 10, alpha(mix(C.orange, C.red, heat), 0.16 * (4 - i) * (0.4 + heat)))
+    const v = pot.v
+    const n = pot.power > 0.3 ? 5 : 3
+    for (let i = n; i >= 1; i--) {
+      const gy = y - pot.dir * v * 0.024 * i
+      g.circle(
+        x,
+        gy,
+        66 - i * (50 / n),
+        alpha(mix(C.orange, C.red, heat), (0.5 / n) * (n + 1 - i) * (0.4 + heat + pot.power * 0.5)),
+      )
     }
+    // Hot streaks along the lane when it really flies.
+    if (pot.power > 0.3)
+      for (const dx of [-46, 46]) {
+        const len = v * 0.09 * pot.power
+        g.line(
+          x + dx,
+          y - pot.dir * 40,
+          x + dx,
+          y - pot.dir * (40 + len),
+          alpha(C.yellow, 0.35 * pot.power),
+          8,
+        )
+      }
   }
   // Heat glow, pulsing faster the hotter it gets.
   const pulse = 0.7 + 0.3 * Math.sin(now * (5 + 16 * heat))
@@ -196,6 +248,8 @@ function potato(g: Draw, pot: Potato, now: number, squash: number, flying: boole
   }
   const angle = g.orient(pot.holder)
   const shake = Math.sin(now * (14 + 30 * heat)) * (0.6 + heat * 2) * 2
+  // Spring: above 1 stretches along the flight, below squashes into a catch.
+  const sq = Math.max(0.65, Math.min(1.4, squash))
   g.at(
     x + shake,
     y,
@@ -267,8 +321,8 @@ function potato(g: Draw, pot: Potato, now: number, squash: number, flying: boole
         )
       }
     },
-    1 + squash * 0.2,
-    1 - squash * 0.16,
+    1 + (1 - sq) * 0.7,
+    sq,
   )
 }
 
@@ -331,7 +385,29 @@ function prompt(g: Draw, side: Side, now: number): void {
       strokeWidth: 16,
       angle: textAngle(g, side),
     })
+    g.text('flick = faster', W / 2 - 240, CATCH_Y + 60, {
+      size: 36,
+      weight: 600,
+      color: alpha(C.white, 0.8),
+      stroke: alpha(C.ink, 0.9),
+      strokeWidth: 9,
+      angle: textAngle(g, side),
+    })
   })
+}
+
+/** "WAIT…" while the potato is coming but not catchable yet: tapping now burns. */
+function hold(g: Draw, side: Side): void {
+  inFrame(g, side, () =>
+    g.text('wait…', W / 2 - 240, CATCH_Y - 20, {
+      size: 56,
+      weight: 700,
+      color: alpha(C.white, 0.55),
+      stroke: alpha(C.ink, 0.9),
+      strokeWidth: 12,
+      angle: textAngle(g, side),
+    }),
+  )
 }
 
 /** The round result in each half (clear of the lane's middle), and "Round N" at the start. */
@@ -354,26 +430,40 @@ function roundBanner(g: Draw, r: Rounds, now: number, over: boolean): void {
  * Round wins at a side's HUD row: pips while they fit beside the pill, a
  * compact "wins/target" tally for long matches (up to 9 pips would run off the edge).
  */
-function tally(g: Draw, side: Side, wins: number, target: number, x: number, fit: number): void {
+function tally(
+  g: Draw,
+  side: Side,
+  wins: number,
+  target: number,
+  x: number,
+  fit: number,
+  pulse: number,
+): void {
+  // The tally pops when a round is won.
+  const y = hudY(g, side)
+  const k = 1 + pulse * 0.35
   if (target <= fit) {
-    pips(g, side, wins, target, { x })
+    g.at(x, y, 0, () => g.at(-x, -y, 0, () => pips(g, side, wins, target, { x })), k)
     return
   }
-  g.forSide(side, x, hudY(g, side), () => {
-    const a = String(wins)
-    const b = `/${target}`
-    const wa = g.measure(a, 44, 700)
-    const wb = g.measure(b, 34, 700)
-    const w = 70 + wa + wb
-    g.rrect(-w / 2, -34, w, 68, 34, alpha(C.ink, 0.7))
-    g.sideMark(side, -w / 2 + 34, 0, 13, wins > 0 ? SIDE[side].main : alpha(C.white, 0.3))
-    g.text(a, -w / 2 + 58, 3, { size: 44, weight: 700, color: SIDE[side].light, align: 'left' })
-    g.text(b, -w / 2 + 60 + wa, 6, {
-      size: 34,
-      weight: 700,
-      color: alpha(C.white, 0.55),
-      align: 'left',
-    })
+  g.forSide(side, x, y, () => g.at(0, 0, 0, () => tallyBox(g, side, wins, target), k))
+}
+
+/** The compact "wins/target" box, centred on the origin. */
+function tallyBox(g: Draw, side: Side, wins: number, target: number): void {
+  const a = String(wins)
+  const b = `/${target}`
+  const wa = g.measure(a, 44, 700)
+  const wb = g.measure(b, 34, 700)
+  const w = 70 + wa + wb
+  g.rrect(-w / 2, -34, w, 68, 34, alpha(C.ink, 0.7))
+  g.sideMark(side, -w / 2 + 34, 0, 13, wins > 0 ? SIDE[side].main : alpha(C.white, 0.3))
+  g.text(a, -w / 2 + 58, 3, { size: 44, weight: 700, color: SIDE[side].light, align: 'left' })
+  g.text(b, -w / 2 + 60 + wa, 6, {
+    size: 34,
+    weight: 700,
+    color: alpha(C.white, 0.55),
+    align: 'left',
   })
 }
 
@@ -381,7 +471,17 @@ export function renderPotato(
   g: Draw,
   s: State,
   now: number,
-  o: { names: [string, string]; over: boolean; bots: [boolean, boolean] },
+  o: {
+    names: [string, string]
+    over: boolean
+    bots: [boolean, boolean]
+    /** Interpolated potato y for this frame. */
+    y: number
+    /** Springs (rest 1) for the potato and each mitt; score pulses 0..1. */
+    potSq: number
+    mittSq: [number, number]
+    pulse: [number, number]
+  },
 ): void {
   const pot = s.pot
   const exploded = s.boomed >= 0
@@ -391,16 +491,14 @@ export function renderPotato(
   if (s.winner !== null) glow[s.winner] = 0.55 + 0.45 * Math.sin(now * 8)
   else if (loser !== null) glow[loser === 0 ? 1 : 0] = 1 - prog(now - s.boomed, 0.3, 1.6)
   field(g, glow)
-  const ready = (side: Side) => !exploded && s.rounds.phase === 'play' && canThrow(pot, side, now)
+  const live = !exploded && s.rounds.phase === 'play'
+  const ready = (side: Side) => live && canThrow(pot, side, now, s.lock[side])
   lane(g, heat)
   for (const side of [0, 1] as Side[]) {
-    const thrown =
-      s.thrower === side && s.throwAt >= 0 ? Math.max(0, 1 - (now - s.throwAt) / 0.2) : 0
-    const caught =
-      pot.held && pot.holder === side && !exploded ? Math.max(0, 1 - (now - s.landAt) / 0.2) : 0
     mitt(g, side, {
       ready: ready(side),
-      squash: Math.max(thrown, caught),
+      squash: o.mittSq[side],
+      burn: live ? Math.max(0, Math.min(1, (s.lock[side] - now) / 0.3)) : 0,
       soot: loser === side ? 1 - prog(now - s.boomed, 1.6, 2.2) : 0,
       wave: s.winner === side ? Math.sin(now * 10) * 0.25 : 0,
       now,
@@ -408,19 +506,28 @@ export function renderPotato(
   }
   if (exploded) blast(g, pot.y, s.boomed, now)
   else if (s.rounds.phase === 'play') {
-    steam(g, pot.y, heat, now)
-    const sq = Math.max(
-      s.throwAt >= 0 ? Math.max(0, 1 - (now - s.throwAt) / 0.14) : 0,
-      pot.held ? Math.max(0, 1 - (now - s.landAt) / 0.16) : 0,
-    )
-    potato(g, pot, now, sq, !pot.held)
+    steam(g, o.y, heat, now)
+    potato(g, pot, o.y, now, o.potSq, !pot.held)
   }
   if (!o.over) {
-    for (const side of [0, 1] as Side[]) if (ready(side) && !o.bots[side]) prompt(g, side, now)
+    for (const side of [0, 1] as Side[]) {
+      // Hints are for humans, and online each phone shows only its own player's.
+      if (o.bots[side] || (g.viewer !== null && side !== g.viewer)) continue
+      if (ready(side)) prompt(g, side, now)
+      else if (live && incoming(pot, side)) hold(g, side)
+    }
   }
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, o.names[side], { active: ready(side), x: side === 0 ? 270 : W - 270 })
-    tally(g, side, s.rounds.wins[side], s.rounds.target, side === 0 ? W - 170 : 170, 5)
+    tally(
+      g,
+      side,
+      s.rounds.wins[side],
+      s.rounds.target,
+      side === 0 ? W - 170 : 170,
+      5,
+      o.pulse[side],
+    )
   }
   roundBanner(g, s.rounds, now, o.over)
 }

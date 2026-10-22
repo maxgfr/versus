@@ -10,7 +10,10 @@ import factory from './index.ts'
 import {
   BOOM_MAX,
   BOOM_MIN,
+  BOOST,
   CATCH,
+  FOLLOW,
+  FUMBLE,
   HEAT_THROWS,
   LIMIT_B,
   LIMIT_R,
@@ -19,11 +22,14 @@ import {
   TARGET,
   boomDelay,
   canThrow,
+  followThrough,
   heatOf,
   holderOf,
+  incoming,
   potatoNew,
   potatoStep,
   speedOf,
+  tapResult,
   throwPotato,
 } from './rules.ts'
 
@@ -114,6 +120,108 @@ describe('hot potato rules', () => {
     expect(heatOf(HEAT_THROWS * 3)).toBe(1)
   })
 
+  it('grabbing before the catch delay is a fumble that burns the fingers for a moment', () => {
+    const p = potatoNew(0, 0)
+    expect(tapResult(p, 0, CATCH / 2)).toBe('fumble')
+    const lock = CATCH / 2 + FUMBLE
+    // Locked out even after the catch delay, until the fingers cool.
+    expect(canThrow(p, 0, CATCH, lock)).toBe(false)
+    expect(tapResult(p, 0, lock - STEP, lock)).toBe('fumble')
+    expect(tapResult(p, 0, lock, lock)).toBe('throw')
+  })
+
+  it('mashing is slower than one clean tap (it used to be the best play)', () => {
+    // A masher taps every 0.1 s from the moment the potato is theirs; each tap
+    // too soon renews the burn. A clean tap waits for the catch delay.
+    const firstThrow = (tapEvery: number, firstTap: number): number => {
+      const p = potatoNew(0, 0)
+      let lock = -Infinity
+      for (let t = firstTap; t < 5; t += tapEvery) {
+        const r = tapResult(p, 0, t, lock)
+        if (r === 'throw') return t
+        if (r === 'fumble') lock = t + FUMBLE
+      }
+      return Infinity
+    }
+    expect(firstThrow(10, CATCH + 0.15)).toBeCloseTo(CATCH + 0.15, 9)
+    expect(firstThrow(0.1, 0.02)).toBe(Infinity)
+  })
+
+  it('a tap while the potato is the rival’s problem does nothing', () => {
+    const p = potatoNew(1, 0)
+    expect(tapResult(p, 0, 5)).toBe('none')
+    // Thrown by red and on its way out of red's half: red's taps do nothing.
+    const q = potatoNew(0, 0)
+    throwPotato(q, 0, 1)
+    potatoStep(q, STEP, 1 + STEP)
+    expect(holderOf(q.y)).toBe(0)
+    expect(incoming(q, 0)).toBe(false)
+    expect(tapResult(q, 0, 2)).toBe('none')
+  })
+
+  it('a potato flying at you can be sent back before it reaches the mitt', () => {
+    const p = potatoNew(1, 0)
+    throwPotato(p, 1, 0)
+    let t = 0
+    while (holderOf(p.y) !== 0) {
+      t += STEP
+      potatoStep(p, STEP, t)
+    }
+    const entered = p.enteredAt
+    expect(tapResult(p, 0, entered + CATCH)).toBe('throw')
+    const y = p.y
+    throwPotato(p, 0, entered + CATCH)
+    expect(p.y).toBe(y)
+    expect(p.y).toBeLessThan(LIMIT_R)
+    expect(p.dir).toBe(-1)
+  })
+
+  it('a flick right after the throw speeds the potato up; late, weaker or other flicks do not', () => {
+    const p = potatoNew(0, 0)
+    throwPotato(p, 0, 1)
+    const base = p.v
+    expect(base).toBe(speedOf(1))
+    expect(followThrough(p, 1, 1, 1)).toBe(false)
+    expect(followThrough(p, 0, 0.5, 1 + STEP)).toBe(true)
+    expect(p.v).toBeCloseTo(base * (1 + BOOST * 0.5), 9)
+    expect(followThrough(p, 0, 0.3, 1 + 2 * STEP)).toBe(false)
+    expect(p.power).toBe(0.5)
+    expect(followThrough(p, 0, 1, 1 + FOLLOW + STEP)).toBe(false)
+    expect(p.v).toBeCloseTo(base * (1 + BOOST * 0.5), 9)
+  })
+
+  it('a flicked throw leaves your half sooner than a plain tap', () => {
+    const timeOut = (force: number) => {
+      const p = potatoNew(0, 0)
+      throwPotato(p, 0, 0)
+      followThrough(p, 0, force, 0)
+      let t = 0
+      while (holderOf(p.y) === 0) {
+        t += STEP
+        potatoStep(p, STEP, t)
+      }
+      return t
+    }
+    expect(timeOut(1)).toBeLessThan(timeOut(0) * 0.7)
+  })
+
+  it('the potato never leaves the lane, however fast it flies', () => {
+    const p = potatoNew(0, 0)
+    let t = 0
+    for (let i = 0; i < 200; i++) {
+      const side = holderOf(p.y)
+      throwPotato(p, side, t)
+      followThrough(p, side, 1, t)
+      while (!p.held) {
+        t += STEP
+        potatoStep(p, STEP, t)
+        expect(p.y).toBeGreaterThanOrEqual(LIMIT_B)
+        expect(p.y).toBeLessThanOrEqual(LIMIT_R)
+      }
+    }
+    expect(p.v).toBeLessThanOrEqual(SPEED_MAX * (1 + BOOST))
+  })
+
   it('the hidden timer is seeded and lands inside its window', () => {
     for (let seed = 0; seed < 100; seed++) {
       const d = boomDelay(new Rng(seed))
@@ -124,29 +232,73 @@ describe('hot potato rules', () => {
   })
 })
 
+/** Play one potato round between two bots with the real rules; returns the loser and each side's time holding. */
+function botRound(
+  bots: [PotatoBot, PotatoBot],
+  server: Side,
+  boomIn: number,
+): { loser: Side; held: [number, number]; throws: number } {
+  const p = potatoNew(server, 0)
+  const lock: [number, number] = [-1, -1]
+  const held: [number, number] = [0, 0]
+  let t = 0
+  while (t < boomIn) {
+    for (const side of [0, 1] as Side[]) {
+      const touch = bots[side].drive(t, p, side, lock[side])
+      if (touch.tap) {
+        const r = tapResult(p, side, t, lock[side])
+        if (r === 'throw') {
+          throwPotato(p, side, t)
+          followThrough(p, side, touch.force, t)
+        } else if (r === 'fumble') lock[side] = t + FUMBLE
+      }
+    }
+    potatoStep(p, STEP, t)
+    held[holderOf(p.y)] += STEP
+    t += STEP
+  }
+  return { loser: holderOf(p.y), held, throws: p.throws }
+}
+
 describe('hot potato bot', () => {
-  it('a bot throws only after its reaction, never before the catch delay', () => {
+  it('a bot always gets rid of the potato, and never throws before the catch delay', () => {
     for (const d of ['easy', 'normal', 'hard'] as const) {
-      for (let seed = 0; seed < 30; seed++) {
+      for (let seed = 0; seed < 40; seed++) {
         const bot = new PotatoBot(new Rng(seed), d)
+        const p = potatoNew(0, 0)
+        let lock = -1
         let t = 0
         let threw = -1
         while (threw < 0 && t < 3) {
           t += STEP
-          if (bot.drive(t, 0, 0, 0)) threw = t
+          const touch = bot.drive(t, p, 0, lock)
+          if (!touch.tap) continue
+          const r = tapResult(p, 0, t, lock)
+          if (r === 'throw') threw = t
+          else if (r === 'fumble') lock = t + FUMBLE
         }
         expect(threw).toBeGreaterThanOrEqual(CATCH)
       }
     }
   })
 
-  it('hard reacts faster than easy', () => {
+  it('hard reacts faster than normal, normal faster than easy', () => {
     const reaction = (d: Difficulty) => {
       let sum = 0
       for (let seed = 0; seed < 100; seed++) {
         const bot = new PotatoBot(new Rng(seed), d)
+        const p = potatoNew(1, 0)
+        let lock = -1
         let t = 0
-        while (!bot.drive(t, 1 as Side, 0, 1)) t += STEP
+        for (;;) {
+          const touch = bot.drive(t, p, 1, lock)
+          if (touch.tap) {
+            const r = tapResult(p, 1, t, lock)
+            if (r === 'throw') break
+            if (r === 'fumble') lock = t + FUMBLE
+          }
+          t += STEP
+        }
         sum += t
       }
       return sum / 100
@@ -157,9 +309,59 @@ describe('hot potato bot', () => {
 
   it('a bot does nothing while the other half holds the potato', () => {
     const bot = new PotatoBot(new Rng(1), 'hard')
+    const p = potatoNew(0, 0)
     let threw = false
-    for (let t = 0; t < 3; t += STEP) if (bot.drive(t, 0, 0, 1)) threw = true
+    for (let t = 0; t < 3; t += STEP) if (bot.drive(t, p, 1).tap) threw = true
     expect(threw).toBe(false)
+  })
+
+  it('a hard bot flicks harder than an easy one', () => {
+    const force = (d: Difficulty) => {
+      let sum = 0
+      for (let seed = 0; seed < 60; seed++) {
+        const bot = new PotatoBot(new Rng(seed), d)
+        const p = potatoNew(0, 0)
+        let t = 0
+        let f = -1
+        while (f < 0) {
+          const touch = bot.drive(t, p, 0)
+          if (touch.tap) f = touch.force
+          t += STEP
+        }
+        sum += f
+      }
+      return sum / 60
+    }
+    expect(force('hard')).toBeGreaterThan(force('normal'))
+    expect(force('normal')).toBeGreaterThan(force('easy'))
+  })
+
+  it('a harder bot holds the potato less and loses fewer rounds', () => {
+    const rng = new Rng(3)
+    const play = (a: Difficulty, b: Difficulty) => {
+      let lostA = 0
+      let heldA = 0
+      let heldB = 0
+      const n = 300
+      for (let i = 0; i < n; i++) {
+        const bots: [PotatoBot, PotatoBot] = [
+          new PotatoBot(rng.fork(), a),
+          new PotatoBot(rng.fork(), b),
+        ]
+        const r = botRound(bots, (i % 2) as Side, boomDelay(rng))
+        if (r.loser === 0) lostA++
+        heldA += r.held[0]
+        heldB += r.held[1]
+      }
+      return { lost: lostA / n, heldA, heldB }
+    }
+    const hardVsEasy = play('hard', 'easy')
+    expect(hardVsEasy.heldA).toBeLessThan(hardVsEasy.heldB)
+    expect(hardVsEasy.lost).toBeLessThan(0.4)
+    const normalVsEasy = play('normal', 'easy')
+    expect(normalVsEasy.lost).toBeLessThan(0.5)
+    const hardVsNormal = play('hard', 'normal')
+    expect(hardVsNormal.heldA).toBeLessThan(hardVsNormal.heldB)
   })
 })
 
@@ -205,6 +407,38 @@ describe('hot potato game', () => {
       expect(Math.min(red, blue)).toBeLessThan(TARGET)
     })
   }
+
+  it('a human who grabs too soon is burnt and cannot throw until it cools', () => {
+    const ctx = ctxFor([false, false], 'normal', 5)
+    const game = factory() as unknown as {
+      init(c: GameContext): void
+      update(dt: number): void
+      s: { pot: { holder: Side; throws: number }; lock: [number, number] }
+    }
+    game.init(ctx)
+    const holder = game.s.pot.holder
+    const idle = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        game.update(STEP)
+        ctx.input.endStep()
+      }
+    }
+    const tap = (id: number) => {
+      ctx.input.player(holder).press(id, 500, holder === 0 ? 1600 : 200)
+      game.update(STEP)
+      ctx.input.player(holder).release(id)
+      ctx.input.endStep()
+    }
+    tap(1)
+    expect(game.s.lock[holder]).toBeGreaterThan(0)
+    // Past the catch delay but still burnt: nothing happens (and it burns again).
+    idle(Math.round(CATCH / STEP))
+    tap(2)
+    expect(game.s.pot.throws).toBe(0)
+    idle(Math.round(FUMBLE / STEP) + 2)
+    tap(3)
+    expect(game.s.pot.throws).toBe(1)
+  })
 
   it('whoever holds the potato when it blows loses the round', () => {
     // Blue is a bot and throws; red never does. The round goes to whichever
