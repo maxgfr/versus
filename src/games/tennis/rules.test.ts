@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { type Difficulty, type Side, STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
-import { type BotMemory, decide, newMemory, TUNING } from './bot.ts'
+import { type BotMemory, decide, intercept, newMemory, TUNING } from './bot.ts'
 import {
+  aim,
   bandOf,
+  fly,
+  HAND,
+  NET_H,
   type Cmd,
   COURT,
   newWorld,
@@ -72,11 +76,51 @@ describe('ball flight and faults', () => {
     const w = newWorld(0, 'clay')
     w.blobs[1].x = 200
     inPlay(w, 0, W / 2, 500, 1, 0, -400, -300)
+    w.rally = 3
     const ev = runUntilPoint(w, idle(), 60 * 8)
     expect(ev.some((e) => e.kind === 'bounce')).toBe(true)
     const point = ev.find((e) => e.kind === 'point')
     expect(point && point.kind === 'point' && point.reason).toBe('double')
     expect(w.score).toEqual([1, 0])
+  })
+
+  it('a serve the receiver never touches is an ace', () => {
+    const w = newWorld(0, 'clay')
+    w.blobs[1].x = 200
+    inPlay(w, 0, W / 2, 500, 1, 0, -400, -300)
+    w.rally = 0
+    const ev = runUntilPoint(w, idle(), 60 * 8)
+    const point = ev.find((e) => e.kind === 'point')
+    expect(point && point.kind === 'point' && point.reason).toBe('ace')
+    expect(w.score).toEqual([1, 0])
+  })
+
+  it('a stroke always clears the net, even struck low right by it', () => {
+    const w = newWorld(0, 'clay')
+    const red = w.blobs[0]
+    red.x = W / 2
+    red.y = MID + 60
+    inPlay(w, 1, W / 2, MID + 20, 4, 0, 400, 60)
+    w.bounces = 1
+    const ev = runUntilPoint(w, idle(), 60 * 4)
+    expect(ev.some((e) => e.kind === 'hit')).toBe(true)
+    const point = ev.find((e) => e.kind === 'point')
+    expect(point && point.kind === 'point' && point.reason).not.toBe('net')
+  })
+
+  it('aim lands the ball where asked, clearing the tape', () => {
+    const b = { x: 300, y: 1400, z: 10, vx: 0, vy: 0, vz: 0 }
+    aim(b, 600, 400, 0.4)
+    let crossed = -1
+    let prevY = b.y
+    for (let i = 0; i < 600 && b.z >= 0; i++) {
+      fly(b, 1 / 240)
+      if ((prevY - MID) * (b.y - MID) <= 0 && crossed < 0) crossed = b.z
+      prevY = b.y
+    }
+    expect(crossed).toBeGreaterThanOrEqual(NET_H)
+    expect(Math.abs(b.x - 600)).toBeLessThan(10)
+    expect(Math.abs(b.y - 400)).toBeLessThan(10)
   })
 
   it('a ball in reach is struck by the racket, and the offset aims the return', () => {
@@ -100,6 +144,29 @@ describe('ball flight and faults', () => {
     inPlay(w, 0, blue.x + 60, blue.y + 110, 20, 0, -700, 200)
     const ev = step(w, STEP, idle())
     expect(ev.some((e) => e.kind === 'hit')).toBe(false)
+  })
+
+  it('running into the ball drives it: quicker and deeper than a standing stroke', () => {
+    const stroke = (run: number) => {
+      const w = newWorld(0, 'clay')
+      const blue = w.blobs[1]
+      blue.y = MID - 400
+      inPlay(w, 0, blue.x, blue.y + 140, 20, 0, -700, 200)
+      w.bounces = 1
+      const cmd = idle()
+      cmd.target[1] = { x: blue.x, y: blue.y + run * STEP }
+      const ev = step(w, STEP, cmd)
+      const hit = ev.find((e) => e.kind === 'hit')
+      return { w, hit: hit && hit.kind === 'hit' ? hit : null }
+    }
+    const still = stroke(0)
+    const drive = stroke(1300)
+    expect(still.hit?.power).toBe(0)
+    expect(drive.hit?.power).toBeGreaterThan(0.8)
+    expect(drive.hit?.speed ?? 0).toBeGreaterThan((still.hit?.speed ?? 0) * 1.2)
+    // Deeper: blue hits down the court, so its ball lands nearer red's baseline.
+    const landY = (w: World) => w.ball.y + w.ball.vy * timeTo(w.ball.z, w.ball.vz, 0)
+    expect(landY(drive.w)).toBeGreaterThan(landY(still.w) + 80)
   })
 
   it('a ball out of reach is not struck', () => {
@@ -132,6 +199,20 @@ describe('serve', () => {
     expect(w.hitter).toBe(0)
     expect(w.ball.vy).toBeLessThan(0)
     expect(TOSS_T).toBeGreaterThan(0)
+  })
+
+  it('the ball leaves from the hand it was held in (no jump at the serve)', () => {
+    const w = newWorld(0, 'clay')
+    const held = w.ball.x
+    expect(held).toBe(w.blobs[0].x - HAND)
+    const cmd = idle()
+    cmd.serve = [true, false]
+    let launched = NaN
+    for (let i = 0; i < 60 && w.phase === 'serve'; i++) {
+      const ev = step(w, STEP, cmd)
+      if (ev.some((e) => e.kind === 'serve')) launched = w.ball.x
+    }
+    expect(Math.abs(launched - held)).toBeLessThan(1)
   })
 
   it('does not serve before the server taps', () => {
@@ -216,6 +297,21 @@ describe('tennis bots', () => {
     let hard = 0
     for (let s = 1; s <= 4; s++) if (winner(botMatch('hard', 'easy', s, 5).w.score, 5) === 0) hard++
     expect(hard).toBeGreaterThanOrEqual(3)
+  })
+
+  it('the bot reads the bounce and finds a spot it can reach in time', () => {
+    const w = newWorld(0, 'clay')
+    inPlay(w, 0, 300, MID - 100, 60, -100, -900, 250)
+    const spot = intercept(w, 1, TUNING.hard.speed, 0)
+    expect(spot).not.toBeNull()
+    // It meets the ball on its own half, after the bounce.
+    expect((spot as { y: number }).y).toBeLessThan(MID)
+  })
+
+  it('the bot lets a ball that dies on the other half go', () => {
+    const w = newWorld(0, 'clay')
+    inPlay(w, 0, W / 2, MID + 200, 20, 0, 50, -100)
+    expect(intercept(w, 1, TUNING.hard.speed, 0)).toBeNull()
   })
 
   it('the court constants are the ones the bots assume', () => {

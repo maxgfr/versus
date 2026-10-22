@@ -34,6 +34,13 @@ class Tennis extends BaseGame<State> {
   private prev: { ball: Ball; blobs: [Disc, Disc] } | null = null
   private squash: [Spring, Spring] = [new Spring(1, 340, 12), new Spring(1, 340, 12)]
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
+  /** Ball squash on bounces and hits. */
+  private ballSquash = new Spring(1, 420, 14)
+  private trail: { x: number; y: number; z: number }[] = []
+  /** Seam angle, rolled with the ball's travel. */
+  private roll = 0
+  /** Seconds until each running blob kicks up its next puff of court dust. */
+  private dustIn: [number, number] = [0, 0]
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -80,6 +87,21 @@ class Tennis extends BaseGame<State> {
     this.prev = { ball: { ...w.ball }, blobs: [{ ...w.blobs[0] }, { ...w.blobs[1] }] }
     const events = step(w, dt, this.commands(dt))
     for (const e of events) this.juice(e)
+    this.dust(dt)
+  }
+
+  /** Running hard kicks up court dust behind the blob's feet. */
+  private dust(dt: number): void {
+    const w = this.s.w
+    for (const side of [0, 1] as Side[]) {
+      const p = w.blobs[side]
+      const sp = Math.hypot(p.vx, p.vy)
+      this.dustIn[side] -= dt
+      if (sp < 800 || this.dustIn[side] > 0) continue
+      this.dustIn[side] = 0.16
+      const feet = side === 0 ? 50 : -50
+      this.ctx.fx.puff(p.x - p.vx * 0.03, p.y + feet - p.vy * 0.03, DUST[w.surface], 1)
+    }
   }
 
   protected override afterEnd(dt: number): void {
@@ -103,14 +125,19 @@ class Tennis extends BaseGame<State> {
     const { fx, audio } = this.ctx
     const s = this.s
     if (e.kind === 'hit') {
-      const k = Math.min(1, e.speed / 1300)
-      audio.play('thud', 0.9 + k * 0.4)
-      audio.play('swish', 0.9 + k * 0.3)
-      fx.sparks(e.x, e.y, k > 0.8 ? C.yellow : C.white, Math.round(5 + k * 8))
-      fx.ring(e.x, e.y, SIDE[e.side].light, 70)
-      if (k > 0.75) fx.shake(0.05 + k * 0.08)
-      if (k > 0.9) fx.stop(2)
-      this.squash[e.side].kick(-2.5 - k * 2)
+      // Intensity from the ball's pace and how hard the blob ran into it.
+      const k = Math.min(1, e.speed / 1600)
+      const p = e.power
+      audio.play('thud', 0.85 + k * 0.35 + p * 0.25)
+      audio.play('swish', 0.9 + k * 0.3 + p * 0.2)
+      fx.sparks(e.x, e.y, p > 0.5 || k > 0.8 ? C.yellow : C.white, Math.round(5 + k * 6 + p * 12))
+      fx.ring(e.x, e.y, p > 0.6 ? C.yellow : SIDE[e.side].light, 70 + p * 70)
+      if (k > 0.7 || p > 0.4) fx.shake(0.04 + k * 0.06 + p * 0.16)
+      if (p > 0.65) fx.stop(2 + Math.round(p * 2))
+      if (p > 0.3) audio.buzz(Math.round(8 + p * 16))
+      this.squash[e.side].kick(-2.5 - k * 1.5 - p * 3)
+      this.ballSquash.kick(-4 - p * 6)
+      this.trail.length = 0
       if (e.rally >= 6 && e.rally % 3 === 0)
         fx.float(
           `Rally ${e.rally}!`,
@@ -121,19 +148,28 @@ class Tennis extends BaseGame<State> {
           e.side,
         )
     } else if (e.kind === 'bounce') {
-      audio.play('bounce', 1.05)
-      fx.puff(e.x, e.y, DUST[s.w.surface], 7)
-      fx.ring(e.x, e.y, 'rgba(255,255,255,0.6)', 60)
+      const sp = Math.hypot(s.w.ball.vx, s.w.ball.vy)
+      audio.play('bounce', 0.95 + Math.min(0.3, sp / 4000))
+      fx.puff(e.x, e.y, DUST[s.w.surface], 5 + Math.round(Math.min(6, sp / 250)))
+      fx.ring(e.x, e.y, 'rgba(255,255,255,0.6)', 50 + Math.min(40, sp / 30))
+      this.ballSquash.kick(-5)
       this.mark(e.x, e.y, false)
     } else if (e.kind === 'serve') {
       audio.play('whoosh')
       audio.play('thud', 1.2)
       fx.sparks(e.x, e.y, C.white, 6)
       this.squash[e.side].kick(-3)
+      this.ballSquash.kick(-4)
+      this.trail.length = 0
     } else if (e.kind === 'point') {
       const { side } = e
       const col = SIDE[side]
       s.call = { reason: e.reason, side, x: e.x, y: e.y, t: this.time }
+      if (e.reason === 'ace') {
+        audio.play('powerup', 1.2)
+        fx.ring(e.x, e.y, C.yellow, 220)
+        fx.sparks(e.x, e.y, C.yellow, 18)
+      }
       if (e.reason === 'out' || e.reason === 'short' || e.reason === 'double')
         this.mark(e.x, e.y, true)
       audio.play(e.reason === 'net' ? 'boing' : 'buzz', 0.9)
@@ -182,8 +218,19 @@ class Tennis extends BaseGame<State> {
     const dt = 1 / 60
     for (const sp of this.squash) sp.update(dt)
     for (const p of this.pulse) p.update(dt)
+    this.ballSquash.update(dt)
+    const sp = Math.hypot(w.ball.vx, w.ball.vy)
+    if (w.phase === 'play') {
+      this.roll += (sp / 21) * dt * 0.4
+      if (sp > 1100) this.trail.push({ x: ball.x, y: ball.y, z: ball.z })
+      else this.trail.shift()
+    } else this.trail.length = 0
+    while (this.trail.length > 6) this.trail.shift()
     render(g, w, {
       ball,
+      trail: this.trail,
+      roll: this.roll,
+      ballSquash: this.ballSquash.value,
       blobs: [ip(w.blobs[0], prev?.blobs[0]), ip(w.blobs[1], prev?.blobs[1])],
       squash: this.squash.map((sp) => sp.value),
       pulse: [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)],

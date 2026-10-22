@@ -17,6 +17,12 @@ export interface Mark {
 
 export interface Look {
   ball: Ball
+  /** Recent ball positions when it flies fast, oldest first. */
+  trail: { x: number; y: number; z: number }[]
+  /** Seam angle (rolls with the ball's travel). */
+  roll: number
+  /** Ball squash spring (1 = round). */
+  ballSquash: number
   blobs: [Disc, Disc]
   squash: number[]
   pulse: [number, number]
@@ -170,10 +176,11 @@ function drawNet(g: Draw): void {
  * Racket in world space: it points toward the net with the side's forehand
  * offset; `q` runs 0 at contact to 1 at rest, sweeping the head across.
  */
-function drawRacket(g: Draw, p: Disc, side: Side, q: number): void {
+function drawRacket(g: Draw, p: Disc, side: Side, q: number, wind: number): void {
   const fwd = side === 0 ? 0 : Math.PI
-  // Contact, follow-through across the body, then back to the ready position.
-  const a = q < 0.35 ? -0.1 - 1.3 * (q / 0.35) : -1.4 + 2.3 * ((q - 0.35) / 0.65)
+  // Contact, follow-through across the body, then back to the ready position,
+  // drawn further back (the wind-up) as a playable ball closes in.
+  const a = q < 0.35 ? -0.1 - 1.3 * (q / 0.35) : -1.4 + (2.3 + wind * 0.7) * ((q - 0.35) / 0.65)
   g.at(p.x, p.y, fwd + a, () => {
     if (q < 0.35)
       g.alpha(0.55 * (1 - q / 0.35), () =>
@@ -202,6 +209,7 @@ function drawBlob(
   swing: number,
   ball: Ball,
   mood: 'happy' | 'wow' | 'grin' | 'sad',
+  wind: number,
 ): void {
   const flip = g.orient(side)
   const q = 1 - clamp(swing / SWING_T, 0, 1)
@@ -216,7 +224,7 @@ function drawBlob(
     ly = -ly
   }
   g.shadow(p.x + 8, p.y + BLOB_R * 0.85, BLOB_R * (0.95 - bob * 0.1), BLOB_R * 0.4, 0.38)
-  drawRacket(g, p, side, q)
+  drawRacket(g, p, side, q, wind)
   g.at(p.x, p.y - bob * 12 * (Math.abs(flip) > 1 ? -1 : 1), flip, () => {
     g.blob(0, 0, BLOB_R, SIDE[side].main, {
       look: [lx, ly],
@@ -230,7 +238,7 @@ function drawBlob(
 }
 
 /** Ball with pseudo height: it grows as it rises and its shadow slides away. */
-function drawBall(g: Draw, b: Ball, held: boolean): void {
+function drawBall(g: Draw, b: Ball, held: boolean, roll = 0, squash = 1): void {
   const lift = Math.max(0, b.z)
   const k = 1 + lift / 360
   const sh = Math.max(0.25, 1 - lift / 500)
@@ -240,17 +248,34 @@ function drawBall(g: Draw, b: Ball, held: boolean): void {
   const r = 21 * k
   if (!held && lift > 30)
     g.alpha(0.18, () => g.line(b.x, b.y, b.x + lift * 0.3, b.y + lift * 0.45, '#000000', 3))
-  g.ball(b.x, b.y, r, '#dcf542', 1)
-  g.arc(b.x - r * 0.95, b.y, r * 0.75, -0.9, 0.9, alpha('#ffffff', 0.85), r * 0.14)
-  g.arc(
-    b.x + r * 0.95,
+  // Squashed along its travel on a bounce or a hit.
+  const dir = Math.atan2(b.vy, b.vx)
+  const sq = clamp(squash, 0.6, 1.4)
+  g.at(
+    b.x,
     b.y,
-    r * 0.75,
-    Math.PI - 0.9,
-    Math.PI + 0.9,
-    alpha('#ffffff', 0.85),
-    r * 0.14,
+    dir,
+    () => {
+      g.ball(0, 0, r, '#dcf542', 1)
+      // The seams turn as it rolls.
+      g.at(0, 0, roll, () => {
+        g.arc(-r * 0.95, 0, r * 0.75, -0.9, 0.9, alpha('#ffffff', 0.85), r * 0.14)
+        g.arc(r * 0.95, 0, r * 0.75, Math.PI - 0.9, Math.PI + 0.9, alpha('#ffffff', 0.85), r * 0.14)
+      })
+    },
+    sq,
+    2 - sq,
   )
+}
+
+/** Fading fuzz behind a fast ball. */
+function drawTrail(g: Draw, trail: Look['trail']): void {
+  for (let i = 0; i < trail.length; i++) {
+    const t = trail[i]
+    if (!t) continue
+    const k = (i + 1) / (trail.length + 1)
+    g.alpha(k * 0.35, () => g.circle(t.x, t.y, 21 * (1 + t.z / 360) * (0.45 + 0.5 * k), '#dcf542'))
+  }
 }
 
 function scoreboard(g: Draw, w: World, side: Side, look: Look): void {
@@ -297,6 +322,7 @@ const CALL: Record<Reason, string> = {
   short: 'SHORT',
   net: 'NET',
   double: 'TWO BOUNCES',
+  ace: 'ACE!',
 }
 
 /** The umpire's call, popped at the spot for a moment after a point. */
@@ -383,20 +409,36 @@ export function render(g: Draw, w: World, look: Look): void {
   const ballSide: Side = ball.y < MID ? 1 : 0
   const drawB = () => {
     if (w.phase === 'point') return
-    if (held) {
-      // The ball sits in the server's hand, then rises with the toss.
-      const p = look.blobs[w.server]
-      const hand = w.server === 0 ? -1 : 1
-      drawBall(g, { ...ball, x: p.x + hand * 84, y: p.y + (w.server === 0 ? 10 : -10) }, true)
-    } else drawBall(g, ball, false)
+    // Held: the ball sits in the server's hand (the rules keep it there), then rises with the toss.
+    if (!held) drawTrail(g, look.trail)
+    drawBall(g, ball, held, look.roll, look.ballSquash)
   }
-  drawBlob(g, look.blobs[far], far, look.squash[far] ?? 1, w.swing[far], ball, mood(far))
+  // Wind-up: the racket draws back as a ball this side can play closes in.
+  const wind = (side: Side): number => {
+    if (w.phase !== 'play' || w.hitter === side || w.swing[side] > 0) return 0
+    const p = look.blobs[side]
+    const d = Math.hypot(ball.x - p.x, ball.y - p.y)
+    return clamp(1 - (d - REACH) / 420, 0, 1)
+  }
+  const blob = (side: Side) =>
+    drawBlob(
+      g,
+      look.blobs[side],
+      side,
+      look.squash[side] ?? 1,
+      w.swing[side],
+      ball,
+      mood(side),
+      wind(side),
+    )
+  blob(far)
   if (ballSide === far) drawB()
   drawNet(g)
   if (ballSide === near) drawB()
-  drawBlob(g, look.blobs[near], near, look.squash[near] ?? 1, w.swing[near], ball, mood(near))
+  blob(near)
   // A ball above the near blob still reads on top of it.
-  if (ballSide === near && ball.z > 40 && w.phase === 'play') drawBall(g, ball, false)
+  if (ballSide === near && ball.z > 40 && w.phase === 'play')
+    drawBall(g, ball, false, look.roll, look.ballSquash)
   if (w.phase === 'serve' && w.toss < 0 && look.ended < 0) {
     const s = w.server
     if (!look.bots[s]) banner(g, s, 'Tap to serve', s === 0 ? MID + 200 : MID - 200, { size: 52 })
