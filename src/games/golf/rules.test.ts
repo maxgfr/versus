@@ -15,10 +15,12 @@ import {
   newState,
   plan,
   result,
+  resultNote,
   runShot,
   type State,
   stepBall,
   surfaceAt,
+  windScale,
 } from './rules.ts'
 
 const flat = (over: Partial<Hole> = {}): Hole => ({
@@ -215,5 +217,53 @@ describe('golf game', () => {
     expect(s.turn).toBe(1)
     s.rest[1] = { ...holeOf(s).cup, y: holeOf(s).cup.y + (s.holes[0]?.starter === 0 ? 30 : -30) }
     expect(nextTurn({ ...s, turn: 1 })).toBe(0)
+  })
+})
+
+describe('golf: ties and the wind', () => {
+  it('level on strokes, the most holes won takes it; level on both is a draw', () => {
+    const s = newState(new Rng(1), 0, 0, 3)
+    s.hole = 3
+    s.strokes = [12, 12]
+    s.card = [
+      [3, 4],
+      [4, 5],
+      [5, 3],
+    ]
+    expect(result(s)).toBe(0)
+    expect(resultNote(s)).toContain('holes won')
+    s.card = [
+      [3, 4],
+      [5, 3],
+      [4, 5],
+    ]
+    expect(result(s)).toBe(0)
+    s.card = [
+      [4, 3],
+      [3, 4],
+      [5, 5],
+    ]
+    expect(result(s)).toBe('draw')
+    s.strokes = [11, 12]
+    expect(result(s)).toBe(0)
+    expect(resultNote(s)).toBe('Fewest strokes wins')
+  })
+
+  it('the wind builds over the course: gentle first, full on the last hole', () => {
+    expect(windScale(0, 3)).toBeLessThan(windScale(1, 3))
+    expect(windScale(2, 3)).toBe(1)
+    expect(windScale(0, 1)).toBe(1)
+  })
+
+  it('a landing reports how hard the ball came down', () => {
+    const rng = new Rng(4)
+    const h = makeHole(rng, 0, 0)
+    const b = plan(h, h.tee, { dx: 0, dy: -1, power: 1 })
+    let speed = 0
+    for (let i = 0; i < 600 && !speed; i++) {
+      const hit = stepBall(b, STEP, 0, h)
+      if (hit?.kind === 'land') speed = hit.speed ?? 0
+    }
+    expect(speed).toBeGreaterThan(400)
   })
 })

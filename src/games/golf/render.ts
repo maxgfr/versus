@@ -31,6 +31,8 @@ export interface Look {
   } | null
   /** Show the "pull back anywhere" hint to the human on turn. */
   hint: boolean
+  /** Seconds since the moving ball last landed (it squashes). */
+  land: number
 }
 
 const BALL_R = 17
@@ -283,7 +285,11 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       g.alpha(0.5 + p * 0.5, () => g.ring(b.x, b.y, BALL_R + 14 + p * 6, C.yellow, 6))
     }
     g.shadow(b.x + 4, b.y + 7, BALL_R * 0.9, BALL_R * 0.45, 0.4)
-    drawBall(g, side, b.x, b.y, BALL_R)
+    // Squashed for a moment after it comes down.
+    const sq = flying && look.land < 0.18 ? 1 - look.land / 0.18 : 0
+    if (sq > 0)
+      g.at(b.x, b.y, 0, () => drawBall(g, side, 0, 0, BALL_R), 1 + 0.3 * sq, 1 - 0.25 * sq)
+    else drawBall(g, side, b.x, b.y, BALL_R)
   }
 
   // The pin, lifted out while a ball drops.
@@ -323,7 +329,9 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
   drawFlag(g, h.cup, s.wind, now, lift)
   if (golfer && !golferFirst) golfer()
 
-  if (look.aim) {
+  // Online, the preview and power arc are the striker's own controls: only their phone shows them.
+  const own = g.viewer === null || g.viewer === s.turn
+  if (look.aim && own) {
     const side = s.turn
     const b = s.rest[side]
     drawTrajectory(g, look.aim.preview, SIDE[side].light)
@@ -364,7 +372,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       ),
     )
   }
-  if (look.hint) {
+  if (look.hint && own) {
     const side = s.turn
     banner(g, side, 'Pull back anywhere, let go to swing', side === 0 ? MID + 380 : MID - 380, {
       size: 38,
@@ -405,10 +413,10 @@ function sockSpot(h: Hole): Pt {
 
 const doneAt = (s: State): boolean => s.endAt >= 0 || s.hole >= s.holes.length
 
-/** HUD: strokes big at the edge, holes won as pips. */
-export function hud(g: Draw, s: State): void {
+/** HUD: strokes big at the edge (they jump on a holed ball), holes won as pips. */
+export function hud(g: Draw, s: State, pulse: [number, number]): void {
   for (const side of [0, 1] as const) {
-    bigScore(g, side, s.strokes[side], { x: 130, size: 64 })
+    bigScore(g, side, s.strokes[side], { x: 130, size: 64 * (1 + pulse[side] * 0.35) })
     pips(g, side, holesWon(s, side), s.holes.length, { x: W - 150 })
   }
 }

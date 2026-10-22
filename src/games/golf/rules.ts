@@ -83,6 +83,8 @@ export interface Hit {
   x: number
   y: number
   surface: Surface
+  /** Speed at the moment of the hit (3D on a landing): drives how hard it feels. */
+  speed?: number
 }
 
 export type Event =
@@ -246,14 +248,15 @@ export function stepBall(b: Ball, dt: number, wind: number, h: Hole): Hit | null
     if (b.z > 0) return null
     b.z = 0
     const surface = surfaceAt(h, b.x, b.y)
-    if (surface === 'water') return { kind: 'water', x: b.x, y: b.y, surface }
+    const speed = Math.hypot(b.vx, b.vy, b.vz)
+    if (surface === 'water') return { kind: 'water', x: b.x, y: b.y, surface, speed }
     b.air = false
     b.vz = 0
     if (dist(b, h.cup) <= CUP_R && Math.hypot(b.vx, b.vy) <= CUP_SPEED)
       return { kind: 'sunk', x: h.cup.x, y: h.cup.y, surface }
     b.vx *= RETAIN[surface]
     b.vy *= RETAIN[surface]
-    return { kind: 'land', x: b.x, y: b.y, surface }
+    return { kind: 'land', x: b.x, y: b.y, surface, speed }
   }
   const before = surfaceAt(h, b.x, b.y)
   if (before === 'water') return { kind: 'water', x: b.x, y: b.y, surface: before }
@@ -395,10 +398,23 @@ export const done = (s: State): boolean => s.hole >= s.holes.length
 /** The hole being played (the last one once the round is over, so the final frames still draw). */
 export const holeOf = (s: State): Hole => s.holes[Math.min(s.hole, s.holes.length - 1)] as Hole
 
-/** Fewest strokes wins. */
+/** Fewest strokes wins; level on strokes, the most holes won takes it; else a draw. */
 export function result(s: State): Side | 'draw' {
   const [r, b] = s.strokes
-  return r < b ? 0 : b < r ? 1 : 'draw'
+  if (r !== b) return r < b ? 0 : 1
+  const d = holesWon(s, 0) - holesWon(s, 1)
+  return d > 0 ? 0 : d < 0 ? 1 : 'draw'
+}
+
+/** The line under the result: how it was decided. */
+export function resultNote(s: State): string {
+  if (s.strokes[0] !== s.strokes[1]) return 'Fewest strokes wins'
+  return result(s) === 'draw' ? 'Level on strokes and holes' : 'Level on strokes: more holes won'
+}
+
+/** Share of the full wind range on hole `index` of `count`: calm-ish first, full on the last. */
+export function windScale(index: number, count: number): number {
+  return count <= 1 ? 1 : 0.55 + (0.45 * Math.min(index, count - 1)) / (count - 1)
 }
 
 /** Holes a side won (fewer strokes on that hole). */
