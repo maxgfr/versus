@@ -37,8 +37,8 @@ interface Skill {
 
 const SKILL: Record<Difficulty, Skill> = {
   easy: { orbit: 290, tol: 60, react: 0.7, err: 0.08, lead: 0.3 },
-  normal: { orbit: 270, tol: 52, react: 0.45, err: 0.05, lead: 0.65 },
-  hard: { orbit: 250, tol: 40, react: 0.2, err: 0.01, lead: 1 },
+  normal: { orbit: 265, tol: 46, react: 0.32, err: 0.035, lead: 0.8 },
+  hard: { orbit: 250, tol: 36, react: 0.14, err: 0.005, lead: 1 },
 }
 
 /**

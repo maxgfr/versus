@@ -13,6 +13,14 @@ export const TURN = 1.5
 export const HP = 3
 /** Seconds between salvos. */
 export const RELOAD = 1.6
+/**
+ * A squall: a round still going after this many seconds turns rough, and both
+ * crews reload faster for the rest of it.
+ */
+export const SQUALL_T = 30
+export const SQUALL_RELOAD = 1
+/** Reload time at round time `t`. */
+export const reloadAt = (t: number): number => (t >= SQUALL_T ? SQUALL_RELOAD : RELOAD)
 export const SALVO = 6
 export const BALL_SPEED = 560
 /** Cannonball reach (world units) before it drops into the sea. */
@@ -138,6 +146,8 @@ export type Ev =
   | { k: 'fire'; x: number; y: number; a: number; side: Side }
   | { k: 'splash'; x: number; y: number }
   | { k: 'rock'; x: number; y: number }
+  /** The round has gone on long enough: the squall starts. */
+  | { k: 'squall' }
   | {
       k: 'hit'
       x: number
@@ -246,7 +256,7 @@ function salvo(w: World, s: Ship, foe: Ship, ev: Ev[]): void {
   const ny = fx * side
   const base = Math.atan2(ny, nx)
   const salvo = w.nextId++
-  s.cd = RELOAD
+  s.cd = reloadAt(w.t)
   s.fireT = w.t
   s.fireSide = side
   for (let k = 0; k < SALVO; k++) {
@@ -373,6 +383,7 @@ export function stepWorld(
     if (!hit) keep.push(b)
   }
   w.balls = keep.filter((b) => !spent.has(b.salvo))
+  if (w.t < SQUALL_T && w.t + dt >= SQUALL_T) ev.push({ k: 'squall' })
   w.t += dt
 }
 

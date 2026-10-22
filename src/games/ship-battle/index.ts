@@ -20,7 +20,7 @@ import {
   LAYOUTS,
   MAX_SPEED,
   newWorld,
-  RELOAD,
+  reloadAt,
   roundWinner,
   SEA,
   settle,
@@ -120,7 +120,7 @@ class Ships extends BaseGame<State> {
     for (const e of this.ev) this.feedback(e)
     s.ctl = this.controls.map((c) => {
       const sh = s.w.ships.find((k) => k.side === c.side)
-      return snapControl(c, sh ? 1 - sh.cd / RELOAD : 1)
+      return snapControl(c, sh ? Math.max(0, 1 - sh.cd / reloadAt(s.w.t)) : 1)
     })
     // Damaged hulls smoke, sinking ones bubble (cosmetic: Math.random, so the
     // seeded rng that picks the layouts is never disturbed).
@@ -222,6 +222,13 @@ class Ships extends BaseGame<State> {
           drag: 3,
         })
         fx.ring(e.x, e.y, '#ffffff', 46)
+        break
+      case 'squall':
+        audio.play('whoosh', 0.7)
+        audio.play('powerup')
+        fx.flash('#9fd8ff', 0.25)
+        fx.shake(0.25)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Squall!')
         break
       case 'rock':
         audio.play('thud', 1.15)

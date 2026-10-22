@@ -18,6 +18,8 @@ import {
   SEA,
   settle,
   SHIP_R,
+  SQUALL_RELOAD,
+  SQUALL_T,
   stepWorld,
   type World,
 } from './rules.ts'
@@ -256,6 +258,27 @@ describe('round flow', () => {
     expect(red.hp).toBe(HP)
     expect(blue.hp).toBe(HP)
     expect(Math.hypot(red.x - blue.x, red.y - blue.y)).toBeGreaterThanOrEqual(SHIP_R * 2 - 0.01)
+  })
+})
+
+describe('squall', () => {
+  it('a long round turns into a squall: both crews reload faster', () => {
+    const w = duel()
+    const [red] = w.ships as NonNullable<World['ships'][number]>[]
+    if (!red) throw new Error('ships')
+    red.a = 0
+    red.cd = 0
+    stepWorld(w, [{ jx: 0, jy: 0, fire: true }, undefined], STEP, [])
+    expect(red.cd).toBeCloseTo(RELOAD, 6)
+    w.balls = []
+    w.t = SQUALL_T - STEP / 2
+    red.cd = 0
+    const ev: Ev[] = []
+    stepWorld(w, [{ jx: 0, jy: 0, fire: false }, undefined], STEP, ev)
+    expect(ev.filter((e) => e.k === 'squall').length).toBe(1)
+    stepWorld(w, [{ jx: 0, jy: 0, fire: true }, undefined], STEP, ev)
+    expect(red.cd).toBeCloseTo(SQUALL_RELOAD, 6)
+    expect(ev.filter((e) => e.k === 'squall').length).toBe(1)
   })
 })
 

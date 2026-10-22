@@ -18,6 +18,7 @@ import {
   SEA,
   SINK_T,
   type Ship,
+  SQUALL_T,
   WAKE_T,
 } from './rules.ts'
 
@@ -351,6 +352,16 @@ export function renderShips(g: Draw, s: State, now: number, v: View, look: Look)
   const w = s.w
   const r = s.rounds
   sea(g, w.t)
+  if (w.t >= SQUALL_T) {
+    // The squall: the water darkens and wind streaks race across it.
+    const k = Math.min(1, (w.t - SQUALL_T) / 1.5)
+    g.fillView(alpha('#06182a', 0.22 * k))
+    for (let i = 0; i < 14; i++) {
+      const y = SEA.top + ((i * 97 + w.t * 260) % (SEA.bottom - SEA.top))
+      const x = SEA.left + ((i * 211 + w.t * 520) % (SEA.right - SEA.left))
+      g.line(x, y, x - 70, y + 22, alpha('#d8f1ff', 0.18 * k), 3)
+    }
+  }
   for (const sh of w.ships) wake(g, look.wakes[sh.id] ?? [], w.t)
   shores(g, w.t)
   isles(g, w.isles, w.t)
