@@ -3,17 +3,11 @@ import { banner, pips } from '../../core/hud.ts'
 import { approach } from '../../core/fx/ease.ts'
 import type { PlayerInput } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
-import { SIDE } from '../../core/render/palette.ts'
+import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import {
-  type BodySnap,
-  loadMatter,
-  type M,
-  makeBody,
-  PhysicsWorld,
-} from '../../engines/ragdoll/index.ts'
-import { Planner, type Plan } from './bot.ts'
-import { drawScene, ROTATE_BTN, type SceneView } from './render.ts'
+import { type BodySnap, loadMatter, type M, PhysicsWorld } from '../../engines/ragdoll/index.ts'
+import { Planner, type Plan, TUNING } from './bot.ts'
+import { drawScene, Faces, ROTATE_BTN, type SceneView } from './render.ts'
 import {
   anyFallen,
   cameraFor,
@@ -21,16 +15,19 @@ import {
   FALL_LINE,
   hoverY,
   ISLAND,
+  landingOf,
   matchWinner,
-  PIECES,
   pieceAt,
   roundSeed,
-  shapeOf,
+  swayOf,
+  TURN_T,
 } from './rules.ts'
-import { addIsland } from './sim.ts'
+import { addIsland, pieceBody } from './sim.ts'
 
 /** Seconds the banner stays up after a tower falls, before the next tower is built. */
 const BETWEEN = 2.6
+/** Tower speed (matter units per step) above which it creaks and the animals panic. */
+const WOBBLY = 1.2
 
 /** Match length: first to N rounds won, a round being one tower until it falls. */
 export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
@@ -51,7 +48,7 @@ export interface State {
   n: number
   piece: number
   next: number
-  /** Hovering block: x and angle. */
+  /** Hovering animal: the hand's x (the crane sways it around that) and its turn. */
   hx: number
   ha: number
   bodies: BodySnap[]
@@ -63,6 +60,11 @@ export interface State {
   /** When the tower fell and who knocked it over, for the "Toppled!" stamp. */
   fellAt: number
   loser: Side | null
+  /** 0..1: how hard the tower is wobbling right now (the animals panic, it creaks). */
+  wob: number
+  /** Game time of the last drop and where the piece was let go (the hook swings back up). */
+  dropAt: number
+  dropX: number
 }
 
 class AnimalStack extends BaseGame<State> {
@@ -78,6 +80,9 @@ class AnimalStack extends BaseGame<State> {
   private planner: Planner | null = null
   private plan: Plan | null = null
   private splashed = new Set<number>()
+  private creakAt = -10
+  /** Cosmetic: each animal's mood, blink and landing squash. */
+  private faces = new Faces()
 
   protected setup(): State {
     void loadMatter().then((Mx) => {
@@ -87,6 +92,8 @@ class AnimalStack extends BaseGame<State> {
       Mx.Events.on(w.engine, 'collisionStart', (e) => this.onHit(e.pairs))
       this.world = w
     })
+    // Local 2P: the whole screen belongs to whoever is to drop.
+    if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
     const seed = this.ctx.seed
     const first: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
@@ -109,6 +116,9 @@ class AnimalStack extends BaseGame<State> {
       aiming: false,
       fellAt: -1,
       loser: null,
+      wob: 0,
+      dropAt: -10,
+      dropX: ISLAND.x,
     }
   }
 
@@ -120,6 +130,12 @@ class AnimalStack extends BaseGame<State> {
   /** The scene faces whoever is to move (fixed upright in 1P). */
   private rotTarget(): number {
     return this.ctx.mode === '2p' && this.s.turn === 1 ? Math.PI : 0
+  }
+
+  /** The crane's sway right now (the drop lands at hand x plus this). */
+  private sway(): number {
+    const s = this.s
+    return s.phase === 'aim' ? swayOf(s.n, this.time - s.phaseAt) : 0
   }
 
   // ---------- scene ↔ world ----------
@@ -149,16 +165,27 @@ class AnimalStack extends BaseGame<State> {
   private onHit(
     pairs: {
       bodyA: { speed: number; position: { x: number; y: number } }
-      bodyB: { speed: number }
+      bodyB: { speed: number; position: { x: number; y: number } }
+      collision: { supports: { x: number; y: number }[] }
     }[],
   ): void {
     for (const p of pairs) {
       const v = Math.max(p.bodyA.speed, p.bodyB.speed)
       if (v < 2.5) continue
-      this.ctx.audio.play('thud', 0.8 + Math.random() * 0.5)
-      const at = this.toWorld(p.bodyA.position.x, p.bodyA.position.y)
-      this.ctx.fx.puff(at.x, at.y, 'rgba(255,255,255,0.6)', 5)
-      if (v > 6) this.ctx.fx.shake(0.12)
+      // A harder landing thuds lower and louder, kicks more dust, shakes more.
+      const k = Math.min(1, (v - 2.5) / 9)
+      const { fx, audio } = this.ctx
+      audio.play('thud', 1.1 - k * 0.4)
+      if (v > 5) audio.play('boing', 1.1 + k * 0.3)
+      // Where the two touched (a body's centre would be far off for one landing on its edge).
+      const c = p.collision.supports[0] ?? p.bodyB.position
+      const at = this.toWorld(c.x, c.y)
+      fx.puff(at.x, at.y, 'rgba(255,255,255,0.6)', 4 + Math.round(k * 6))
+      if (v > 6) {
+        fx.shake(0.08 + k * 0.16)
+        fx.sparks(at.x, at.y, C.yellow, 6 + Math.round(k * 8))
+        audio.buzz(Math.round(6 + k * 14))
+      }
       break
     }
   }
@@ -168,26 +195,56 @@ class AnimalStack extends BaseGame<State> {
     const w = this.world
     if (!w) return
     w.step(dt)
+    let fast = 0
     for (const [id, b] of w.bodies) {
       if (b.position.y > FALL_LINE + 260 && !this.splashed.has(id)) {
         this.splashed.add(id)
         const at = this.toWorld(b.position.x, ISLAND.top + 330)
-        this.ctx.audio.play('splash')
-        this.ctx.fx.burst(at.x, at.y, '#bfe8ff', { count: 16, speed: 520, size: 12, gravity: 1400 })
+        this.ctx.audio.play('splash', 0.8 + Math.random() * 0.3)
+        this.ctx.fx.burst(at.x, at.y, '#bfe8ff', {
+          count: 18,
+          speed: 560,
+          size: 12,
+          gravity: 1400,
+          colors: ['#bfe8ff', '#ffffff', '#7fd0ff'],
+        })
       }
       if (b.position.y > ISLAND.top + 1600) w.remove(id)
+      else if (b.position.y < FALL_LINE)
+        fast = Math.max(fast, b.speed + Math.abs(b.angularSpeed) * 30)
     }
     s.bodies = w.snap()
     s.cam = approach(s.cam, cameraFor(hoverY(s.bodies, s.piece)), 2.5, dt)
     s.rot = approach(s.rot, this.rotTarget(), 5, dt)
+    // The tower wobbles (the falling piece itself does not count until it has landed).
+    const wob = s.phase === 'settle' && this.time - s.phaseAt < 0.5 ? 0 : Math.min(1, fast / 4)
+    s.wob = approach(s.wob, wob, 10, dt)
+    if (s.wob > 0.35 && fast > WOBBLY && this.time - this.creakAt > 0.7 && s.resetAt < 0) {
+      this.creakAt = this.time
+      this.ctx.audio.play('slide', 0.7 + Math.random() * 0.2)
+    }
 
     // Whoever dropped last owns any collapse, even a late one.
     if (s.lastDropper !== null && anyFallen(s.bodies)) {
       const loser = s.lastDropper
       s.lastDropper = null
-      this.ctx.audio.play('explode')
-      this.ctx.fx.shake(0.6)
-      this.ctx.fx.flash(SIDE[loser].main, 0.3)
+      const { fx, audio } = this.ctx
+      audio.play('explode')
+      audio.play('boing', 0.7)
+      audio.buzz(40)
+      fx.shake(0.7)
+      fx.stop(6)
+      fx.flash(SIDE[loser].main, 0.35)
+      const at = this.toWorld(ISLAND.x, ISLAND.top)
+      fx.burst(at.x, at.y, '#ffffff', {
+        count: 26,
+        speed: 900,
+        size: 16,
+        life: 0.9,
+        gravity: 900,
+        colors: ['#ffffff', C.yellow, SIDE[loser].light],
+        kind: 'square',
+      })
       this.collapsed(loser)
       return
     }
@@ -204,15 +261,22 @@ class AnimalStack extends BaseGame<State> {
       return
     }
     if (Math.abs(s.rot - this.rotTarget()) > 0.08) return
+    // Nobody can stall: the crane lets go when the turn clock runs out.
+    if (this.time - s.phaseAt > TURN_T) {
+      this.aimPtr = null
+      s.aiming = false
+      this.drop()
+      return
+    }
     if (this.isBot(s.turn)) this.stepBot(dt)
     else this.stepHuman()
   }
 
+  /** Only the player to move aims: the other side's touches must not drop a piece. */
   private inputs(): PlayerInput[] {
     const i = this.ctx.input
-    if (this.ctx.mode === 'online') return [i.player(this.s.turn)]
     if (this.ctx.mode === '1p') return [i.player(0)]
-    return [i.player(0), i.player(1)]
+    return [i.player(this.s.turn)]
   }
 
   private stepHuman(): void {
@@ -255,11 +319,14 @@ class AnimalStack extends BaseGame<State> {
     this.plan ??= this.planner.best()
     const minThink = this.ctx.difficulty === 'hard' ? 0.5 : 0.8
     if (t < minThink) return
+    // The crane sways: the hand leads the target by the sway, as a person would.
+    const tune = TUNING[this.ctx.difficulty]
+    const sway = this.sway()
     s.aiming = true
-    s.hx = approach(s.hx, this.plan.x, 9, dt)
+    s.hx = clampHover(approach(s.hx, this.plan.x - sway, tune.hand, dt), s.piece)
     s.ha = approach(s.ha, this.plan.a, 8, dt)
-    if (Math.abs(s.hx - this.plan.x) < 3 && Math.abs(s.ha - this.plan.a) < 0.02) {
-      s.hx = this.plan.x
+    const off = Math.abs(s.hx + sway - this.plan.x)
+    if ((off < 4 && Math.abs(s.ha - this.plan.a) < 0.02) || t > minThink + 4) {
       s.ha = this.plan.a
       s.aiming = false
       this.drop()
@@ -272,8 +339,11 @@ class AnimalStack extends BaseGame<State> {
     const w = this.world
     if (!Mx || !w || s.phase !== 'aim') return
     const id = ++this.nextId
-    w.add(id, makeBody(Mx, shapeOf(s.piece), s.hx, hoverY(s.bodies, s.piece), s.ha), s.piece)
+    const x = s.hx + this.sway()
+    w.add(id, pieceBody(Mx, s.piece, x, hoverY(s.bodies, s.piece), s.ha), s.piece)
     s.lastDropper = s.turn
+    s.dropAt = this.time
+    s.dropX = x
     s.phase = 'settle'
     s.phaseAt = this.time
     this.planner = null
@@ -285,16 +355,16 @@ class AnimalStack extends BaseGame<State> {
   private collapsed(loser: Side): void {
     const s = this.s
     const winner = other(loser)
-    const note = `${s.n} block${s.n === 1 ? '' : 's'} stacked`
+    const note = `${s.n} animal${s.n === 1 ? '' : 's'} stacked`
     s.wins[winner]++
     s.fellAt = this.time
     s.loser = loser
     s.phase = 'settle'
     s.phaseAt = this.time
+    this.ctx.fx.confetti(winner)
     if (matchWinner(s.wins, this.goal) !== null) {
       const o: { note: string; delay: number; score?: [number, number] } = { note, delay: 2.2 }
       if (this.goal > 1) o.score = [s.wins[0], s.wins[1]]
-      this.ctx.fx.confetti(winner)
       this.finish(winner, o)
       return
     }
@@ -327,6 +397,7 @@ class AnimalStack extends BaseGame<State> {
     s.lastDropper = null
     s.fellAt = -1
     s.loser = null
+    s.wob = 0
     s.phase = 'aim'
     s.phaseAt = this.time
     s.resetAt = -1
@@ -346,6 +417,11 @@ class AnimalStack extends BaseGame<State> {
     this.ctx.audio.play('pop', 1 + Math.min(0.6, s.n * 0.03))
     const top = this.toWorld(s.hx, hoverY(s.bodies, s.piece) + 200)
     this.ctx.fx.float(`${s.n}`, top.x, top.y, SIDE[other(s.turn)].light, 64, other(s.turn))
+    // Every few storeys the crane swings wider and quicker: say so.
+    if (s.n >= 3 && s.n % 4 === 3) {
+      this.ctx.audio.play('powerup', 1 + Math.min(0.4, s.n * 0.02))
+      this.ctx.fx.float('Hold steady!', W / 2, MID, C.yellow, 52)
+    }
   }
 
   protected override afterEnd(dt: number): void {
@@ -358,14 +434,18 @@ class AnimalStack extends BaseGame<State> {
 
   render(g: Draw): void {
     const s = this.s
+    const sway = this.sway()
+    const x = s.hx + sway
     const view: SceneView = {
       bodies: s.bodies,
       piece: s.piece,
       next: s.next,
       hx: s.hx,
+      x,
       ha: s.ha,
       hoverY: hoverY(s.bodies, s.piece),
-      showHover: s.phase === 'aim' && !this.over,
+      landing: s.phase === 'aim' ? landingOf(s.bodies, s.piece, x, s.ha) : null,
+      showHover: s.phase === 'aim' && !this.over && s.resetAt < 0,
       cam: s.cam,
       rot: s.rot,
       turn: s.turn,
@@ -377,11 +457,15 @@ class AnimalStack extends BaseGame<State> {
       over: this.over,
       loading: this.world === null && s.bodies.length === 0 && this.ctx.mode !== 'online',
       aiming: s.aiming,
-      glyph: PIECES[s.piece]?.glyph ?? '',
       fellAt: s.fellAt,
       loser: s.loser,
+      wob: s.wob,
+      clock: s.phase === 'aim' && s.resetAt < 0 ? TURN_T - (this.time - s.phaseAt) : -1,
+      dropAt: s.dropAt,
+      dropX: s.dropX,
     }
-    drawScene(g, view)
+    this.faces.update(s.bodies, this.time)
+    drawScene(g, view, this.faces)
     if (this.goal > 1) {
       // Clear of the name pill (a long turn prompt) and the corner buttons.
       pips(g, 0, s.wins[0], this.goal, { x: 800 })
