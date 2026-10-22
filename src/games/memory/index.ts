@@ -1,13 +1,13 @@
 import { other, type MatchSpec, type Side } from '../../core/game.ts'
-import { outBack, prog } from '../../core/fx/ease.ts'
+import { outBack, prog, Spring } from '../../core/fx/ease.ts'
 import { banner, bigScore, pips } from '../../core/hud.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
-import { SIDE } from '../../core/render/palette.ts'
+import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import { tableBackdrop, TurnGame } from '../../engines/board/index.ts'
 import { cardAt, dealPairs, GLYPHS } from '../../engines/cards/index.ts'
-import { choose, type Memory, remember } from './bot.ts'
+import { CAREFUL, choose, type Memory, remember } from './bot.ts'
 import { backdropGlow, CARDS, renderCards } from './render.ts'
 import {
   canTurn,
@@ -23,6 +23,9 @@ import {
 
 /** Seconds a cleared table stays on screen before the next one is dealt. */
 const ROUND_PAUSE = 1.6
+/** A missed pair stays up this long, unless a tap sends it back sooner (after MISS_MIN). */
+const MISS_SHOW = 1
+const MISS_MIN = 0.35
 
 /** Match length: first to N round wins, each round one table. Default: a single table. */
 export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
@@ -46,9 +49,14 @@ export interface State {
   roundAt: number
   /** Banner for the round that just ended ("Draw round", "Red takes the round"…). */
   roundText: string
+  /** Pairs in a row by the side on turn (a combo). */
+  streak: number
 }
 
 class MemoryGame extends TurnGame<State> {
+  /** Cosmetic: the pair counts pop when they go up. */
+  private pulse: [Spring, Spring] = [new Spring(0, 260, 11), new Spring(0, 260, 11)]
+
   private get target(): number {
     return this.ctx.target || match.default
   }
@@ -82,6 +90,7 @@ class MemoryGame extends TurnGame<State> {
       wins: [0, 0],
       roundAt: -1,
       roundText: '',
+      streak: 0,
     }
   }
 
@@ -93,13 +102,17 @@ class MemoryGame extends TurnGame<State> {
       return true
     }
     if (s.resolveAt < 0) return false
-    if (this.time >= s.resolveAt) {
+    // A tap sends a missed pair back down early: no waiting on a pair you have already read.
+    const tap = this.time >= s.resolveAt - MISS_SHOW + MISS_MIN ? this.turnTap() : undefined
+    if (this.time >= s.resolveAt || tap) {
       for (const i of s.table.up) s.flippedAt[i] = this.time
       hideMiss(s.table)
       s.resolveAt = -1
       s.turn = other(s.turn)
+      s.streak = 0
       this.ctx.audio.play('flip', 0.8)
-      return false
+      // The tap that skipped the wait must not also turn the next player's first card.
+      return !!tap
     }
     return true
   }
@@ -107,13 +120,21 @@ class MemoryGame extends TurnGame<State> {
   private nextRound(): void {
     const s = this.s
     const starter = other(s.starter)
-    Object.assign(s, this.deal(), { starter, turn: starter, roundAt: -1, roundText: '' })
+    Object.assign(s, this.deal(), {
+      starter,
+      turn: starter,
+      roundAt: -1,
+      roundText: '',
+      streak: 0,
+    })
     this.ctx.audio.play('swish', 1.05)
   }
 
   protected override botDelay(): number {
     // The second card comes quicker: the computer already "looked".
-    return this.s.table.up.length === 1 ? 0.55 : super.botDelay()
+    const d = this.ctx.difficulty
+    if (this.s.table.up.length === 1) return d === 'hard' ? 0.4 : 0.5
+    return (d === 'easy' ? 0.75 : d === 'normal' ? 0.6 : 0.45) + this.ctx.rng.range(0, 0.25)
   }
 
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
@@ -125,7 +146,8 @@ class MemoryGame extends TurnGame<State> {
   }
 
   protected botPlay(): void {
-    this.turn(choose(this.s.table, this.s.seen, this.ctx.rng))
+    const careful = CAREFUL[this.ctx.difficulty]
+    this.turn(choose(this.s.table, this.s.seen, this.ctx.rng, careful))
   }
 
   private turn(i: number): void {
@@ -139,20 +161,37 @@ class MemoryGame extends TurnGame<State> {
     }
     if (result === 'match') {
       const fx = this.ctx.fx
+      const audio = this.ctx.audio
+      s.streak++
+      // A run of pairs builds: higher pitch, bigger bursts, a stronger thump.
+      const k = Math.min(1, (s.streak - 1) / 4)
       const [a, b] = [i, s.table.deck.findIndex((d, k) => k !== i && d === s.table.deck[i])]
-      for (const k of [a, b]) {
-        s.matchedAt[k] = this.time + 0.25
-        const c = CARDS[k]
-        if (c) fx.burst(c.x, c.y, SIDE[side].main, { count: 14, speed: 420, size: 12 })
+      for (const n of [a, b]) {
+        s.matchedAt[n] = this.time + 0.25
+        const c = CARDS[n]
+        if (!c) continue
+        fx.burst(c.x, c.y, SIDE[side].main, {
+          count: Math.round(14 + k * 16),
+          speed: 420 + k * 260,
+          size: 12,
+          colors: [SIDE[side].main, SIDE[side].light, C.yellow],
+          kind: 'square',
+        })
+        fx.ring(c.x, c.y, SIDE[side].light, c.w * (0.8 + k * 0.4))
       }
       const c = CARDS[i]
-      if (c) fx.float('Pair!', c.x, c.y - c.h * 0.4, SIDE[side].light, 56, side)
-      this.ctx.audio.play('score')
-      fx.shake(0.12)
+      const word = s.streak >= 2 ? `Pair! ×${s.streak}` : 'Pair!'
+      if (c) fx.float(word, c.x, c.y - c.h * 0.4, SIDE[side].light, 56 + k * 14, side)
+      audio.play('score', 1 + k * 0.3)
+      audio.buzz(Math.round(12 + k * 18))
+      fx.shake(0.1 + k * 0.15)
+      fx.stop(2 + Math.round(k * 3))
+      this.pulse[side].kick(12 + k * 8)
       if (cleared(s.table)) this.roundOver()
     } else if (result === 'miss') {
-      s.resolveAt = this.time + 1.05
+      s.resolveAt = this.time + MISS_SHOW
       this.ctx.audio.play('tap', 0.7)
+      this.ctx.audio.buzz(6)
     }
   }
 
@@ -173,6 +212,8 @@ class MemoryGame extends TurnGame<State> {
       if (decided !== null) {
         fx.confetti(decided)
         fx.flash(SIDE[decided].light, 0.3)
+        fx.stop(6)
+        fx.ring(W / 2, MID, SIDE[decided].light, 520)
       } else fx.confetti()
       fx.shake(0.3)
       this.finish(decided ?? 'draw', {
@@ -188,6 +229,8 @@ class MemoryGame extends TurnGame<State> {
     } else {
       s.roundText = `${this.ctx.names[won]} takes the round`
       this.ctx.audio.play('coin')
+      this.ctx.fx.flash(SIDE[won].light, 0.2)
+      this.ctx.fx.ring(W / 2, MID, SIDE[won].light, 420)
     }
   }
 
@@ -198,8 +241,10 @@ class MemoryGame extends TurnGame<State> {
     const live = !this.over && s.resolveAt < 0 && s.roundAt < 0
     renderCards(g, s, this.time, live ? s.turn : null)
     this.drawTurns(g, undefined, s.resolveAt < 0 && s.roundAt < 0)
-    bigScore(g, 0, pairsOf(s.table, 0))
-    bigScore(g, 1, pairsOf(s.table, 1))
+    for (const side of [0, 1] as Side[]) {
+      const p = Math.max(0, this.pulse[side].update(1 / 60))
+      bigScore(g, side, pairsOf(s.table, side), { size: 76 + Math.min(34, p * 1.8) })
+    }
     if (this.target > 1) {
       // Both rows on the right: the score sits on the left for both players.
       pips(g, 0, s.wins[0], this.target, { x: W - 150 })
@@ -209,6 +254,11 @@ class MemoryGame extends TurnGame<State> {
       const k = outBack(prog(this.time - s.roundAt, 0.15, 0.5))
       if (k > 0) banner(g, undefined, s.roundText, MID, { size: 58 * k, alpha: Math.min(1, k) })
     }
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    for (const p of this.pulse) p.set(0)
   }
 }
 

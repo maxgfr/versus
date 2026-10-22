@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { dealPairs } from '../../engines/cards/index.ts'
-import { choose, type Memory, remember } from './bot.ts'
+import { CAREFUL, choose, type Memory, remember } from './bot.ts'
 import {
   canTurn,
   cleared,
@@ -102,5 +103,55 @@ describe('memory bot', () => {
       hard += play('hard', s)
     }
     expect(hard).toBeLessThan(easy)
+  })
+
+  /** One table, each side with its own memory of every card turned (by either side). */
+  const duel = (a: Difficulty, b: Difficulty, seed: number): 0 | 1 | 'draw' => {
+    const rng = new Rng(seed)
+    const t = newTable(dealPairs(rng, PAIRS))
+    const mems: [Memory, Memory] = [t.deck.map(() => null), t.deck.map(() => null)]
+    const lv: [Difficulty, Difficulty] = [a, b]
+    let side: 0 | 1 = seed % 2 === 0 ? 0 : 1
+    let guard = 0
+    while (!cleared(t) && guard++ < 4000) {
+      const i = choose(t, mems[side], rng, CAREFUL[lv[side]])
+      const r = turnUp(t, i, side)
+      for (const k of [0, 1] as const) remember(mems[k], i, t.deck[i] ?? 0, lv[k], rng)
+      if (r === 'miss') {
+        hideMiss(t)
+        side = side === 0 ? 1 : 0
+      }
+    }
+    const r = pairsOf(t, 0)
+    const bl = pairsOf(t, 1)
+    return r === bl ? 'draw' : r > bl ? 0 : 1
+  }
+
+  it('hard beats easy, and normal beats easy, most of the time head to head', () => {
+    const score = (a: Difficulty, b: Difficulty) => {
+      let w = 0
+      let l = 0
+      for (let seed = 1; seed <= 40; seed++) {
+        const r = duel(a, b, seed)
+        if (r === 0) w++
+        else if (r === 1) l++
+      }
+      return { w, l }
+    }
+    const he = score('hard', 'easy')
+    expect(he.w).toBeGreaterThan(he.l * 3)
+    const ne = score('normal', 'easy')
+    expect(ne.w).toBeGreaterThan(ne.l * 2)
+    const hn = score('hard', 'normal')
+    expect(hn.w).toBeGreaterThan(hn.l)
+  })
+
+  it('a careful player turns a seen card rather than show a new one when it cannot pair', () => {
+    const t = newTable([0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5])
+    // It knows where one 1 sits (position 1); it turns an unseen card (0) whose partner it doesn't know.
+    const mem: Memory = [null, 1, null, null, null, null, null, null, null, null, null, null]
+    turnUp(t, 0, 1)
+    mem[0] = 0
+    expect(choose(t, mem, new Rng(2), true)).toBe(1)
   })
 })

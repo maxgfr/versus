@@ -76,10 +76,17 @@ export function renderCards(g: Draw, s: State, now: number, turn: Side | null): 
     const glyph = s.glyphs[t.deck[i] ?? 0] ?? '❓'
     const pop = owner === null ? 1 : matchPop(now, s.matchedAt[i] ?? -10)
     const picked = t.up.includes(i)
+    // A missed pair shakes its head before it turns back down.
+    const missAge = s.resolveAt >= 0 && picked ? now - (s.flippedAt[i] ?? now) : -1
+    const shake =
+      missAge > 0.3 && missAge < 0.75 ? Math.sin(missAge * 48) * 0.07 * (0.75 - missAge) * 2.2 : 0
+    // Face-down cards breathe gently on the turn of a player who can pick them.
+    const idle =
+      owner === null && !picked && turn !== null ? 1 + 0.012 * Math.sin(now * 3 + i * 0.7) : 1
     g.at(
       c.x,
       c.y,
-      0,
+      shake,
       () =>
         drawCard(g, 0, 0, c.w, c.h, {
           flip,
@@ -92,7 +99,7 @@ export function renderCards(g: Draw, s: State, now: number, turn: Side | null): 
               : {}),
           lift: picked ? 0.35 : 0,
         }),
-      pop,
+      pop * idle,
     )
     if (owner !== null) {
       // Owner mark in the corner: circle for red, square for blue (never colour alone).
