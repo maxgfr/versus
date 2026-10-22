@@ -1,4 +1,6 @@
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { floatFor } from '../../core/fx/fx.ts'
+import { Spring } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import {
@@ -10,11 +12,12 @@ import {
 } from '../../engines/arena/index.ts'
 import { roundEnd, roundsNew, roundsStep, type Rounds } from '../../engines/reflex/index.ts'
 import { RobotBot } from './bot.ts'
-import { renderRobots } from './render.ts'
+import { type Look, renderRobots } from './render.ts'
 import {
   ARENA_BOTTOM,
   type Drive,
   type Ev,
+  MAX_SPEED,
   newWorld,
   roundWinner,
   stepWorld,
@@ -36,6 +39,12 @@ class Robots extends BaseGame<State> {
   private controls: SideControl[] = []
   private bots: (RobotBot | null)[] = []
   private ev: Ev[] = []
+  // Cosmetic only (never synced): last step's poses for interpolation, a
+  // squash spring per robot and the frame clock.
+  private prev: ({ x: number; y: number; a: number } | undefined)[] = []
+  private squash: [Spring, Spring] = [new Spring(1, 380, 12), new Spring(1, 380, 12)]
+  private lastT = -1
+  private look: Look = { alpha: 1, prev: this.prev, squash: [1, 1] }
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -61,8 +70,10 @@ class Robots extends BaseGame<State> {
   protected step(dt: number): void {
     const s = this.s
     const { ctx } = this
+    this.remember()
     if (roundsStep(s.rounds, this.time, 2.4)) {
       s.w = newWorld()
+      this.prev.length = 0
       ctx.audio.play('go')
       return
     }
@@ -98,35 +109,56 @@ class Robots extends BaseGame<State> {
     if (w === null) return
     if (roundEnd(s.rounds, w, this.time, ctx.names) && w !== 'draw') {
       ctx.fx.confetti(w)
+      ctx.fx.flash(SIDE[w].main, 0.3)
       this.finish(w, { score: [s.rounds.wins[0], s.rounds.wins[1]], delay: 2.6 })
-    } else ctx.audio.play(w === 'draw' ? 'draw' : 'score')
+    } else {
+      ctx.audio.play(w === 'draw' ? 'draw' : 'score')
+      if (w !== 'draw') floatFor(ctx.fx, w, 'Round!')
+    }
+  }
+
+  /** Last step's poses, for interpolation (cosmetic, outside the state). */
+  private remember(): void {
+    for (const r of this.s.w.robots) {
+      const p = this.prev[r.id]
+      if (p) {
+        p.x = r.x
+        p.y = r.y
+        p.a = r.a
+      } else this.prev[r.id] = { x: r.x, y: r.y, a: r.a }
+    }
   }
 
   protected override afterEnd(dt: number): void {
+    this.remember()
     this.ev.length = 0
     stepWorld(this.s.w, [], dt, this.ev)
     for (const e of this.ev) this.feedback(e)
     this.smoke()
   }
 
-  /** Wrecks smoke, and a badly damaged robot trails sparks. */
+  /** Wrecks smoke, and a badly damaged robot trails sparks (cosmetic: Math.random). */
   private smoke(): void {
-    const { fx, rng } = this.ctx
+    const { fx } = this.ctx
     for (const r of this.s.w.robots) {
-      if (!r.alive && !r.fell && rng.chance(0.08)) fx.puff(r.x, r.y - 10, 'rgba(60,56,70,0.55)', 1)
-      if (r.alive && r.hp < 35 && rng.chance(0.05))
+      if (!r.alive && !r.fell && Math.random() < 0.08)
+        fx.puff(r.x, r.y - 10, 'rgba(60,56,70,0.55)', 1)
+      if (r.alive && r.hp < 35 && Math.random() < 0.05)
         fx.burst(r.x, r.y, C.orange, { count: 2, speed: 200, size: 5, life: 0.3, kind: 'spark' })
     }
   }
 
   private feedback(e: Ev): void {
-    const { fx, audio, rng } = this.ctx
+    const { fx, audio } = this.ctx
     switch (e.k) {
-      case 'zap':
-        audio.play('zap', 0.9 + rng.next() * 0.2)
+      case 'zap': {
+        // A lunging zap is louder, wider and stretches the robot into it.
+        const k = e.power
+        this.squash[e.side].kick(2 + k * 4)
+        audio.play('zap', 0.9 + Math.random() * 0.1 + k * 0.2)
         fx.burst(e.x + Math.cos(e.a) * 50, e.y + Math.sin(e.a) * 50, C.yellow, {
-          count: 12,
-          speed: 420,
+          count: Math.round(12 + k * 10),
+          speed: 420 + k * 260,
           size: 8,
           life: 0.22,
           gravity: 0,
@@ -134,14 +166,17 @@ class Robots extends BaseGame<State> {
           dir: e.a,
           kind: 'spark',
         })
-        fx.shake(0.08)
+        fx.shake(0.08 + k * 0.1)
         break
-      case 'hit':
+      }
+      case 'hit': {
         // The saw's steady grind reports through 'saw'; only real blows get the full hit.
         if (e.dmg < 2) break
-        audio.play('hit', 1 + (e.dmg / 40) * 0.2)
-        audio.buzz(18)
-        fx.sparks(e.x, e.y, C.yellow, 16)
+        const k = Math.min(1, e.dmg / 32)
+        this.squash[e.side].kick(-3 - k * 4)
+        audio.play('hit', 0.9 + k * 0.4)
+        audio.buzz(14 + Math.round(k * 26))
+        fx.sparks(e.x, e.y, C.yellow, Math.round(10 + k * 14))
         fx.burst(e.x, e.y, SIDE[e.side].light, {
           count: 8,
           speed: 300,
@@ -151,25 +186,31 @@ class Robots extends BaseGame<State> {
           kind: 'square',
         })
         fx.ring(e.x, e.y, SIDE[e.side].light, 90)
-        fx.float(`-${Math.round(e.dmg)}`, e.x, e.y - 60, C.yellow, 52, e.side)
+        fx.float(`-${Math.round(e.dmg)}`, e.x, e.y - 60, C.yellow, 44 + k * 20, e.side)
         fx.shake(Math.min(0.45, 0.12 + e.dmg * 0.01))
         fx.stop(e.dmg >= 15 ? 4 : 2)
         break
-      case 'ram':
-        audio.play('slap', 0.9 + rng.next() * 0.2)
-        audio.buzz(25)
+      }
+      case 'ram': {
+        // Everything about a ram scales with how hard they met.
+        const k = Math.min(1, (e.speed - 140) / (MAX_SPEED * 1.6))
+        audio.play('slap', 0.85 + k * 0.35)
+        audio.buzz(15 + Math.round(k * 35))
         fx.burst(e.x, e.y, '#ffffff', {
-          count: 14,
-          speed: 360,
+          count: Math.round(8 + k * 12),
+          speed: 260 + k * 260,
           size: 12,
           life: 0.35,
           gravity: 0,
           drag: 3,
         })
-        fx.sparks(e.x, e.y, C.yellow, 14)
-        fx.shake(0.35)
-        fx.stop(3)
+        fx.sparks(e.x, e.y, C.yellow, Math.round(8 + k * 14))
+        fx.ring(e.x, e.y, C.white, 70 + k * 70)
+        fx.shake(0.15 + k * 0.35)
+        fx.stop(2 + Math.round(k * 3))
+        this.squash[e.by].kick(-2 - k * 3)
         break
+      }
       case 'saw':
         audio.play('chomp', 1.3)
         fx.sparks(e.x, e.y, C.orange, 6)
@@ -210,8 +251,22 @@ class Robots extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderRobots(g, this.s, this.time, { names: this.ctx.names, over: this.over })
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    // The guest has no previous step to blend from.
+    this.prev.length = 0
+  }
+
+  render(g: Draw, alpha: number): void {
+    const fdt = this.lastT < 0 ? 0 : Math.min(0.05, Math.max(0, g.t - this.lastT))
+    this.lastT = g.t
+    const look = this.look
+    look.alpha = alpha
+    for (const side of [0, 1] as Side[]) {
+      // Keep the squash in a sane range even after a pile of kicks.
+      look.squash[side] = Math.max(0.7, Math.min(1.3, this.squash[side].update(fdt)))
+    }
+    renderRobots(g, this.s, this.time, { names: this.ctx.names, over: this.over }, look)
   }
 }
 

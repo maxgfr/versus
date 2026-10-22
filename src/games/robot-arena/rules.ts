@@ -23,6 +23,11 @@ export const ZAP_DMG = 22
 export const ZAP_CD = 1.1
 /** Knock-back speed a zap gives the robot it hits. */
 export const ZAP_PUSH = 360
+/**
+ * A zap thrown while charging at the rival lands harder: up to this share more
+ * damage and push at full speed straight at it (the stick's force matters).
+ */
+export const LUNGE = 0.4
 /** Closing speed above which a ram hurts. */
 export const RAM_SPEED = 140
 export const RAM_K = 0.05
@@ -74,9 +79,11 @@ export interface Drive {
 }
 
 export type Ev =
-  | { k: 'zap'; x: number; y: number; a: number; side: Side }
+  /** `power` 0..1: how much of a charging lunge the zap carried. */
+  | { k: 'zap'; x: number; y: number; a: number; side: Side; power: number }
   | { k: 'hit'; x: number; y: number; side: Side; dmg: number; hp: number }
-  | { k: 'ram'; x: number; y: number; dmg: number }
+  /** `speed` is the closing speed; `by` the side that drove in hardest. */
+  | { k: 'ram'; x: number; y: number; dmg: number; speed: number; by: Side }
   | { k: 'saw'; x: number; y: number; side: Side }
   | { k: 'wall'; x: number; y: number; v: number }
   | { k: 'fall'; x: number; y: number; side: Side }
@@ -146,6 +153,9 @@ export function stepWorld(
   dt: number,
   ev: Ev[],
 ): void {
+  // Zaps resolve together after everyone has moved, so two robots zapping on
+  // the same step trade blows instead of the first in the list striking first.
+  const zappers: Robot[] = []
   for (let i = 0; i < w.robots.length; i++) {
     const r = w.robots[i] as Robot
     if (!r.alive) continue
@@ -220,8 +230,9 @@ export function stepWorld(
       }
     }
     if (!r.alive) continue
-    if (d?.zap && r.cd <= 0) zap(w, r, ev)
+    if (d?.zap && r.cd <= 0) zappers.push(r)
   }
+  for (const r of zappers) zap(w, r, ev)
   // Robots ram each other: closing speed hurts the one that is hit.
   for (let i = 0; i < w.robots.length; i++)
     for (let j = i + 1; j < w.robots.length; j++) {
@@ -234,15 +245,21 @@ export function stepWorld(
       const ux = nx / dist
       const uy = ny / dist
       if (!separate(a, b, R, R)) continue
-      // Positive: a closes on b.
+      // Positive: they are closing. Each robot's own drive into the other
+      // decides who deals the blow: the rammer hurts the one it hits, a
+      // head-on crash hurts both by their shares.
       const closing = (a.vx - b.vx) * ux + (a.vy - b.vy) * uy
-      const toB = Math.max(0, closing - RAM_SPEED) * RAM_K
-      const toA = Math.max(0, -closing - RAM_SPEED) * RAM_K
-      if (toB > 0) {
-        damage(w, b, toB, ev, (a.x + b.x) / 2, (a.y + b.y) / 2)
-        ev.push({ k: 'ram', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, dmg: toB })
+      if (closing > RAM_SPEED) {
+        const dmg = (closing - RAM_SPEED) * RAM_K
+        const ia = Math.max(0, a.vx * ux + a.vy * uy)
+        const ib = Math.max(0, -(b.vx * ux + b.vy * uy))
+        const sum = ia + ib || 1
+        const mx = (a.x + b.x) / 2
+        const my = (a.y + b.y) / 2
+        ev.push({ k: 'ram', x: mx, y: my, dmg, speed: closing, by: ia >= ib ? a.side : b.side })
+        if (ia > 0) damage(w, b, (dmg * ia) / sum, ev, mx, my)
+        if (ib > 0) damage(w, a, (dmg * ib) / sum, ev, mx, my)
       }
-      if (toA > 0) damage(w, a, toA, ev, (a.x + b.x) / 2, (a.y + b.y) / 2)
       if (closing > 0) {
         a.vx -= ux * closing * 0.5
         a.vy -= uy * closing * 0.5
@@ -257,7 +274,10 @@ export function stepWorld(
 function zap(w: World, r: Robot, ev: Ev[]): void {
   r.cd = ZAP_CD
   r.zapT = w.t
-  ev.push({ k: 'zap', x: r.x, y: r.y, a: r.a, side: r.side })
+  // Lunge: the robot's own speed along its facing, as a share of full speed.
+  const power = Math.max(0, Math.min(1, (r.vx * Math.cos(r.a) + r.vy * Math.sin(r.a)) / MAX_SPEED))
+  ev.push({ k: 'zap', x: r.x, y: r.y, a: r.a, side: r.side, power })
+  const boost = 1 + LUNGE * power
   for (const f of w.robots) {
     if (!f.alive || f.side === r.side) continue
     const dx = f.x - r.x
@@ -265,9 +285,9 @@ function zap(w: World, r: Robot, ev: Ev[]): void {
     const d = Math.hypot(dx, dy)
     if (d > ZAP_RANGE + R) continue
     if (Math.abs(angleTo(r.a, Math.atan2(dy, dx))) > ZAP_ARC) continue
-    f.vx += (dx / (d || 1)) * ZAP_PUSH
-    f.vy += (dy / (d || 1)) * ZAP_PUSH
-    damage(w, f, ZAP_DMG, ev, f.x - (dx / (d || 1)) * R, f.y - (dy / (d || 1)) * R)
+    f.vx += (dx / (d || 1)) * ZAP_PUSH * boost
+    f.vy += (dy / (d || 1)) * ZAP_PUSH * boost
+    damage(w, f, ZAP_DMG * boost, ev, f.x - (dx / (d || 1)) * R, f.y - (dy / (d || 1)) * R)
   }
 }
 

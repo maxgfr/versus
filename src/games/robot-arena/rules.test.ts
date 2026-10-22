@@ -9,6 +9,7 @@ import {
   type Ev,
   HP,
   inArena,
+  LUNGE,
   MAX_SPEED,
   newWorld,
   PITS,
@@ -132,6 +133,81 @@ describe('robot arena', () => {
     expect(blue.hp).toBeLessThan(HP)
   })
 
+  it('the rammer deals the blow whichever robot comes first in the list', () => {
+    const w = duel()
+    const [red, blue] = w.robots as NonNullable<World['robots'][number]>[]
+    if (!red || !blue) throw new Error('robots')
+    // Blue drives into a parked red: red is hurt, blue is not.
+    red.x = 400
+    red.y = 1150
+    red.vx = red.vy = 0
+    blue.x = 400 + 2 * R - 4
+    blue.y = 1150
+    blue.vx = -320
+    blue.vy = 0
+    const ev: Ev[] = []
+    stepWorld(w, none(w), STEP, ev)
+    expect(red.hp).toBeLessThan(HP)
+    expect(blue.hp).toBe(HP)
+    const ram = ev.find((e) => e.k === 'ram')
+    expect(ram?.k === 'ram' && ram.by).toBe(1)
+  })
+
+  it('a head-on crash hurts both robots alike', () => {
+    const w = duel()
+    const [red, blue] = w.robots as NonNullable<World['robots'][number]>[]
+    if (!red || !blue) throw new Error('robots')
+    red.x = 400
+    red.y = 1150
+    red.vx = 300
+    red.vy = 0
+    blue.x = 400 + 2 * R - 4
+    blue.y = 1150
+    blue.vx = -300
+    blue.vy = 0
+    stepWorld(w, none(w), STEP, [])
+    expect(red.hp).toBeLessThan(HP)
+    expect(red.hp).toBeCloseTo(blue.hp, 6)
+  })
+
+  it('two zaps on the same step both land (no first-in-list advantage)', () => {
+    const w = duel()
+    const [red, blue] = w.robots as NonNullable<World['robots'][number]>[]
+    if (!red || !blue) throw new Error('robots')
+    red.x = 400
+    red.y = 1150
+    red.a = 0
+    blue.x = 560
+    blue.y = 1150
+    blue.a = Math.PI
+    // One zap from either kills.
+    red.hp = blue.hp = ZAP_DMG - 1
+    const zap: Drive = { jx: 0, jy: 0, zap: true }
+    stepWorld(w, [zap, zap], STEP, [])
+    expect(red.alive).toBe(false)
+    expect(blue.alive).toBe(false)
+    expect(roundWinner(w)).toBe('draw')
+  })
+
+  it('a zap thrown while charging lands harder than one standing still', () => {
+    const hitBy = (speed: number): number => {
+      const w = duel()
+      const [red, blue] = w.robots as NonNullable<World['robots'][number]>[]
+      if (!red || !blue) throw new Error('robots')
+      red.x = 400
+      red.y = 1150
+      red.a = 0
+      red.vx = speed
+      red.vy = 0
+      blue.x = 560
+      blue.y = 1150
+      stepWorld(w, [{ jx: speed ? 1 : 0, jy: 0, zap: true }, undefined], STEP, [])
+      return HP - blue.hp
+    }
+    expect(hitBy(0)).toBeCloseTo(ZAP_DMG, 6)
+    expect(hitBy(MAX_SPEED)).toBeGreaterThan(ZAP_DMG * (1 + LUNGE * 0.9))
+  })
+
   it('the saw wears robots down and throws them out', () => {
     const w = duel()
     const red = w.robots[0] as NonNullable<World['robots'][number]>
@@ -171,6 +247,35 @@ describe('robot arena', () => {
 })
 
 describe('robot bot vs bot', () => {
+  it('hard beats easy and normal beats easy nearly every time, from either side', () => {
+    for (const [strong, weak] of [
+      ['hard', 'easy'],
+      ['normal', 'easy'],
+    ] as const) {
+      let wins = 0
+      let decided = 0
+      for (let seed = 0; seed < 20; seed++) {
+        const rng = new Rng(seed * 7 + 1)
+        const w = newWorld()
+        const side = seed % 2
+        const bots = w.robots.map((r) => new RobotBot(rng.fork(), r.side === side ? strong : weak))
+        for (let i = 0; i < 60 * 120 && roundWinner(w) === null; i++)
+          stepWorld(
+            w,
+            w.robots.map((r, j) => bots[j]?.decide(w, r, STEP)),
+            STEP,
+            [],
+          )
+        const r = roundWinner(w)
+        if (r === null || r === 'draw') continue
+        decided++
+        if (r === side) wins++
+      }
+      expect(decided).toBeGreaterThan(15)
+      expect(wins / decided).toBeGreaterThan(0.8)
+    }
+  })
+
   for (const difficulty of ['easy', 'normal', 'hard'] as const) {
     it(`a ${difficulty} round reaches a result within bounded steps`, () => {
       for (let seed = 0; seed < 4; seed++) {

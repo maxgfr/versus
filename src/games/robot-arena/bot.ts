@@ -51,6 +51,11 @@ export class RobotBot {
   private sk: Skill
   private wobble: number
   private seeT = 0
+  /**
+   * The aim error is re-rolled now and then, not only after a zap: two sloppy
+   * bots with a fixed offset can spiral round each other without ever facing.
+   */
+  private rerollT = 1.5
 
   constructor(
     private rng: Rng,
@@ -65,6 +70,11 @@ export class RobotBot {
     if (!me.alive || foes.length === 0) return { jx: 0, jy: 0, zap: false }
     const foe = foes[0] as Robot
     const sk = this.sk
+    this.rerollT -= dt
+    if (this.rerollT <= 0) {
+      this.rerollT = this.rng.range(1.2, 2)
+      this.wobble = this.rng.range(-sk.wobble, sk.wobble)
+    }
     const ax = foe.x + foe.vx * sk.lead
     const ay = foe.y + foe.vy * sk.lead
     const dist = Math.hypot(foe.x - me.x, foe.y - me.y)

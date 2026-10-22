@@ -4,6 +4,8 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { type ControlLook, drawStrip } from '../../engines/arena/index.ts'
 import { MID, W } from '../../core/stage.ts'
+import { lerp, outBack } from '../../core/fx/ease.ts'
+import { angleTo } from '../../engines/arena/index.ts'
 import type { State } from './index.ts'
 import {
   ARENA,
@@ -25,6 +27,15 @@ const HAZARD = '#e0742c'
 const TILE = 100
 
 const clamp01 = (k: number): number => Math.max(0, Math.min(1, k))
+
+/** Cosmetic extras from the game (never in the state). */
+export interface Look {
+  alpha: number
+  /** Last step's pose of each robot (by id), for interpolation. */
+  prev: readonly ({ x: number; y: number; a: number } | undefined)[]
+  /** Squash of each robot (by id) along its facing: < 1 squashed, > 1 stretched. */
+  squash: [number, number]
+}
 
 /** Tiny deterministic hash, so lightning jags are the same on host and guest. */
 function jag(seed: number, i: number): number {
@@ -204,7 +215,7 @@ function zap(g: Draw, r: Robot, now: number): void {
  * A top-down toy robot facing +x: chunky wheels, a team-coloured chassis lit
  * from the top, a visor with eyes, and a zap fork that glows yellow when ready.
  */
-function robot(g: Draw, r: Robot, now: number, cheer: boolean): void {
+function robot(g: Draw, r: Robot, now: number, cheer: boolean, squash = 1): void {
   const col = SIDE[r.side]
   const hurt = clamp01(1 - (now - r.hitT) / 0.16)
   const fall = r.fell ? clamp01((now - r.koT) / 0.7) : 0
@@ -225,6 +236,11 @@ function robot(g: Draw, r: Robot, now: number, cheer: boolean): void {
   const shake = hurt > 0 ? jag(now * 50, r.id) * 8 * hurt : 0
   const hop = cheer ? Math.abs(Math.sin(now * 9)) * 10 : 0
   const sc = 1.12 * (1 - fall * 0.75) * (1 + hop / 120)
+  // Idle hum of the motor, a stretch into speed and the spring's squash.
+  const speed = Math.hypot(r.vx, r.vy) / 300
+  const hum = 1 + Math.sin(now * 14 + r.id * 3) * 0.015
+  const sx = sc * squash * (1 + speed * 0.05)
+  const sy = (sc * hum) / Math.sqrt(Math.max(0.5, squash))
   g.alpha(1 - fall * 0.9, () => {
     if (fall < 0.5) g.shadow(r.x + 6, r.y + 14, R * 1.15, R * 0.8, 0.35)
     g.at(
@@ -286,7 +302,8 @@ function robot(g: Draw, r: Robot, now: number, cheer: boolean): void {
             g.rrect(-R * 0.84, -R * 0.84, R * 1.68, R * 1.62, 22, '#ffffff'),
           )
       },
-      sc,
+      sx,
+      sy,
     )
   })
   if (r.alive) {
@@ -411,9 +428,16 @@ export interface View {
 }
 
 /** The arena, its pits and saw, the robots and their zaps, the controls and the edge HUD. */
-export function renderRobots(g: Draw, s: State, now: number, v: View): void {
+export function renderRobots(g: Draw, s: State, now: number, v: View, look: Look): void {
   const w = s.w
   const r = s.rounds
+  // Blend each robot between the last two steps.
+  const shown = w.robots.map((k) => {
+    const p = look.prev[k.id]
+    if (!p) return k
+    const t = look.alpha
+    return { ...k, x: lerp(p.x, k.x, t), y: lerp(p.y, k.y, t), a: p.a + angleTo(p.a, k.a) * t }
+  })
   g.fillView(C.ink)
   drawStrip(g, ARENA.y0 - 28, ARENA_BOTTOM + 28)
   floor(g)
@@ -421,12 +445,14 @@ export function renderRobots(g: Draw, s: State, now: number, v: View): void {
   const hot = Math.max(0, ...w.robots.map((k) => clamp01(1 - (w.t - k.sawT) / 0.3)))
   saw(g, w.t, hot)
   const champ = v.over && r.last !== 'draw' ? r.last : null
-  for (const k of w.robots) if (k.fell) robot(g, k, w.t, false)
-  for (const k of w.robots) if (!k.alive && !k.fell) robot(g, k, w.t, false)
-  for (const k of w.robots) if (k.alive) robot(g, k, w.t, champ === k.side)
-  for (const k of w.robots) zap(g, k, w.t)
+  for (const k of shown) if (k.fell) robot(g, k, w.t, false)
+  for (const k of shown) if (!k.alive && !k.fell) robot(g, k, w.t, false)
+  for (const k of shown)
+    if (k.alive) robot(g, k, w.t, champ === k.side, look.squash[k.id as 0 | 1] ?? 1)
+  for (const k of shown) zap(g, k, w.t)
   g.vignette(0.3)
-  for (const c of s.ctl) controls(g, c)
+  // Online, each phone shows only its own player's stick and button.
+  for (const c of s.ctl) if (g.viewer === null || c.side === g.viewer) controls(g, c)
   for (const side of [0, 1] as const) {
     const rob = w.robots.find((k) => k.side === side)
     const y = side === 0 ? ARENA_BOTTOM + 72 : ARENA.y0 - 72
@@ -443,6 +469,10 @@ export function renderRobots(g: Draw, s: State, now: number, v: View): void {
       alpha: Math.min(1, (now - r.at) * 4),
       color: col,
     })
-  } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1)
-    banner(g, undefined, `Round ${r.round}`, MID, { size: 64 })
+  } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1) {
+    // Pops in, then fades as the robots roll out.
+    const k = now - r.at
+    const size = 64 * outBack(Math.min(1, k / 0.3))
+    banner(g, undefined, `Round ${r.round}`, MID, { size, alpha: Math.min(1, (1.1 - k) / 0.3) })
+  }
 }
