@@ -11,10 +11,13 @@ import {
   DARTS_PER_TURN,
   DOUBLE_IN,
   type Dart,
+  forceOf,
   OUTER_BULL,
   type Pt,
   result,
+  sagVec,
   SEGMENTS,
+  spreadOf,
   type State,
   TREBLE_IN,
   TREBLE_OUT,
@@ -23,6 +26,8 @@ import {
 export interface Look {
   /** Where the flick on the side to move would land (the reticle), null when idle. */
   aim: Pt | null
+  /** The finger's speed right now (world units/s): the reticle shows its sag and wobble. */
+  speed: number
   /** The side to move has no darts thrown yet: show the "flick" hint to the human. */
   hint: boolean
 }
@@ -183,7 +188,12 @@ export function drawStuck(g: Draw, d: Dart, now: number): void {
   const from = THROWER[d.side]
   const base = Math.atan2(from.y - d.y, from.x - d.x)
   const age = now - (d.at ?? -10)
-  const wob = age < 0.8 ? Math.sin(age * 46) * 0.32 * Math.exp(-age * 5.5) : 0
+  // A harder throw quivers faster and longer.
+  const k = d.force ?? 0.5
+  const wob =
+    age < 1
+      ? Math.sin(age * (38 + k * 22)) * (0.22 + k * 0.2) * Math.exp(-age * (6.5 - k * 2.5))
+      : 0
   g.ellipse(d.x + 22, d.y + 26, 34, 8, alpha('#000000', 0.3), base)
   g.circle(d.x, d.y, 4, alpha(C.ink, 0.8))
   // Foreshortened: it sticks out toward the thrower.
@@ -191,11 +201,12 @@ export function drawStuck(g: Draw, d: Dart, now: number): void {
 }
 
 /** A dart in flight: it leaves the hand big (near the viewer's edge), arcs up and shrinks into the board. */
-export function drawFlight(g: Draw, side: Side, from: Pt, to: Pt, k: number): void {
+export function drawFlight(g: Draw, side: Side, from: Pt, to: Pt, k: number, force = 0.5): void {
   const e = k * (2 - k)
   const x = from.x + (to.x - from.x) * e
   const y = from.y + (to.y - from.y) * e
-  const lift = Math.sin(k * Math.PI) * 70
+  // A soft throw lobs high; a hard one flies flat.
+  const lift = Math.sin(k * Math.PI) * (100 - force * 60)
   const scale = 1.5 - 0.78 * e
   const angle = Math.atan2(from.y - to.y, from.x - to.x)
   g.ellipse(
@@ -206,13 +217,13 @@ export function drawFlight(g: Draw, side: Side, from: Pt, to: Pt, k: number): vo
     alpha('#000000', 0.2 + 0.1 * e),
     angle,
   )
-  // Motion streak.
-  g.alpha(0.25, () =>
+  // Motion streak, longer the harder it was thrown.
+  g.alpha(0.18 + force * 0.17, () =>
     g.line(
       x,
       y - lift,
-      x + Math.cos(angle) * 160 * scale,
-      y - lift + Math.sin(angle) * 160 * scale,
+      x + Math.cos(angle) * (100 + force * 140) * scale,
+      y - lift + Math.sin(angle) * (100 + force * 140) * scale,
       C.white,
       10 * scale,
     ),
@@ -266,19 +277,35 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
     for (const d of visit) drawStuck(g, d, now)
   })
 
-  // Reticle: where the flick on the side to move would land.
+  // Reticle: where the flick on the side to move would land, and how the release
+  // would go at the finger's current speed: a ghost where a limp release sags to,
+  // a ring as wide as the wobble of a wild one.
   if (look.aim && s.phase === 'aim') {
     const a = look.aim
     const p = 0.5 + 0.5 * Math.sin(now * 8)
+    const sag = sagVec(s.turn, look.speed)
+    const spread = spreadOf(look.speed)
+    const wild = Math.min(1, (spread - 4) / 28)
+    const soft = sag.y !== 0
+    const col = soft ? C.cyan : wild > 0.05 ? (wild > 0.5 ? C.orange : C.yellow) : C.green
+    if (soft) {
+      g.alpha(0.6, () => g.circle(a.x + sag.x, a.y + sag.y, 12, col))
+      g.line(a.x, a.y, a.x + sag.x, a.y + sag.y, alpha(col, 0.7), 4)
+    }
+    if (spread > 6) g.ring(a.x, a.y, 30 + spread * 1.6, alpha(col, 0.35 + wild * 0.3), 4)
     g.ring(a.x, a.y, 26 + p * 4, alpha(C.ink, 0.6), 10)
-    g.ring(a.x, a.y, 26 + p * 4, C.yellow, 5)
+    g.ring(a.x, a.y, 26 + p * 4, col, 5)
     for (const [dx, dy] of [
       [1, 0],
       [-1, 0],
       [0, 1],
       [0, -1],
     ] as const)
-      g.line(a.x + dx * 12, a.y + dy * 12, a.x + dx * 38, a.y + dy * 38, C.yellow, 4)
+      g.line(a.x + dx * 12, a.y + dy * 12, a.x + dx * 38, a.y + dy * 38, col, 4)
+    // Force bar beside the reticle: how hard the finger is moving right now.
+    const f = forceOf(look.speed)
+    g.rrect(a.x + 52, a.y - 34, 12, 68, 6, alpha(C.ink, 0.6))
+    g.rrect(a.x + 52, a.y + 34 - 68 * f, 12, 68 * f, 6, col)
   }
 
   // Throwers: the side on turn holds its next dart until it flies.
@@ -300,7 +327,14 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
               ? 'wow'
               : 'happy'
     const throwAge = s.flight && s.flight.side === side ? s.flight.t : 9
-    const lunge = throwAge < 0.2 ? Math.sin((throwAge / 0.2) * Math.PI) : 0
+    const force = s.flight?.force ?? 0.5
+    // Lean back while lining up (anticipation), then lunge into the throw, harder for a harder throw.
+    const lunge =
+      throwAge < 0.2
+        ? Math.sin((throwAge / 0.2) * Math.PI) * (0.6 + force * 0.7)
+        : on && look.aim
+          ? -0.35 - 0.1 * Math.sin(now * 6)
+          : 0
     const holding = on && s.phase === 'aim'
     drawThrower(g, side, holding, on, mood, lunge, on ? look.aim : null)
     // This turn's running total beside the thrower.
@@ -318,7 +352,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 
   if (s.flight) {
     const f = s.flight
-    drawFlight(g, f.side, handOf(f.side), f.to, Math.min(1, f.t / f.dur))
+    drawFlight(g, f.side, handOf(f.side), f.to, Math.min(1, f.t / f.dur), f.force ?? 0.5)
   }
 
   // Round banner as each round starts.
@@ -350,9 +384,9 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 }
 
 /** HUD: totals big at the edge, darts left in the turn as pips. */
-export function hud(g: Draw, s: State): void {
+export function hud(g: Draw, s: State, pulse: [number, number] = [0, 0]): void {
   for (const side of [0, 1] as const) {
-    bigScore(g, side, s.totals[side], { x: 130, size: 64 })
+    bigScore(g, side, s.totals[side], { x: 130, size: 64 + Math.min(30, pulse[side] * 1.6) })
     const left = s.turn === side ? DARTS_PER_TURN - s.throws : DARTS_PER_TURN
     pips(g, side, left, DARTS_PER_TURN, { x: W - 150 })
   }

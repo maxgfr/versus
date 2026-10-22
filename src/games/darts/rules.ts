@@ -5,7 +5,9 @@ import type { Rng } from '../../core/rng.ts'
  * Pure darts: a board in the middle, three darts a turn, a set number of rounds
  * (five by default). A flick sets where the dart lands: the flick vector,
  * measured against the ideal flick that would hit the centre from the thrower's
- * edge, moves the landing point. Faster flicks wobble more. No DOM.
+ * edge, moves the landing point. How fast the finger is moving when it lets go
+ * matters too: a limp release lobs the dart and it sags short, a crisp one flies
+ * true, and a wild one wobbles. No DOM.
  */
 
 export const ROUNDS = 5
@@ -14,8 +16,16 @@ export const DARTS_PER_TURN = 3
 export const BOARD = { x: 500, y: 900, r: 370 }
 /** Board units per world unit of flick error. */
 export const DART_K = 1.2
-/** Flick speed (world units/s) that wobbles the dart fully. */
-export const WOBBLE_SPEED = 2400
+/** Release speeds (world units/s): below SOFT the dart sags, above WILD it starts to wobble. */
+export const SOFT = 650
+export const WILD = 2200
+/** Release speed past WILD at which the wobble is full. */
+export const WOBBLE_SPEED = 4200
+/** How far (board units) a dart let go with no speed at all sags short. */
+export const SAG = 48
+/** Wobble (board units, one sigma) of a clean release, and of the wildest. */
+const SIGMA_MIN = 4
+const SIGMA_MAX = 32
 /** Flicks shorter than this are taps, not throws. */
 export const FLICK_MIN = 40
 
@@ -55,6 +65,8 @@ export interface Dart {
   pts: number
   label: string
   ring: Ring
+  /** How hard it went in, 0..1 (its thunk and quiver). */
+  force: number
   /** Game time it stuck (for its wobble), set by the game. */
   at?: number
 }
@@ -67,10 +79,14 @@ export interface Flight {
   pts: number
   label: string
   ring: Ring
+  /** How hard it was thrown, 0..1. */
+  force: number
 }
 
 export interface State {
   turn: Side
+  /** Who threw first: a round ends when the turn comes back to them. */
+  first: Side
   /** Darts thrown by the side on turn in its current turn (0..3). */
   throws: number
   /** Completed rounds (a red turn and a blue turn each). */
@@ -86,6 +102,8 @@ export interface State {
   last: Dart | null
   /** Where the flick being made would land (synced for the online guest). */
   aim: Pt | null
+  /** The finger's speed right now while aiming (world units/s), for the reticle's force read-out. */
+  aimSpeed: number
   /** Render stamps (game time), so the online guest replays the same animations. */
   roundAt: number
   turnAt: number
@@ -122,10 +140,39 @@ export function gauss(rng: Rng): number {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
 }
 
-/** Wobble of a human flick: a gaussian whose spread grows with the flick speed. */
+/** One-sigma wobble (board units) of a dart released at `speed`: tight when crisp, wide when wild. */
+export function spreadOf(speed: number): number {
+  const k = Math.min(1, Math.max(0, (speed - WILD) / (WOBBLE_SPEED - WILD)))
+  return SIGMA_MIN + (SIGMA_MAX - SIGMA_MIN) * k
+}
+
+/** How far (board units) a dart released at `speed` falls short of its line. */
+export function sagOf(speed: number): number {
+  return speed >= SOFT ? 0 : SAG * (1 - Math.max(0, speed) / SOFT)
+}
+
+/** The sag as an offset: short of the line means back toward the thrower's own edge. */
+export function sagVec(side: Side, speed: number): Pt {
+  const d = sagOf(speed)
+  return { x: 0, y: side === 0 ? d : -d }
+}
+
+/** 0..1: how hard a dart released at `speed` hits (its thunk, quiver and flight time). */
+export function forceOf(speed: number): number {
+  return Math.min(1, Math.max(0, speed / WOBBLE_SPEED))
+}
+
+/** Wobble of a human flick: a gaussian whose spread grows once the release gets wild. */
 export function wobble(rng: Rng, speed: number): Pt {
-  const sigma = 3 + 30 * Math.min(1, speed / WOBBLE_SPEED)
+  const sigma = spreadOf(speed)
   return { x: gauss(rng) * sigma, y: gauss(rng) * sigma }
+}
+
+/** Where a human flick released at `speed` lands: its line, the sag of a soft release, the wobble. */
+export function release(side: Side, flick: Pt, speed: number, rng: Rng): Pt {
+  const w = wobble(rng, speed)
+  const sag = sagVec(side, speed)
+  return landingOf(side, flick, { x: w.x + sag.x, y: w.y + sag.y })
 }
 
 /** The number of the segment at a board offset (20 at the top, clockwise). */
@@ -154,6 +201,7 @@ export function scoreAt(p: Pt): Score {
 export function newState(first: Side, total = ROUNDS): State {
   return {
     turn: first,
+    first,
     throws: 0,
     rounds: 0,
     total,
@@ -164,23 +212,25 @@ export function newState(first: Side, total = ROUNDS): State {
     beat: 0,
     last: null,
     aim: null,
+    aimSpeed: 0,
     roundAt: 0,
     turnAt: 0,
     endAt: -1,
   }
 }
 
-/** Throw: the dart flies from the edge to `to`, and sticks when it lands. */
-export function throwDart(s: State, to: Pt): void {
+/** Throw: the dart flies from the edge to `to`, and sticks when it lands. Harder throws fly faster. */
+export function throwDart(s: State, to: Pt, force = 0.5): void {
   const sc = scoreAt(to)
   s.flight = {
     side: s.turn,
     to: sc.ring === 'miss' ? clampOut(to) : to,
     t: 0,
-    dur: 0.42,
+    dur: 0.5 - 0.22 * Math.min(1, Math.max(0, force)),
     pts: sc.pts,
     label: sc.label,
     ring: sc.ring,
+    force,
   }
   s.phase = 'fly'
 }
@@ -211,6 +261,7 @@ export function advance(s: State, dt: number): Event[] {
       pts: f.pts,
       label: f.label,
       ring: f.ring,
+      force: f.force,
     }
     s.darts.push(dart)
     s.totals[f.side] += f.pts
@@ -218,7 +269,7 @@ export function advance(s: State, dt: number): Event[] {
     s.last = dart
     s.flight = null
     s.phase = 'beat'
-    s.beat = s.throws >= DARTS_PER_TURN ? 1.1 : 0.7
+    s.beat = s.throws >= DARTS_PER_TURN ? 0.95 : 0.5
     ev.push({ kind: 'stick', dart })
     return ev
   }
@@ -228,7 +279,8 @@ export function advance(s: State, dt: number): Event[] {
     if (s.throws >= DARTS_PER_TURN) {
       s.throws = 0
       s.turn = other(s.turn)
-      if (s.turn === 0) {
+      // A round is one visit each: it ends when the turn is back with whoever opened.
+      if (s.turn === s.first) {
         s.rounds++
         if (!done(s)) ev.push({ kind: 'round', n: s.rounds })
       }

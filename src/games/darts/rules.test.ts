@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { type Difficulty, STEP, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './bot.ts'
+import { bestAim, choose, expected, SPREAD } from './bot.ts'
 import {
   advance,
   BOARD,
@@ -17,8 +17,13 @@ import {
   ROUNDS,
   scoreAt,
   type State,
+  sagOf,
+  sagVec,
   segmentAt,
+  SOFT,
+  T20,
   throwDart,
+  WILD,
   wobble,
 } from './rules.ts'
 
@@ -104,7 +109,27 @@ describe('flick to landing', () => {
       const m = xs.reduce((a, b) => a + b, 0) / xs.length
       return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length)
     }
-    expect(spread(3000)).toBeGreaterThan(spread(0) * 4)
+    expect(spread(5000)).toBeGreaterThan(spread(1000) * 4)
+    // A crisp release is as tight as a gentle one.
+    expect(spread(WILD - 1)).toBeCloseTo(spread(SOFT), 6)
+  })
+
+  it('a limp release sags short, back toward the thrower, and a crisp one does not', () => {
+    expect(sagOf(0)).toBeGreaterThan(30)
+    expect(sagOf(SOFT)).toBe(0)
+    expect(sagOf(1500)).toBe(0)
+    // Red throws up the screen: short is lower (larger y). Blue mirrors it.
+    expect(sagVec(0, 0).y).toBeGreaterThan(0)
+    expect(sagVec(1, 0).y).toBeLessThan(0)
+  })
+
+  it('a harder throw flies faster', () => {
+    const a = newState(0)
+    throwDart(a, BOARD, 0)
+    const b = newState(0)
+    throwDart(b, BOARD, 1)
+    expect(b.flight!.dur).toBeLessThan(a.flight!.dur)
+    expect(b.flight!.force).toBe(1)
   })
 
   it('a dart that misses the board still lands on the surround, not off the table', () => {
@@ -138,6 +163,26 @@ describe('darts turns', () => {
     expect(s.rounds).toBe(1)
     expect(s.turn).toBe(0)
     expect(s.totals[1]).toBe(60)
+  })
+
+  it('when blue opens, red still gets as many visits as blue (a round ends back with the opener)', () => {
+    for (const first of [0, 1] as Side[]) {
+      const r = match(31, 'normal', 'normal', 3, first)
+      expect(done(r.s)).toBe(true)
+      const red = r.s.darts.filter((d) => d.side === 0).length
+      const blue = r.s.darts.filter((d) => d.side === 1).length
+      expect(red).toBe(3 * DARTS_PER_TURN)
+      expect(blue).toBe(3 * DARTS_PER_TURN)
+    }
+  })
+
+  it('the computer aims where its arm scores most: treble 20 when steady, safer beds when shaky', () => {
+    const hard = bestAim(SPREAD.hard)
+    expect(scoreAt(hard).label).toBe('Treble 20')
+    for (const d of ['easy', 'normal'] as const) {
+      const sigma = SPREAD[d]
+      expect(expected(bestAim(sigma), sigma)).toBeGreaterThanOrEqual(expected(T20, sigma))
+    }
   })
 
   it('the highest total after five rounds wins, and equal totals draw', () => {

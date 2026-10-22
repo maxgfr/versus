@@ -1,9 +1,10 @@
+import { Spring } from '../../core/fx/ease.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import type { MatchSpec } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { TurnGame } from '../../engines/board/index.ts'
-import { choose } from './bot.ts'
+import { BOT_SPEED, choose } from './bot.ts'
 import { Flick } from './flick.ts'
 import { handOf, hud, render } from './render.ts'
 import {
@@ -12,18 +13,23 @@ import {
   DARTS_PER_TURN,
   type Event,
   done,
+  forceOf,
   landingOf,
   newState,
   type Pt,
+  release,
   result,
   ROUNDS,
+  sagOf,
   type State,
   throwDart,
-  wobble,
 } from './rules.ts'
 
 /** Rounds of three darts each: the match length. */
 export const match: MatchSpec = { unit: 'rounds', default: ROUNDS, min: 1, max: 10 }
+
+/** Floats for the thrower sit over the middle of the board. */
+const BOARD_X = 500
 
 class Darts extends TurnGame<State> {
   private get target(): number {
@@ -31,6 +37,8 @@ class Darts extends TurnGame<State> {
   }
 
   private flicks: [Flick, Flick] = [new Flick(0), new Flick(1)]
+  /** Cosmetic: the totals pop when they go up. */
+  private pulse: [Spring, Spring] = [new Spring(0, 260, 11), new Spring(0, 260, 11)]
 
   protected setup(): State {
     // The player whose turn it is may flick from anywhere.
@@ -40,6 +48,13 @@ class Darts extends TurnGame<State> {
 
   protected override busy(): boolean {
     return this.s.phase !== 'aim'
+  }
+
+  /** The computer steps up quickly, and quicker still between darts of the same visit. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    const base = d === 'easy' ? 0.6 : d === 'normal' ? 0.5 : 0.4
+    return (this.s.throws > 0 ? base * 0.6 : base) + this.ctx.rng.range(0, 0.25)
   }
 
   protected override step(dt: number): void {
@@ -52,8 +67,15 @@ class Darts extends TurnGame<State> {
         note: `Highest total after ${this.target} rounds`,
         delay: 2.6,
       })
-      this.ctx.fx.confetti(r === 'draw' ? undefined : r)
-      if (r !== 'draw') this.ctx.fx.flash(SIDE[r].light, 0.2)
+      const fx = this.ctx.fx
+      fx.confetti(r === 'draw' ? undefined : r)
+      if (r !== 'draw') {
+        fx.flash(SIDE[r].light, 0.25)
+        fx.shake(0.3)
+        fx.stop(5)
+        fx.ring(BOARD_X, 900, SIDE[r].light, 520)
+        floatFor(fx, r, 'Winner!')
+      }
       return
     }
     super.step(dt)
@@ -64,25 +86,31 @@ class Darts extends TurnGame<State> {
     const fl = this.flicks[side]
     fl.update(this.ctx.input.player(side))
     this.s.aim = fl.aim ? landingOf(side, fl.aim) : null
+    this.s.aimSpeed = fl.aim ? fl.speed : 0
     const t = fl.throwFlick
     if (t) {
-      // The wobble comes from the flick's speed: a fast flick is less accurate.
-      this.throwTo(landingOf(side, t.f, wobble(this.ctx.rng, t.speed)))
+      // The release speed decides: a limp release sags short, a wild one wobbles.
+      this.throwTo(release(side, t.f, t.speed, this.ctx.rng), t.speed)
+      if (sagOf(t.speed) > 20)
+        floatFor(this.ctx.fx, side, 'Too soft!', BOARD_X, side === 0 ? 1380 : 420)
     }
   }
 
   protected botPlay(): void {
     const side = this.s.turn
-    this.throwTo(landingOf(side, choose(side, this.ctx.difficulty, this.ctx.rng)))
+    this.throwTo(landingOf(side, choose(side, this.ctx.difficulty, this.ctx.rng)), BOT_SPEED)
   }
 
-  private throwTo(to: Pt): void {
+  private throwTo(to: Pt, speed: number): void {
     const side = this.s.turn
-    throwDart(this.s, to)
+    const force = forceOf(speed)
+    throwDart(this.s, to, force)
     this.s.aim = null
+    this.s.aimSpeed = 0
     for (const f of this.flicks) f.cancel()
     const { audio } = this.ctx
-    audio.play('swish', side === 0 ? 1.1 : 1.18)
+    audio.play('swish', (side === 0 ? 1.0 : 1.08) + force * 0.35)
+    if (force > 0.6) audio.play('whoosh', 0.9 + force * 0.4)
   }
 
   /** This turn's darts for the side that just threw. */
@@ -93,6 +121,7 @@ class Darts extends TurnGame<State> {
 
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
+    if (e.kind === 'stick' && e.dart.pts > 0) this.pulse[e.dart.side].kick(10 + e.dart.pts / 6)
     if (e.kind === 'turn') {
       this.s.turnAt = this.time
       audio.play('tick')
@@ -113,20 +142,23 @@ class Darts extends TurnGame<State> {
       floatFor(fx, d.side, 'Miss', d.x, d.y - 80)
       return
     }
-    // The thunk: a short, heavy hit and a puff of sisal.
-    audio.play('thud', d.ring === 'bull' ? 1.25 : 1.05)
-    audio.play('hit', 1.5)
-    fx.shake(0.18)
-    fx.puff(d.x, d.y, 'rgba(240,225,190,0.55)', 5)
+    // The thunk: a short, heavy hit and a puff of sisal, harder for a harder throw.
+    const k = d.force
+    audio.play('thud', (d.ring === 'bull' ? 1.2 : 1) + k * 0.2)
+    audio.play('hit', 1.35 + k * 0.3)
+    audio.buzz(Math.round(8 + k * 16))
+    fx.shake(0.1 + k * 0.16)
+    fx.puff(d.x, d.y, 'rgba(240,225,190,0.55)', Math.round(3 + k * 5))
     fx.burst(d.x, d.y, '#e8d6a8', {
-      count: 6,
-      speed: 200,
+      count: Math.round(4 + k * 10),
+      speed: 160 + k * 220,
       size: 6,
       life: 0.4,
       gravity: 0,
       drag: 4,
       kind: 'square',
     })
+    if (k > 0.75) fx.stop(2)
     const big = d.ring === 'bull' || d.ring === 'treble' || d.ring === 'double'
     if (big) {
       audio.play('score', d.ring === 'treble' ? 1.1 : 1)
@@ -177,18 +209,27 @@ class Darts extends TurnGame<State> {
   render(g: Draw): void {
     const s = this.s
     const side = s.turn
+    // Online, each phone shows only its own player's reticle and coaching.
+    const mine = g.viewer === null || g.viewer === side
+    for (const p of this.pulse) p.update(1 / 60)
     render(
       g,
       s,
       {
-        aim: s.phase === 'aim' && !this.over ? s.aim : null,
-        hint: s.phase === 'aim' && !this.isBot(side) && s.darts.length === 0 && !s.aim,
+        aim: s.phase === 'aim' && !this.over && mine ? s.aim : null,
+        speed: s.aimSpeed,
+        hint: mine && s.phase === 'aim' && !this.isBot(side) && s.darts.length === 0 && !s.aim,
       },
       this.time,
     )
     for (const f of this.flicks) f.render(g)
-    hud(g, s)
+    hud(g, s, [Math.max(0, this.pulse[0].value), Math.max(0, this.pulse[1].value)])
     this.drawTurns(g, undefined, s.phase === 'aim')
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    for (const p of this.pulse) p.set(0)
   }
 }
 
