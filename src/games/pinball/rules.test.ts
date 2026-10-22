@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { type Difficulty, type Side, STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
-import { decide, newMemory, TUNING } from './bot.ts'
+import { decide, foldX, newMemory, TUNING } from './bot.ts'
 import {
   BALL_R,
   BUMP_KICK,
@@ -19,6 +19,7 @@ import {
   REST,
   SLING_KICK,
   SLINGS,
+  STALL,
   step,
   type Seg,
   UP,
@@ -326,3 +327,49 @@ function botMatch(
   }
   return { w, steps, win: winner(w, target) }
 }
+
+describe('bot aim', () => {
+  it('folds its landing prediction between the real side rails, not the stage edges', () => {
+    // Heading right at 600/s for 1 s from x = 700: it meets the right rail and comes back.
+    const x = foldX(700, 600, 1)
+    expect(x).toBeLessThan(930 - BALL_R)
+    expect(x).toBeCloseTo(2 * (930 - 14 - BALL_R) - 1300, 5)
+  })
+
+  it('flips a slow ball dribbling onto its flipper instead of watching it drain', () => {
+    for (const side of [0, 1] as Side[]) {
+      const w = playWorld(9)
+      // Resting on the left flipper's blade, barely moving.
+      const lx = PIVOT[0][0] + 90
+      const ly = PIVOT[0][1] - 70
+      w.ball =
+        side === 0 ? { x: lx, y: ly, vx: 0, vy: 40 } : { x: W - lx, y: 1800 - ly, vx: 0, vy: -40 }
+      const [l, r] = decide(w, side, 'normal', new Rng(1), newMemory(), STEP)
+      expect(l).toBe(true)
+      expect(r).toBe(false)
+    }
+  })
+})
+
+describe('no stalling', () => {
+  it('a ball that has been nearly still for STALL seconds is nudged back toward the middle', () => {
+    for (const side of [0, 1] as Side[]) {
+      const w = playWorld(4)
+      const y = side === 0 ? 1500 : 300
+      w.ball = { x: 300, y, vx: 0, vy: 0 }
+      w.still = STALL - STEP / 2
+      const ev = step(w, STEP, NO_HOLDS, new Rng(1))
+      expect(ev.some((e) => e.kind === 'nudge')).toBe(true)
+      expect(Math.sign(w.ball.vy)).toBe(side === 0 ? -1 : 1)
+      expect(w.still).toBe(0)
+    }
+  })
+
+  it('a moving ball never counts as stalled', () => {
+    const w = playWorld(4)
+    w.ball = { x: 500, y: 1200, vx: 300, vy: 400 }
+    w.still = STALL - STEP / 2
+    step(w, STEP, NO_HOLDS, new Rng(1))
+    expect(w.still).toBe(0)
+  })
+})

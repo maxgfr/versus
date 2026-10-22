@@ -22,6 +22,9 @@ import {
 /** What the frame needs beyond the world: interpolated positions and timing stamps. */
 export interface Look {
   ball: Ball
+  /** Ball squash (1 = round), and each flipper's hit flash 0..1 (index = side * 2 + lane). */
+  ballSq: number
+  flipFlash: readonly number[]
   /** Interpolated flipper angles (red frame), index = side * 2 + lane. */
   angles: number[]
   trail: readonly { x: number; y: number }[]
@@ -67,7 +70,14 @@ export function render(g: Draw, w: World, look: Look): void {
   for (let i = 0; i < SLINGS.length; i++) drawSling(g, i, w.slingLit[i] ?? 0)
   for (let i = 0; i < BUMPERS.length; i++) drawBumper(g, i, w.bumpLit[i] ?? 0)
   for (const f of w.flips)
-    drawFlipper(g, f.side, f.lane, look.angles[f.side * 2 + f.lane] ?? f.a, f.up)
+    drawFlipper(
+      g,
+      f.side,
+      f.lane,
+      look.angles[f.side * 2 + f.lane] ?? f.a,
+      f.up,
+      look.flipFlash[f.side * 2 + f.lane] ?? 0,
+    )
   if (w.phase === 'play') drawBall(g, look)
   else if (look.champ < 0) drawServe(g, w)
   drawOverlays(g, w, look)
@@ -417,7 +427,7 @@ function drawBumper(g: Draw, i: number, lit: number): void {
 }
 
 /** A flipper: a tapered bat in its owner's colour with a rubber rim and a chrome pivot. */
-function drawFlipper(g: Draw, side: Side, lane: 0 | 1, a: number, up: boolean): void {
+function drawFlipper(g: Draw, side: Side, lane: 0 | 1, a: number, up: boolean, flash = 0): void {
   const { px, py, ang } = flipGeom({ side, lane, a, w: 0, up })
   const col = SIDE[side]
   const r0 = FLIP_R + 6
@@ -449,6 +459,9 @@ function drawFlipper(g: Draw, side: Side, lane: 0 | 1, a: number, up: boolean): 
     // Gloss streak along the top edge.
     g.line(r0 * 0.2, -r0 * 0.45, L - r1, -r1 * 0.45, alpha('#ffffff', up ? 0.7 : 0.45), 6)
   })
+  // A hit flares the bat white, brighter for a harder strike.
+  if (flash > 0)
+    g.at(px, py, ang, () => g.alpha(flash * 0.8, () => g.path(bat(r0 - 4, r1 - 4), '#ffffff')))
   g.circle(px, py + 4, FLIP_R * 0.62, shade(col.main, -0.6))
   g.ball(px, py, FLIP_R * 0.58, '#e6ecf6', 0.9)
   g.sideMark(side, px, py, 7, shade(col.main, -0.3))
@@ -456,32 +469,38 @@ function drawFlipper(g: Draw, side: Side, lane: 0 | 1, a: number, up: boolean): 
 
 // ---------- the ball ----------
 
-function steelBall(g: Draw, x: number, y: number, r: number): void {
+function steelBall(g: Draw, x: number, y: number, r: number, sq = 1, ang = 0): void {
   g.shadow(x + 7, y + 16, r * 1.05, r * 0.65, 0.45)
-  g.circle(
-    x,
-    y,
-    r,
-    g.rad(
-      x,
-      y,
-      r * 0.08,
+  const body = (): void => {
+    g.circle(
+      0,
+      0,
       r,
-      [
-        [0, STEEL[0]],
-        [0.3, STEEL[1]],
-        [0.72, STEEL[2]],
-        [1, STEEL[3]],
-      ],
-      x - r * 0.35,
-      y - r * 0.4,
-    ),
-  )
-  // Reflection of the table in the lower half, and a sharp specular.
-  const tint = y > MID ? SIDE[0].main : SIDE[1].main
-  g.ellipse(x, y + r * 0.5, r * 0.72, r * 0.32, alpha(tint, 0.3))
-  g.alpha(0.95, () => g.ellipse(x - r * 0.34, y - r * 0.42, r * 0.34, r * 0.18, '#ffffff', -0.6))
-  g.alpha(0.35, () => g.circle(x + r * 0.32, y + r * 0.46, r * 0.16, '#ffffff'))
+      g.rad(
+        0,
+        0,
+        r * 0.08,
+        r,
+        [
+          [0, STEEL[0]],
+          [0.3, STEEL[1]],
+          [0.72, STEEL[2]],
+          [1, STEEL[3]],
+        ],
+        -r * 0.35,
+        -r * 0.4,
+      ),
+    )
+    // Reflection of the table in the lower half, and a sharp specular.
+    const tint = y > MID ? SIDE[0].main : SIDE[1].main
+    g.ellipse(0, r * 0.5, r * 0.72, r * 0.32, alpha(tint, 0.3))
+    g.alpha(0.95, () => g.ellipse(-r * 0.34, -r * 0.42, r * 0.34, r * 0.18, '#ffffff', -0.6))
+    g.alpha(0.35, () => g.circle(r * 0.32, r * 0.46, r * 0.16, '#ffffff'))
+  }
+  // Squash & stretch along `ang`; the lighting stays upright.
+  const q = Math.max(0.7, Math.min(1.3, sq))
+  if (q === 1) g.at(x, y, 0, body)
+  else g.at(x, y, ang, () => g.at(0, 0, -ang, body), q, 2 - q)
 }
 
 function drawBall(g: Draw, look: Look): void {
@@ -495,7 +514,10 @@ function drawBall(g: Draw, look: Look): void {
   const since = look.now - look.serveAt
   if (since < 0.45)
     g.alpha(1 - since / 0.45, () => g.ring(b.x, b.y, BALL_R * (1.4 + since * 5), C.yellow, 8))
-  steelBall(g, b.x, b.y, BALL_R)
+  // Stretched along a fast flight, squashed by impacts.
+  const sp = Math.hypot(b.vx, b.vy)
+  const sq = look.ballSq * (1 + Math.min(0.18, Math.max(0, (sp - 1200) / 6000)))
+  steelBall(g, b.x, b.y, BALL_R, sq, Math.atan2(b.vy, b.vx))
 }
 
 /** Between points the ball materialises at the serve spot, with arrows toward the receiver. */
@@ -530,7 +552,8 @@ function drawOverlays(g: Draw, w: World, look: Look): void {
   const intro = 1 - prog(look.now, 3.2, 4)
   if (intro > 0 && w.score[0] + w.score[1] === 0) {
     for (const side of [0, 1] as Side[]) {
-      if (!look.humans[side]) continue
+      // Online, each phone coaches only its own player.
+      if (!look.humans[side] || (g.viewer !== null && g.viewer !== side)) continue
       g.alpha(intro, () => {
         const y = sy(side, 1500)
         banner(g, side, 'Tap left / right to flip', y, { size: 36 })

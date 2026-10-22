@@ -1,7 +1,7 @@
 import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import { H, MID, W } from '../../core/stage.ts'
-import { BALL_R, FLIP_TIME, PIVOT, type World } from './rules.ts'
+import { BALL_R, FLIP_LEN, FLIP_TIME, PIVOT, RAIL_R, RAILS, type World } from './rules.ts'
 
 /**
  * The computer player. It reads the table in its own frame (its flippers at
@@ -48,13 +48,16 @@ export const newMemory = (): BotMemory => ({
 })
 
 const FLIP_Y = PIVOT[0][1]
-const LO = BALL_R
-const HI = W - BALL_R
+/** The side walls the ball folds between (the first two rails), not the stage edges. */
+const LO = (RAILS[0]?.[0] ?? 70) + RAIL_R + BALL_R
+const HI = (RAILS[1]?.[0] ?? 930) - RAIL_R - BALL_R
+/** A slow ball this close above the flipper line is on (or rolling down) a flipper. */
+const DRIBBLE_Y = FLIP_Y - 150
 /** How early (s) before arrival the bot starts a swing: the swing itself takes FLIP_TIME. */
 const LEAD = FLIP_TIME
 
 /** Ball x `t` seconds ahead, folded back into the table by the side walls. */
-function foldX(x: number, vx: number, t: number): number {
+export function foldX(x: number, vx: number, t: number): number {
   const span = HI - LO
   let u = x + vx * t - LO
   u = ((u % (2 * span)) + 2 * span) % (2 * span)
@@ -86,6 +89,17 @@ export function decide(
   mem.hold[0] = Math.max(0, mem.hold[0] - dt)
   mem.hold[1] = Math.max(0, mem.hold[1] - dt)
   const b = localBall(w, side)
+  // A slow ball dribbling onto a flipper never "comes in" fast: flip the one it is on.
+  if (b.y > DRIBBLE_Y && b.vy <= 120 && b.vy > -200) {
+    const lane: 0 | 1 = b.x < W / 2 ? 0 : 1
+    const [px] = PIVOT[lane]
+    if (Math.abs(b.x - px) < FLIP_LEN + BALL_R && mem.clock >= mem.at) {
+      mem.hold[lane] = tune.hold
+      // Re-arm after a short beat so it does not machine-gun the flipper.
+      mem.at = mem.clock + tune.hold + tune.react
+    }
+    return [mem.hold[0] > 0, mem.hold[1] > 0]
+  }
   const incoming = b.y > MID && b.vy > 120
   if (!incoming) {
     mem.armed = false

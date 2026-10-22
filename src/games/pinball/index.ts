@@ -1,6 +1,6 @@
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { floatFor } from '../../core/fx/fx.ts'
-import { lerp } from '../../core/fx/ease.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -62,6 +62,9 @@ class Pinball extends BaseGame<State> {
   // Cosmetic only (not synced): previous positions for interpolation, and the trail.
   private prev: { ball: Ball; angles: number[] } | null = null
   private trail: { x: number; y: number }[] = []
+  /** Cosmetic: ball squash, and each flipper's flash (1 on a hit, fading). */
+  private ballSq = new Spring(1, 520, 15)
+  private flipFlash = [0, 0, 0, 0]
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -153,8 +156,19 @@ class Pinball extends BaseGame<State> {
         if (e.speed > 900) fx.shake(0.06 + k * 0.14)
         if (e.speed > 1500) {
           fx.stop(2)
-          audio.buzz(8)
+          audio.buzz(Math.round(8 + k * 10))
         }
+        this.ballSq.kick(-2 - k * 5)
+        // Which of this side's flippers it was, read in the side's own frame.
+        const lx = e.side === 1 ? W - e.x : e.x
+        this.flipFlash[e.side * 2 + (lx < W / 2 ? 0 : 1)] = Math.max(0.35, k)
+        break
+      }
+      case 'nudge': {
+        audio.play('boing', 0.8)
+        fx.ring(e.x, e.y, C.white, 90)
+        fx.shake(0.12)
+        this.ballSq.kick(-4)
         break
       }
       case 'bump': {
@@ -172,6 +186,7 @@ class Pinball extends BaseGame<State> {
         })
         fx.ring(bx, by, BUMP_COL, 120)
         fx.shake(0.07)
+        this.ballSq.kick(-3)
         // Score pop: cosmetic, for the player whose half the bumper is in.
         fx.float('+100', bx, by - 80, BUMP_COL, 46, e.y > MID ? 0 : 1)
         break
@@ -180,11 +195,14 @@ class Pinball extends BaseGame<State> {
         audio.play('boing', 0.9 + Math.min(0.5, e.speed / 3000))
         fx.sparks(e.x, e.y, SIDE[e.side].light, 8)
         fx.shake(0.1)
+        this.ballSq.kick(-3)
         break
       }
       case 'wall': {
         if (e.speed > 300) audio.play('wall', 0.9 + Math.min(0.4, e.speed / 3000))
-        if (e.speed > 900) fx.sparks(e.x, e.y, C.white, 5)
+        if (e.speed > 900)
+          fx.sparks(e.x, e.y, C.white, Math.round(4 + Math.min(1, e.speed / 2400) * 6))
+        if (e.speed > 600) this.ballSq.kick(-1 - Math.min(1, e.speed / 2400) * 3)
         break
       }
       case 'goal': {
@@ -236,7 +254,12 @@ class Pinball extends BaseGame<State> {
     if (w.phase === 'play' && speed > 700) this.trail.push({ x: ball.x, y: ball.y })
     else this.trail.length = 0
     while (this.trail.length > 7) this.trail.shift()
+    this.ballSq.update(1 / 60)
+    for (let i = 0; i < 4; i++)
+      this.flipFlash[i] = Math.max(0, (this.flipFlash[i] ?? 0) - 1 / 60 / 0.25)
     const look: Look = {
+      ballSq: this.ballSq.value,
+      flipFlash: this.flipFlash,
       ball,
       angles,
       trail: this.trail,

@@ -40,6 +40,10 @@ export const SLING_KICK = 1150
 export const SERVE_SPEED = 780
 /** Pause between a drain and the next serve (s). */
 export const PAUSE = 1.2
+/** A ball slower than this for STALL seconds (cradled, wedged) gets nudged back into play. */
+export const STALL_SPEED = 130
+export const STALL = 3
+export const NUDGE_SPEED = 700
 /** Ball centre beyond these lines has gone through a drain. */
 export const DRAIN_Y = 1745
 export const DRAIN_TOP = H - DRAIN_Y
@@ -78,6 +82,8 @@ export interface World {
   pause: number
   /** The side that conceded last: the next serve goes to them. */
   server: Side
+  /** Seconds the ball in play has been nearly still. */
+  still: number
 }
 
 export type Event =
@@ -89,6 +95,8 @@ export type Event =
   | { kind: 'goal'; side: Side; x: number; y: number; speed: number }
   /** Ball put back in play toward `side`, the player who conceded. */
   | { kind: 'serve'; side: Side; x: number; y: number }
+  /** A stalled ball (held on a flipper, wedged) knocked back toward the middle. */
+  | { kind: 'nudge'; x: number; y: number; speed: number }
 
 export type Seg = readonly [number, number, number, number]
 
@@ -192,6 +200,7 @@ export function newWorld(rng: Rng): World {
     phase: 'goal',
     pause: PAUSE,
     server,
+    still: 0,
   }
 }
 
@@ -256,6 +265,18 @@ export function step(w: World, dt: number, holds: readonly boolean[], rng: Rng):
     }
     return ev
   }
+  // No stalling: a ball held still (cradled forever, or wedged) is knocked back
+  // toward the middle of the table, so a match always moves on.
+  const bs = w.ball
+  if (Math.hypot(bs.vx, bs.vy) < STALL_SPEED) w.still += dt
+  else w.still = 0
+  if (w.still >= STALL) {
+    w.still = 0
+    const toMid = bs.y > CY ? -1 : 1
+    bs.vy = toMid * NUDGE_SPEED
+    bs.vx = rng.range(-200, 200)
+    ev.push({ kind: 'nudge', x: bs.x, y: bs.y, speed: NUDGE_SPEED })
+  }
   const h = dt / SUB
   for (let s = 0; s < SUB; s++) {
     swing(w, h)
@@ -298,6 +319,7 @@ function drain(w: World, ev: Event[]): void {
   w.phase = 'goal'
   w.pause = PAUSE
   w.server = conceder
+  w.still = 0
   b.x = CX
   b.y = CY
   b.vx = 0
