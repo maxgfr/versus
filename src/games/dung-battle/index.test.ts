@@ -6,7 +6,8 @@ import { H, W, type Stage } from '../../core/stage.ts'
 import createGame, { match } from './index.ts'
 
 /** Computer vs computer: no touches, and sound and sparks are no-ops. */
-function botContext(target?: number): GameContext {
+function botContext(target?: number, bots: [boolean, boolean] = [true, true]): GameContext {
+  const players = [new PlayerInput(0), new PlayerInput(1)]
   const noop = () => undefined
   const stage = {
     view: { x: 0, y: 0, w: W, h: H },
@@ -15,13 +16,13 @@ function botContext(target?: number): GameContext {
   } as unknown as Stage
   return {
     stage,
-    input: { player: (side: Side) => new PlayerInput(side) } as unknown as GameContext['input'],
+    input: { player: (side: Side) => players[side] } as unknown as GameContext['input'],
     fx: new Proxy({}, { get: () => noop }) as GameContext['fx'],
     audio: new Proxy({}, { get: () => noop }) as GameContext['audio'],
     rng: new Rng(7),
     mode: '1p',
     difficulty: 'normal',
-    bots: [true, true],
+    bots,
     teams: false,
     names: ['Red', 'Blue'],
     local: 0,
@@ -48,5 +49,39 @@ describe('dung battle: match length', () => {
   it('defaults to best of three', () => {
     expect(match.default).toBe(2)
     expect(match.unit).toBe('wins')
+  })
+})
+
+describe('dung battle: the flick', () => {
+  /** Red's thumb goes down on its stick and moves `per` units up the screen each step. */
+  function swipe(per: number) {
+    const ctx = botContext(undefined, [false, true])
+    const game = createGame()
+    game.init(ctx)
+    const red = ctx.input.player(0)
+    // Let the opening stamp pass so the round is in full swing.
+    for (let i = 0; i < 30; i++) game.update(STEP)
+    let y = 1650
+    red.press(1, 300, y)
+    for (let i = 0; i < 8; i++) {
+      game.update(STEP)
+      red.endStep()
+      y -= per
+      red.move(1, 300, y)
+    }
+    return (
+      game as unknown as { s: { w: { bugs: { beetle: { dashT: number; dashK: number } }[] } } }
+    ).s.w.bugs[0]!.beetle
+  }
+
+  it('a fast flick of the stick charges, with power from the flick speed', () => {
+    const quick = swipe(60) // 3600 units/s
+    expect(quick.dashT).toBeGreaterThan(0)
+    const fast = swipe(90) // 5400 units/s
+    expect(fast.dashK).toBeGreaterThan(quick.dashK)
+  })
+
+  it('steering at a normal pace never charges', () => {
+    expect(swipe(12).dashT).toBe(-1)
   })
 })

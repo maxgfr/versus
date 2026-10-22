@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { DungBot } from './bot.ts'
+import { DungBot, reachable } from './bot.ts'
 import {
   BALL_R0,
   BALL_RMAX,
+  BALL_VMAX,
   BEETLE_R,
+  DASH_CD,
   type Drive,
   type Ev,
   FIELD,
@@ -20,6 +22,8 @@ import {
   topSpeed,
   type World,
   ballRadius,
+  rimK,
+  tether,
 } from './rules.ts'
 
 const still: Drive[] = [
@@ -169,6 +173,155 @@ describe('dung battle collisions', () => {
   })
 })
 
+describe('dung battle physics edge cases', () => {
+  it('a ball shoved against the rim never ends a step poking through it', () => {
+    // Bug: collisions ran after the rim check, so a beetle could shove a rival
+    // ball past the lip for a frame.
+    const w = quiet(newWorld(new Rng(1)))
+    const [red, blue] = w.bugs
+    blue.ball.x = FIELD.cx + FIELD.a - blue.ball.r - 0.5
+    blue.ball.y = FIELD.cy
+    blue.beetle.x = FIELD.cx - 200
+    blue.beetle.y = FIELD.cy - 300
+    red.beetle.x = blue.ball.x - blue.ball.r - BEETLE_R + 8
+    red.beetle.y = FIELD.cy
+    red.beetle.vx = 300
+    red.beetle.a = 0
+    red.ball.x = red.beetle.x
+    red.ball.y = FIELD.cy + 200
+    stepWorld(w, [{ jx: 1, jy: 0 }, still[1] as Drive], STEP, [])
+    expect(rimK(blue.ball.x, blue.ball.y, blue.ball.r)).toBeLessThanOrEqual(1.0001)
+    expect(rimK(red.beetle.x, red.beetle.y, BEETLE_R)).toBeLessThanOrEqual(1.0001)
+  })
+
+  it('two beetles dead on top of each other are parted', () => {
+    // Bug: a zero-length contact normal left them stuck inside each other.
+    const w = quiet(newWorld(new Rng(1)))
+    const [red, blue] = w.bugs
+    blue.beetle.x = red.beetle.x
+    blue.beetle.y = red.beetle.y
+    blue.ball.x = 200
+    blue.ball.y = 700
+    stepWorld(w, still, STEP, [])
+    const d = Math.hypot(red.beetle.x - blue.beetle.x, red.beetle.y - blue.beetle.y)
+    expect(d).toBeGreaterThanOrEqual(BEETLE_R * 2 - 0.01)
+  })
+
+  it('a knocked-back beetle keeps facing where its stick points', () => {
+    // Bug: the heading chased the velocity, so a knock spun the beetle (and its ball) round.
+    const w = quiet(newWorld(new Rng(1)))
+    const red = w.bugs[0]
+    red.beetle.vy = 500
+    const a0 = red.beetle.a
+    for (let i = 0; i < 12; i++) stepWorld(w, [{ jx: 0, jy: -1 }, still[1] as Drive], STEP, [])
+    expect(Math.abs(red.beetle.a - a0)).toBeLessThan(0.05)
+  })
+
+  it('ignores a broken stick reading instead of poisoning the world', () => {
+    const w = quiet(newWorld(new Rng(1)))
+    stepWorld(w, [{ jx: Number.NaN, jy: 1, dash: Number.NaN }, still[1] as Drive], STEP, [])
+    for (const bug of w.bugs) {
+      expect(Number.isFinite(bug.beetle.x + bug.beetle.y + bug.ball.x + bug.ball.y)).toBe(true)
+    }
+  })
+
+  it('nothing escapes the dish or tunnels under hard, repeated charges', () => {
+    const w = quiet(newWorld(new Rng(12)))
+    grow(w, 0, 6)
+    for (let i = 0; i < 60 * 20; i++) {
+      const a = i * 0.07
+      const d: Drive[] = [
+        { jx: Math.cos(a), jy: Math.sin(a), dash: 1 },
+        { jx: -Math.cos(a * 1.3), jy: Math.sin(a * 0.9), dash: 1 },
+      ]
+      stepWorld(w, d, STEP, [])
+      if (w.flattened !== null) break
+      for (const bug of w.bugs) {
+        expect(rimK(bug.beetle.x, bug.beetle.y, BEETLE_R)).toBeLessThanOrEqual(1.0001)
+        expect(rimK(bug.ball.x, bug.ball.y, bug.ball.r)).toBeLessThanOrEqual(1.0001)
+        expect(Math.hypot(bug.ball.vx, bug.ball.vy)).toBeLessThanOrEqual(BALL_VMAX + 1e-6)
+      }
+    }
+  })
+
+  it('a flatten on the last step beats the time limit', () => {
+    const w = quiet(newWorld(new Rng(4)))
+    grow(w, 0, 10)
+    const [red, blue] = w.bugs
+    w.t = ROUND_T - STEP / 2
+    blue.ball.x = red.ball.x
+    blue.ball.y = red.ball.y + 60
+    stepWorld(w, still, STEP, [])
+    expect(w.flattened).toBe(1)
+    expect(roundWinner(w)).toBe(0)
+  })
+
+  it('a time-out with equal balls that grew on the same step is a draw', () => {
+    const w = quiet(newWorld(new Rng(9)))
+    grow(w, 0, 3)
+    grow(w, 1, 3)
+    w.bugs[0].ball.eat = 5
+    w.bugs[1].ball.eat = 5
+    w.t = ROUND_T
+    expect(roundWinner(w)).toBe('draw')
+  })
+})
+
+describe('dung battle charge', () => {
+  /** Red charging up the dish from a standstill, with its ball square in front. */
+  function charge(power: number): { w: World; ev: Ev[] } {
+    const w = quiet(newWorld(new Rng(3)))
+    const ev: Ev[] = []
+    stepWorld(w, [{ jx: 0, jy: -1, dash: power }, still[1] as Drive], STEP, ev)
+    return { w, ev }
+  }
+
+  it('a flick lunges the beetle and shoves its ball ahead, harder for a faster flick', () => {
+    const soft = charge(0)
+    const hard = charge(1)
+    expect(soft.ev.some((e) => e.k === 'dash' && e.side === 0)).toBe(true)
+    const sb = -soft.w.bugs[0].beetle.vy
+    const hb = -hard.w.bugs[0].beetle.vy
+    expect(sb).toBeGreaterThan(topSpeed(BALL_R0))
+    expect(hb).toBeGreaterThan(sb + 300)
+    expect(-hard.w.bugs[0].ball.vy).toBeGreaterThan(-soft.w.bugs[0].ball.vy + 300)
+  })
+
+  it('a charge then needs a cooldown before the next', () => {
+    const { w } = charge(1)
+    const ev: Ev[] = []
+    for (let i = 0; i < Math.floor(DASH_CD * 60) - 2; i++)
+      stepWorld(w, [{ jx: 0, jy: 1, dash: 1 }, still[1] as Drive], STEP, ev)
+    expect(ev.some((e) => e.k === 'dash')).toBe(false)
+    for (let i = 0; i < 4; i++)
+      stepWorld(w, [{ jx: 0, jy: 1, dash: 1 }, still[1] as Drive], STEP, ev)
+    expect(ev.filter((e) => e.k === 'dash').length).toBe(1)
+  })
+
+  it('a resting stick cannot charge', () => {
+    const w = quiet(newWorld(new Rng(3)))
+    const ev: Ev[] = []
+    stepWorld(w, [{ jx: 0, jy: 0, dash: 1 }, still[1] as Drive], STEP, ev)
+    expect(ev.some((e) => e.k === 'dash')).toBe(false)
+  })
+
+  it('a charged ball can flatten a smaller one from a distance', () => {
+    const w = quiet(newWorld(new Rng(3)))
+    grow(w, 0, 8)
+    const [red, blue] = w.bugs
+    // Blue sits still, its ball tucked in front of it, 120 units up the dish from red's.
+    blue.ball.x = red.ball.x
+    blue.ball.y = red.ball.y - red.ball.r - blue.ball.r - 120
+    blue.beetle.x = blue.ball.x
+    blue.beetle.y = blue.ball.y - tether(blue.ball.r)
+    blue.beetle.a = Math.PI / 2
+    let steps = 0
+    stepWorld(w, [{ jx: 0, jy: -1, dash: 1 }, still[1] as Drive], STEP, [])
+    while (w.flattened === null && steps++ < 30) stepWorld(w, still, STEP, [])
+    expect(w.flattened).toBe(1)
+  })
+})
+
 describe('dung battle round end', () => {
   it('the bigger ball wins a time-out; a level dish goes to the ball that grew last', () => {
     const w = quiet(newWorld(new Rng(9)))
@@ -201,6 +354,54 @@ describe('dung battle bot', () => {
     w.flatT = 0
     expect(bot.decide(w, 1, STEP)).toEqual({ jx: 0, jy: 0 })
   })
+
+  it('only aims at pellets its ball can actually reach', () => {
+    const edge = { x: FIELD.cx + FIELD.a - 10, y: FIELD.cy }
+    expect(reachable(edge, BALL_R0)).toBe(true)
+    expect(reachable(edge, BALL_RMAX)).toBe(false)
+    expect(reachable({ x: FIELD.cx, y: FIELD.cy }, BALL_RMAX)).toBe(true)
+  })
+
+  it('uses charges on normal and hard but not on easy', () => {
+    for (const [d, any] of [
+      ['easy', false],
+      ['hard', true],
+    ] as const) {
+      const rng = new Rng(21)
+      const w = newWorld(rng)
+      const bots = [new DungBot(rng.fork(), d), new DungBot(rng.fork(), d)]
+      let dashes = 0
+      for (let i = 0; i < 60 * 20 && roundWinner(w) === null; i++) {
+        const ev: Ev[] = []
+        const drives = [0, 1].map((s) => bots[s]?.decide(w, s as 0 | 1, STEP) ?? still[0])
+        stepWorld(w, drives as Drive[], STEP, ev)
+        dashes += ev.filter((e) => e.k === 'dash').length
+      }
+      expect(dashes > 0).toBe(any)
+    }
+  })
+
+  it('a clear spread: hard beats normal, which beats easy, over many rounds', () => {
+    const rate = (a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard'): number => {
+      let won = 0
+      const N = 120
+      for (let s = 0; s < N; s++) {
+        const swap = s % 2 === 1
+        const rng = new Rng(900 + s)
+        const w = newWorld(rng)
+        const bots = [new DungBot(rng.fork(), swap ? b : a), new DungBot(rng.fork(), swap ? a : b)]
+        for (let i = 0; i < 60 * (ROUND_T + 1) && roundWinner(w) === null; i++) {
+          const drives = [0, 1].map((x) => bots[x]?.decide(w, x as 0 | 1, STEP) ?? still[0])
+          stepWorld(w, drives as Drive[], STEP, [])
+        }
+        if (roundWinner(w) === (swap ? 1 : 0)) won++
+      }
+      return won / N
+    }
+    expect(rate('hard', 'easy')).toBeGreaterThan(0.68)
+    expect(rate('normal', 'easy')).toBeGreaterThan(0.6)
+    expect(rate('hard', 'normal')).toBeGreaterThan(0.52)
+  }, 30000)
 
   for (const d of ['easy', 'normal', 'hard'] as const) {
     it(`bot vs bot reaches a result within the time limit (${d})`, () => {
