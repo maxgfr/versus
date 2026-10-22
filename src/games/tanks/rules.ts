@@ -24,6 +24,16 @@ export const SHELL_R = 10
 export const MAX_BOUNCES = 2
 export const SHELL_LIFE = 3.6
 export const RELOAD = 0.5
+/**
+ * Overdrive: a round still going after this many seconds turns tense, guns
+ * reload faster and shells fly faster, for both sides alike.
+ */
+export const OVERDRIVE_T = 40
+export const OVERDRIVE_RELOAD = 0.32
+export const OVERDRIVE_SPEED = 1.2
+
+/** Reload time and shell speed factor at round time `t`. */
+export const reloadAt = (t: number): number => (t >= OVERDRIVE_T ? OVERDRIVE_RELOAD : RELOAD)
 export const MAX_SHELLS = 3
 export const HP = 3
 /** A shell can't hit its own tank until it has flown this long (s). */
@@ -103,6 +113,8 @@ export type Ev =
   | { k: 'kill'; x: number; y: number; side: Side; vx: number; vy: number; id: number }
   | { k: 'clash'; x: number; y: number }
   | { k: 'fizz'; x: number; y: number }
+  /** The round has gone on long enough: overdrive starts. */
+  | { k: 'overdrive' }
 
 export function newWorld(grid: Grid, teams: boolean): World {
   const tanks: Tank[] = []
@@ -197,12 +209,13 @@ export function stepWorld(
       const tx = t.x + Math.cos(t.a) * (TANK_R + 18)
       const ty = t.y + Math.sin(t.a) * (TANK_R + 18)
       if (mine >= MAX_SHELLS) continue
-      t.cd = RELOAD
+      t.cd = reloadAt(w.t)
       if (solidAt(grid, tx, ty) || !lineOfSight(grid, t.x, t.y, tx, ty, 6)) {
         ev.push({ k: 'fizz', x: tx, y: ty })
         continue
       }
-      const muzzle = SHELL_SPEED + Math.max(0, speed) * INHERIT
+      const muzzle =
+        (SHELL_SPEED + Math.max(0, speed) * INHERIT) * (w.t >= OVERDRIVE_T ? OVERDRIVE_SPEED : 1)
       w.shells.push({
         id: w.nextId++,
         owner: t.id,
@@ -296,6 +309,7 @@ export function stepWorld(
       }
     }
   if (dead.size) w.shells = w.shells.filter((s) => !dead.has(s.id))
+  if (w.t < OVERDRIVE_T && w.t + dt >= OVERDRIVE_T) ev.push({ k: 'overdrive' })
   w.t += dt
 }
 

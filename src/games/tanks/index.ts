@@ -20,7 +20,7 @@ import {
   type Ev,
   MAPS,
   newWorld,
-  RELOAD,
+  reloadAt,
   roundWinner,
   SHELL_SPEED,
   SPEED,
@@ -129,7 +129,7 @@ class Tanks extends BaseGame<State> {
     for (const e of this.ev) this.feedback(e)
     s.ctl = this.controls.map((c) => {
       const t = s.w.tanks.find((k) => k.side === c.side && (k.lane === c.lane || !ctx.teams))
-      return snapControl(c, t ? 1 - t.cd / RELOAD : 1)
+      return snapControl(c, t ? Math.max(0, 1 - t.cd / reloadAt(s.w.t)) : 1)
     })
     // Wrecks smoke, a tank on its last life trails smoke, a fast one kicks up dust.
     // Cosmetic: Math.random keeps the seeded play rng untouched.
@@ -218,6 +218,12 @@ class Tanks extends BaseGame<State> {
       }
       case 'fizz':
         fx.puff(e.x, e.y, 'rgba(200,200,215,0.6)', 3)
+        break
+      case 'overdrive':
+        audio.play('powerup')
+        fx.flash(C.yellow, 0.2)
+        fx.shake(0.2)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Overdrive!')
         break
       case 'clash':
         audio.play('zap')

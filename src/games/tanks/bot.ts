@@ -38,8 +38,8 @@ interface Skill {
 
 const SKILL: Record<Difficulty, Skill> = {
   easy: { react: 0.75, aim: 0.22, tol: 0.22, dodge: 0.2, lead: false, pace: 0.7, bank: 0 },
-  normal: { react: 0.42, aim: 0.1, tol: 0.12, dodge: 0.5, lead: false, pace: 0.9, bank: 1 },
-  hard: { react: 0.22, aim: 0.035, tol: 0.07, dodge: 0.85, lead: true, pace: 1, bank: 2 },
+  normal: { react: 0.32, aim: 0.07, tol: 0.1, dodge: 0.65, lead: true, pace: 1, bank: 1 },
+  hard: { react: 0.15, aim: 0.02, tol: 0.06, dodge: 0.95, lead: true, pace: 1, bank: 2 },
 }
 
 /**
@@ -86,14 +86,29 @@ export class TankBot {
       if (t === null || this.judged.has(s.id)) continue
       this.judged.add(s.id)
       if (!this.rng.chance(sk.dodge)) continue
-      // Step sideways, away from the shell's line.
-      const vx = s.vx / SHELL_SPEED
-      const vy = s.vy / SHELL_SPEED
+      // Step sideways off the shell's line. A tank only drives where it
+      // points, so a dodge that needs a big turn just parks it in the line of
+      // fire: only take it when the hull is already roughly side-on (a shell
+      // coming straight at the nose is better answered by shooting it down).
+      const m = Math.hypot(s.vx, s.vy) || 1
+      const vx = s.vx / m
+      const vy = s.vy / m
       const cross = vx * (me.y - s.y) - vy * (me.x - s.x)
       const sgn = cross >= 0 ? 1 : -1
-      this.dodgeX = -vy * sgn
-      this.dodgeY = vx * sgn
-      this.dodgeT = 0.38
+      const away = Math.atan2(vx * sgn, -vy * sgn)
+      const turn = Math.min(
+        Math.abs(angleTo(me.a, away)),
+        // Driving toward the shell's side is fine too if t leaves time to clear.
+        Math.abs(angleTo(me.a, away + Math.PI)) + (t < 0.4 ? 9 : 0),
+      )
+      if (turn > 0.9) continue
+      const dir =
+        Math.abs(angleTo(me.a, away)) <= Math.abs(angleTo(me.a, away + Math.PI))
+          ? away
+          : away + Math.PI
+      this.dodgeX = Math.cos(dir)
+      this.dodgeY = Math.sin(dir)
+      this.dodgeT = 0.3
     }
     if (this.dodgeT > 0) {
       this.dodgeT -= dt

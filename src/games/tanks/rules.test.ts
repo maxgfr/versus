@@ -17,6 +17,9 @@ import {
   HP,
   MAPS,
   newWorld,
+  OVERDRIVE_RELOAD,
+  OVERDRIVE_T,
+  RELOAD,
   roundWinner,
   SHELL_SPEED,
   SPEED,
@@ -178,6 +181,50 @@ describe('tanks', () => {
       stepWorld(w, grid, i === 0 ? [{ jx: 0, jy: 0, fire: true }] : [], STEP, ev)
     expect(foe.hp).toBe(HP - 1)
     expect(me.hp).toBe(HP)
+  })
+
+  it('a long round goes into overdrive: faster reloads for both sides', () => {
+    const grid = open
+    const w = newWorld(grid, false)
+    const red = w.tanks[0] as (typeof w.tanks)[number]
+    red.cd = 0
+    stepWorld(w, grid, [{ jx: 0, jy: 0, fire: true }], STEP, [])
+    expect(red.cd).toBeCloseTo(RELOAD, 6)
+    const ev: Ev[] = []
+    w.shells.length = 0
+    w.t = OVERDRIVE_T - STEP / 2
+    red.cd = 0
+    stepWorld(w, grid, [], STEP, ev)
+    expect(ev.some((e) => e.k === 'overdrive')).toBe(true)
+    stepWorld(w, grid, [{ jx: 0, jy: 0, fire: true }], STEP, ev)
+    expect(red.cd).toBeCloseTo(OVERDRIVE_RELOAD, 6)
+    expect(ev.filter((e) => e.k === 'overdrive').length).toBe(1)
+  })
+
+  it('hard beats easy in most seeded rounds, from either side', () => {
+    let wins = 0
+    let decided = 0
+    for (let seed = 0; seed < 16; seed++) {
+      const rng = new Rng(seed * 13 + 2)
+      const grid = parseMap(MAPS[seed % MAPS.length] as string[])
+      const w = newWorld(grid, false)
+      const side = seed % 2
+      const bots = w.tanks.map((t) => new TankBot(rng.fork(), t.side === side ? 'hard' : 'easy'))
+      for (let i = 0; i < 60 * 150 && roundWinner(w) === null; i++)
+        stepWorld(
+          w,
+          grid,
+          w.tanks.map((t, j) => (bots[j] as TankBot).decide(w, grid, t, STEP)),
+          STEP,
+          [],
+        )
+      const r = roundWinner(w)
+      if (r === null || r === 'draw') continue
+      decided++
+      if (r === side) wins++
+    }
+    expect(decided).toBeGreaterThan(12)
+    expect(wins / decided).toBeGreaterThan(0.75)
   })
 
   it('tanks never end up inside walls', () => {
