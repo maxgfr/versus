@@ -68,7 +68,15 @@ describe('animal stack rules', () => {
 
   it('every animal is built from convex parts, centred on its centre of mass', () => {
     for (const t of PIECES) {
-      for (const part of t.parts) expect(isConvex(part.pts), t.name).toBe(true)
+      for (const part of t.parts) {
+        expect(isConvex(part.pts), t.name).toBe(true)
+        // No repeated vertex: a zero-length edge breaks the collision normals.
+        const p = part.pts
+        for (let i = 0; i < p.length; i += 2) {
+          const j = (i + 2) % p.length
+          expect(Math.hypot(p[j]! - p[i]!, p[j + 1]! - p[i + 1]!), t.name).toBeGreaterThan(0.5)
+        }
+      }
       // Area-weighted centre of the parts sits at the origin.
       let mx = 0
       let my = 0

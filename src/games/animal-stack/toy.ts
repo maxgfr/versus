@@ -67,7 +67,15 @@ export function rrect(cx: number, cy: number, w: number, h: number, r: number): 
   for (const [x, y, a0] of corners)
     for (let i = 0; i <= 3; i++) {
       const a = a0 + (i / 3) * (Math.PI / 2)
-      out.push(x + Math.cos(a) * rr, y + Math.sin(a) * rr)
+      const px = x + Math.cos(a) * rr
+      const py = y + Math.sin(a) * rr
+      // A side as short as two radii leaves corner arcs meeting: never repeat a
+      // vertex (a zero-length edge breaks the collision normals).
+      const n = out.length
+      if (n >= 2 && Math.hypot(px - (out[n - 2] as number), py - (out[n - 1] as number)) < 0.5)
+        continue
+      if (n >= 2 && Math.hypot(px - (out[0] as number), py - (out[1] as number)) < 0.5) continue
+      out.push(px, py)
     }
   return out
 }
