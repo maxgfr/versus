@@ -17,7 +17,7 @@ import {
  * too (shots, sunk ships, sizes left), plus the rule that ships never touch
  * side to side, so the water around a sunk ship is known to be empty.
  * - easy: shoots at random, and only sometimes follows up a hit.
- * - normal: hunts at random (skipping water known to be empty) and finishes
+ * - normal: hunts on a checkerboard (skipping water known to be empty) and finishes
  *   off hits along their line.
  * - hard: counts, for every cell, how many placements of the ships still
  *   afloat fit what it knows (through the open hits when there are some) and
@@ -76,7 +76,11 @@ function normal(view: View, open: number[], rng: Rng): number {
   const sensible = open.filter((c) => !blocked[c])
   const pool = sensible.length ? sensible : open
   const pend = pendingHits(view)
-  if (pend.length === 0) return rng.pick(pool)
+  if (pend.length === 0) {
+    // Hunts on a checkerboard: every ship is two cells or longer, so it must cover one.
+    const even = pool.filter((c) => (rowOf(c) + colOf(c)) % 2 === 0)
+    return rng.pick(even.length ? even : pool)
+  }
   const line = lineTargets(view, pend).filter((c) => !blocked[c])
   if (line.length) return rng.pick(line)
   const around = pend.flatMap(neighbours).filter((c) => view.shots[c] === UNTRIED && !blocked[c])
