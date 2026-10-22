@@ -11,8 +11,8 @@ import { APPLE, DUMMY, flight, type Shot, type State } from './rules.ts'
  */
 const ERR: Record<Difficulty, { angle: number; power: number; wind: number; care: number }> = {
   easy: { angle: 0.1, power: 0.07, wind: 0.3, care: 0 },
-  normal: { angle: 0.08, power: 0.05, wind: 0.7, care: 0.6 },
-  hard: { angle: 0.06, power: 0.04, wind: 1, care: 1 },
+  normal: { angle: 0.065, power: 0.045, wind: 0.85, care: 0.8 },
+  hard: { angle: 0.048, power: 0.034, wind: 1, care: 1 },
 }
 
 /** The shot whose arrow crosses the dummy's plane closest to the apple centre, for a given wind. */
