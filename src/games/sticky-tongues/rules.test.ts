@@ -4,7 +4,11 @@ import { Rng } from '../../core/rng.ts'
 import { TongueBot } from './bot.ts'
 import {
   FIELD,
+  FLICK_MAX,
+  flickSpeed,
   FLY_COUNT,
+  FRENZY_EXTRA,
+  OUT_SPEED,
   GAME_TIME,
   HOLD,
   MIN_REACH,
@@ -49,6 +53,48 @@ function run(w: World, rng: Rng, from: number, limit: number, done: () => boolea
   }
   return { t, events }
 }
+
+describe('sticky tongues: flicks and the frenzy', () => {
+  it('a harder flick sends a faster tongue, within bounds', () => {
+    expect(flickSpeed(0)).toBeLessThan(OUT_SPEED)
+    expect(flickSpeed(1500)).toBeGreaterThan(flickSpeed(500))
+    expect(flickSpeed(99999)).toBe(FLICK_MAX)
+    const f = frogNew()
+    fire(f, 0, 500, 1000, 0, flickSpeed(99999))
+    expect(f.tongue.speed).toBe(FLICK_MAX)
+  })
+
+  it('a fast tongue gets there first', () => {
+    const w = table([still(1, 500, 900)])
+    fire(w.frogs[0], 0, 500, 1000, 0, FLICK_MAX)
+    fire(w.frogs[1], 1, 500, 1100, 0, OUT_SPEED * 0.85)
+    run(w, new Rng(3), 0, 3, () => w.frogs[0].score + w.frogs[1].score > 0)
+    expect(w.frogs[0].score).toBe(POINTS.plain)
+  })
+
+  it('the frenzy fills the field with more flies, more of them golden', () => {
+    const w = worldNew(new Rng(5))
+    let golden = 0
+    let spawned = 0
+    const seen = new Set(w.flies.map((f) => f.id))
+    for (let t = 0; t < 30; t += STEP) {
+      // Keep eating flies so new ones keep coming.
+      if (w.flies.length > FLY_COUNT) w.flies.shift()
+      stepWorld(w, STEP, new Rng(Math.round(t * 600)), t, true)
+      for (const f of w.flies)
+        if (!seen.has(f.id)) {
+          seen.add(f.id)
+          spawned++
+          if (f.golden) golden++
+        }
+    }
+    expect(spawned).toBeGreaterThan(30)
+    expect(golden / spawned).toBeGreaterThan(0.2)
+    const full = worldNew(new Rng(6))
+    for (let t = 0; t < 5; t += STEP) stepWorld(full, STEP, new Rng(9), t, true)
+    expect(full.flies.length).toBe(FLY_COUNT + FRENZY_EXTRA)
+  })
+})
 
 describe('sticky tongues: firing', () => {
   it('shoots toward the aim point and caps the reach', () => {
@@ -118,6 +164,16 @@ describe('sticky tongues: catching', () => {
     run(w, rng, 1, 5, () => w.frogs[1].tongue.phase === 'idle')
     expect(w.frogs[1].score).toBe(0)
     expect(w.frogs[0].score).toBe(POINTS.plain)
+  })
+
+  it('both tips on the same fly in the same step: the nearer one has it, not always red', () => {
+    // A fly right on the midline, a touch nearer blue's mouth.
+    const w = table([still(1, 500, 895)])
+    fire(w.frogs[0], 0, 500, 1000, 0)
+    fire(w.frogs[1], 1, 500, 1100, 0)
+    run(w, new Rng(3), 0, 3, () => w.frogs[0].score + w.frogs[1].score > 0)
+    expect(w.frogs[1].score).toBe(POINTS.plain)
+    expect(w.frogs[0].score).toBe(0)
   })
 
   it('steals a free fly from the other half of the table', () => {

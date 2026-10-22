@@ -10,7 +10,7 @@ function botContext(target?: number): GameContext {
     stage: {} as GameContext['stage'],
     input: {} as GameContext['input'],
     fx: new Proxy({}, { get: () => noop }) as GameContext['fx'],
-    audio: { play: noop, unlock: noop } as unknown as GameContext['audio'],
+    audio: { play: noop, unlock: noop, buzz: noop } as unknown as GameContext['audio'],
     rng: new Rng(7),
     mode: '1p',
     difficulty: 'normal',
@@ -36,6 +36,28 @@ describe('sticky tongues: match length', () => {
     const game = play(20)
     expect(game.s.endAt).toBeCloseTo(20, 1)
     expect(game.result).not.toBeNull()
+  })
+
+  it('the last-seconds countdown follows the chosen length, not the default', () => {
+    const counts: number[] = []
+    const ctx = botContext(20)
+    let now = 0
+    ctx.audio = {
+      play: (n: string) => n === 'count' && counts.push(now),
+      unlock: () => undefined,
+      buzz: () => undefined,
+    } as unknown as GameContext['audio']
+    const game = createGame()
+    game.init(ctx)
+    while (game.result === null && game.time < 60) {
+      game.update(STEP)
+      now = game.time
+    }
+    expect(counts.length).toBe(3)
+    for (const t of counts) {
+      expect(t).toBeGreaterThan(16.9)
+      expect(t).toBeLessThan(20)
+    }
   })
 
   it('defaults to the spec length', () => {

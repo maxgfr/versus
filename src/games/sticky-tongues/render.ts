@@ -1,6 +1,6 @@
 import { frame, frameAngle } from '../../core/frame.ts'
 import { outBack } from '../../core/fx/ease.ts'
-import type { Side } from '../../core/game.ts'
+import { STEP, type Side } from '../../core/game.ts'
 import { banner, bigScore, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, mix, SIDE, shade } from '../../core/render/palette.ts'
@@ -287,9 +287,11 @@ function frog(
 }
 
 /** The tongue as a wobbling pink rope from the mouth to a sticky tip. */
-function tongue(g: Draw, side: Side, t: Tongue, now: number): void {
+function tongue(g: Draw, side: Side, t: Tongue, now: number, len: number): void {
   if (t.phase === 'idle') return
   const m = mouth(side)
+  // Drawn at its interpolated length; a fast shot stretches thinner.
+  t = { ...t, len }
   const nx = -t.dy
   const ny = t.dx
   const pts: number[] = []
@@ -316,10 +318,10 @@ function tongue(g: Draw, side: Side, t: Tongue, now: number): void {
   g.ring(tip.x, tip.y, 27, TONGUE_DARK, 4)
 }
 
-function fly(g: Draw, f: Fly, now: number): void {
+function fly(g: Draw, f: Fly, now: number, at: Vec): void {
   const held = f.held >= 0
-  const x = f.x + (held ? 0 : Math.sin(now * 13 + f.id * 2.1) * 6)
-  const y = f.y + (held ? 0 : Math.sin(now * 7 + f.id) * 6)
+  const x = at.x + (held ? 0 : Math.sin(now * 13 + f.id * 2.1) * 6)
+  const y = at.y + (held ? 0 : Math.sin(now * 7 + f.id) * 6)
   const flap = held ? 0.25 : 0.35 + 0.65 * Math.abs(Math.sin(now * 40 + f.id))
   const body = f.golden ? C.yellow : '#3a3159'
   // Shadow on the water, far below the fly.
@@ -389,6 +391,11 @@ export interface RenderOpts {
   total: number
   /** Game time the clock ran out (-1 while playing). */
   endAt: number
+  /** Interpolation between the last two steps, and the tongue lengths at the last one. */
+  alpha: number
+  prevLen: [number, number]
+  /** The last seconds' frenzy is on. */
+  frenzy: boolean
 }
 
 /** Where a frog's eyes point: its tongue tip when out, else the nearest free fly. */
@@ -417,6 +424,17 @@ function lookFor(s: World, side: Side): Vec {
 /** The whole table: pond, lily pads, frogs, tongues, flies and HUD. */
 export function renderField(g: Draw, s: World, now: number, o: RenderOpts): void {
   pond(g, now)
+  if (o.frenzy) {
+    // Frenzy: the pond glows gold at its edges.
+    const pulse = 0.5 + 0.5 * Math.sin(now * 8)
+    g.alpha(0.1 + 0.08 * pulse, () => g.vignette(0.9))
+    g.fillView(
+      g.rad(W / 2, MID, 300, 1100, [
+        [0, alpha(C.yellow, 0)],
+        [1, alpha(C.yellow, 0.1 + 0.06 * pulse)],
+      ]),
+    )
+  }
   const over = o.endAt >= 0
   const endT = over ? now - o.endAt : 0
   const [a, b] = [s.frogs[0].score, s.frogs[1].score]
@@ -427,18 +445,33 @@ export function renderField(g: Draw, s: World, now: number, o: RenderOpts): void
     const mood: FrogMood = !over ? 'play' : mine > theirs ? 'win' : mine < theirs ? 'lose' : 'play'
     frog(g, side, s.frogs[side], now, lookFor(s, side), mood, endT)
   }
-  for (const f of s.flies) if (f.held < 0) fly(g, f, now)
-  for (const side of [0, 1] as Side[]) tongue(g, side, s.frogs[side].tongue, now)
-  // Flies on a tongue ride on top of it.
-  for (const f of s.flies) if (f.held >= 0) fly(g, f, now)
+  // Between fixed steps: free flies keep flying, tongues keep stretching.
+  const back = (1 - o.alpha) * STEP
+  const lens = ([0, 1] as Side[]).map((side) => {
+    const t = s.frogs[side].tongue
+    const p = o.prevLen[side] ?? t.len
+    return t.phase === 'idle' ? 0 : p + (t.len - p) * o.alpha
+  })
+  for (const f of s.flies)
+    if (f.held < 0) fly(g, f, now, over ? f : { x: f.x - f.vx * back, y: f.y - f.vy * back })
+  for (const side of [0, 1] as Side[]) tongue(g, side, s.frogs[side].tongue, now, lens[side] ?? 0)
+  // Flies on a tongue ride on top of it, on its interpolated tip.
+  for (const f of s.flies)
+    if (f.held >= 0) {
+      const side = f.held as Side
+      const t = s.frogs[side].tongue
+      fly(g, f, now, tipOf(side, { ...t, len: lens[side] ?? t.len }))
+    }
 
   // Start-of-match prompts, each facing its player.
   const intro = 1 - Math.max(0, (now - 2.4) / 0.6)
   if (intro > 0) {
     for (const side of [0, 1] as Side[]) {
+      // Online, each phone prompts only its own player.
+      if (g.viewer !== null && side !== g.viewer) continue
       const y = side === 0 ? 1270 : 530
       g.alpha(intro, () => {
-        g.sideText(side, 'Tap to flick your tongue', W / 2, y, {
+        g.sideText(side, 'Tap a fly, or flick!', W / 2, y, {
           size: 54,
           weight: 700,
           color: C.white,
