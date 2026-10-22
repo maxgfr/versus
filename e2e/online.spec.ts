@@ -99,7 +99,10 @@ test('the invite still works after the host tab reloads, and a reloaded guest la
   // The guest opens exactly the link the share sheet got, minus its #fragment
   // (which some messaging apps drop): the room is in the query.
   await host.getByRole('button', { name: 'Send invite' }).click()
-  const url = await host.evaluate(() => (window as unknown as { shared?: ShareData }).shared?.url)
+  const shared = await host.evaluate(() => (window as unknown as { shared?: ShareData }).shared)
+  // Only the link, so "Copy" in the share sheet gives a clean URL.
+  expect(Object.keys(shared ?? {})).toEqual(['url'])
+  const url = shared?.url
   expect(url).toMatch(new RegExp(`/versus/\\?r=${code}$`))
   await guest.goto((url ?? '').split('#')[0] ?? '')
   await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
@@ -185,10 +188,37 @@ test('online has its own address, and leaving it leaves the room', async ({ brow
   await guest.locator('.toast button').click()
   await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
   await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 60_000 })
-  // Local games keep working while out of the room.
+  // Local games keep working while out of the room: 1P on the host…
   await host.getByRole('button', { name: '1P' }).click()
   await expect(host).toHaveURL(/#\/$/)
   await host.locator('.card[data-id="tic-tac-toe"]').click()
   await expect(host).toHaveURL(/#\/play\/tic-tac-toe$/)
   await expect(host.locator('.ready-btn')).toHaveText('Play')
+  // …and 2P (one Ready per half) on the guest, who is not pulled anywhere.
+  // With the host gone the guest is back on the waiting screen.
+  await expect(guest.locator('.status')).toContainText('Looking for the room', { timeout: 20_000 })
+  await guest.getByRole('button', { name: 'Back' }).click()
+  await guest.getByRole('button', { name: '2P' }).click()
+  await expect(guest).toHaveURL(/#\/$/)
+  await guest.locator('.card[data-id="air-hockey"]').click()
+  await expect(guest).toHaveURL(/#\/play\/air-hockey$/)
+  await expect(guest.locator('.ready-btn')).toHaveCount(2)
+  await guest.waitForTimeout(3000)
+  await expect(guest).toHaveURL(/#\/play\/air-hockey$/)
+  // Both phones remember the room and get back in with the same seats.
+  await host.goto('./#/online')
+  await expect(host.locator('.rooms li')).toHaveCount(1)
+  await expect(host.locator('.room-open')).toContainText(code)
+  await expect(host.locator('.room-open')).toContainText('You created it')
+  await guest.goto('./#/online')
+  await expect(guest.locator('.room-open')).toContainText('You joined')
+  await host.locator('.room-open').click()
+  await guest.locator('.room-open').click()
+  await expect(host.locator('.online-banner')).toContainText('you are Red', { timeout: 60_000 })
+  await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 60_000 })
+  // Forgetting a room takes it off the list.
+  await host.goto('./#/')
+  await host.goto('./#/online')
+  await host.getByRole('button', { name: `Forget room ${code}` }).click()
+  await expect(host.locator('.rooms')).toHaveCount(0)
 })

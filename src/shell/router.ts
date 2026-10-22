@@ -7,6 +7,8 @@ const routes: [RegExp, Screen][] = []
 let current: Cleanup = undefined
 let root: HTMLElement
 let token = 0
+/** The hash the last render was for. */
+let shown = ''
 let before: ((path: string) => void) | null = null
 
 /** Runs before every screen change (main.ts leaves the online room this way). */
@@ -31,13 +33,19 @@ export function go(path: string, replace = false): void {
 
 export function startRouter(el: HTMLElement): void {
   root = el
-  window.addEventListener('popstate', () => void render())
-  window.addEventListener('hashchange', () => void render())
+  // A #fragment navigation (Back, a typed link) fires both events: render
+  // once, or a lazy screen lands twice.
+  const nav = () => {
+    if (location.hash !== shown) void render()
+  }
+  window.addEventListener('popstate', nav)
+  window.addEventListener('hashchange', nav)
   void render()
 }
 
 async function render(): Promise<void> {
   const my = ++token
+  shown = location.hash
   const path = location.hash.replace(/^#/, '') || '/'
   if (typeof current === 'function') current()
   current = undefined

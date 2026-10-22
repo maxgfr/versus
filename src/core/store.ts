@@ -9,6 +9,15 @@ export interface Settings {
   haptics: boolean
   difficulty: Difficulty
   names: [string, string]
+  /** Keep a list of the online rooms this phone created or joined. */
+  rememberRooms: boolean
+}
+
+/** An online room this phone was in, so it can find its way back. */
+export interface RecentRoom {
+  code: string
+  role: 'host' | 'guest'
+  at: number
 }
 
 export interface Saved {
@@ -23,19 +32,28 @@ export interface Saved {
   /** Match length chosen per game (see MatchSpec). */
   match: Record<string, number>
   iosGuideSeen: boolean
+  /** Newest first. */
+  rooms: RecentRoom[]
 }
 
 const KEY = 'versus:v1'
 
 const defaults = (): Saved => ({
   v: 1,
-  settings: { sound: true, haptics: true, difficulty: 'normal', names: ['Red', 'Blue'] },
+  settings: {
+    sound: true,
+    haptics: true,
+    difficulty: 'normal',
+    names: ['Red', 'Blue'],
+    rememberRooms: true,
+  },
   score: [0, 0],
   favorites: [],
   records: {},
   plays: {},
   match: {},
   iosGuideSeen: false,
+  rooms: [],
 })
 
 function load(): Saved {
@@ -81,5 +99,20 @@ export function submitRecord(id: string, value: number, lowerIsBetter: boolean):
 
 export function resetScores(): void {
   store.score = [0, 0]
+  save()
+}
+
+const MAX_ROOMS = 6
+
+export function rememberRoom(code: string, role: RecentRoom['role']): void {
+  if (!store.settings.rememberRooms) return
+  store.rooms = [{ code, role, at: Date.now() }, ...store.rooms.filter((r) => r.code !== code)]
+  store.rooms.length = Math.min(store.rooms.length, MAX_ROOMS)
+  save()
+}
+
+/** Forget one room, or all of them. */
+export function forgetRooms(code?: string): void {
+  store.rooms = code ? store.rooms.filter((r) => r.code !== code) : []
   save()
 }

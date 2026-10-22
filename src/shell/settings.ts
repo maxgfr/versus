@@ -1,6 +1,6 @@
 import { audio } from '../core/audio.ts'
 import type { Difficulty } from '../core/game.ts'
-import { resetScores, save, store } from '../core/store.ts'
+import { forgetRooms, resetScores, save, store } from '../core/store.ts'
 import { h, onTap } from './dom.ts'
 import { icon } from './icons.ts'
 import { ui } from './state.ts'
@@ -175,10 +175,19 @@ export function openSettings(parent: HTMLElement, changed: () => void): void {
         h('span', 'Scoreboard', h('span.sub', `Red ${store.score[0]} · Blue ${store.score[1]}`)),
         reset,
       ),
+      h(
+        'div.row',
+        h('span', 'Remember rooms', h('span.sub', 'Rooms you created or joined, in Play online')),
+        switchEl(s.rememberRooms, 'Remember rooms', (v) => {
+          s.rememberRooms = v
+          if (!v) forgetRooms()
+          save()
+        }),
+      ),
       h('div.row', h('span', 'App version', updateSub), update),
       h(
         'p.fine',
-        'versus is free and works offline. No ads, no accounts, no tracking: scores and names stay on this phone. Online play connects the two phones directly. ',
+        'versus is free and works offline. No ads, no accounts, no tracking: scores, names and recent rooms stay on this phone. Online play connects the two phones directly. ',
         h(
           'a',
           { href: 'https://github.com/maxgfr/versus', target: '_blank', rel: 'noopener' },

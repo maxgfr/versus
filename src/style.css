@@ -1251,6 +1251,53 @@ input {
   min-height: 68px;
 }
 
+.rooms {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.rooms li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.room-open {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 60px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--ink-0);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.room-code {
+  min-width: 112px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.room-meta {
+  display: grid;
+  font-size: 15px;
+  color: var(--ink-7);
+}
+
+.room-meta .sub {
+  font-size: 14px;
+  color: var(--ink-6);
+}
+
 .qr {
   display: grid;
   place-items: center;

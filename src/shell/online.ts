@@ -1,5 +1,6 @@
 import { Link, newCode, type Role } from '../core/net/link.ts'
 import { audio } from '../core/audio.ts'
+import { forgetRooms, type RecentRoom, rememberRoom, store } from '../core/store.ts'
 import qrcode from 'qrcode-generator'
 import { clear, h, onTap } from './dom.ts'
 import { home } from './home.ts'
@@ -55,6 +56,7 @@ function connect(code: string, role: Role): Link {
   const link = new Link(code, role)
   ui.link = link
   remember({ code, role })
+  rememberRoom(code, role)
   if (role === 'guest') {
     link.on('round', (d) => {
       const r = d as { id: string; seed: number; target?: number }
@@ -95,6 +97,7 @@ export function room(code: string, role?: Role): Link {
     role ??
     (s?.code === code ? s.role : null) ??
     (last?.code === code ? last.role : null) ??
+    store.rooms.find((r) => r.code === code)?.role ??
     'guest'
   return connect(code, seat)
 }
@@ -180,6 +183,7 @@ export function lobby(root: HTMLElement): void {
     if (e.key === 'Enter') doJoin()
   })
   body.append(
+    ...recent(),
     h(
       'section.panel',
       h('h2', 'Host'),
@@ -200,6 +204,48 @@ export function lobby(root: HTMLElement): void {
   )
 }
 
+function ago(t: number): string {
+  const min = Math.round((Date.now() - t) / 60_000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min} min ago`
+  const hr = Math.round(min / 60)
+  return hr < 24 ? `${hr} h ago` : `${Math.round(hr / 24)} d ago`
+}
+
+/** Rooms this phone was in: one tap back into the same seat. */
+function recent(): HTMLElement[] {
+  if (!store.rooms.length) return []
+  const list = h('ul.rooms')
+  const item = (r: RecentRoom) => {
+    const open = h(
+      'button.room-open',
+      { 'aria-label': `Rejoin room ${r.code}` },
+      h('span.room-code', r.code),
+      h(
+        'span.room-meta',
+        r.role === 'host' ? 'You created it' : 'You joined',
+        h('span.sub', ago(r.at)),
+      ),
+    )
+    onTap(open, () => {
+      audio.unlock()
+      room(r.code, r.role)
+      go(roomPath(r.code))
+    })
+    const forget = h('button.icon-btn', { 'aria-label': `Forget room ${r.code}` }, icon('close'))
+    onTap(forget, () => {
+      forgetRooms(r.code)
+      li.remove()
+      if (!list.childElementCount) panel.remove()
+    })
+    const li = h('li', open, forget)
+    return li
+  }
+  list.append(...store.rooms.map(item))
+  const panel = h('section.panel', h('h2', 'Your rooms'), list)
+  return [panel]
+}
+
 /** Waiting for the other phone: the code, the invite and its QR code. */
 function waiting(root: HTMLElement, link: Link): void {
   const host = link.role === 'host'
@@ -209,7 +255,8 @@ function waiting(root: HTMLElement, link: Link): void {
     const url = inviteUrl(link.code)
     try {
       if (navigator.share)
-        await navigator.share({ title: 'Play versus with me', text: 'Join my versus room', url })
+        // The link alone, so "Copy" in the share sheet gives a clean URL.
+        await navigator.share({ url })
       else {
         await navigator.clipboard.writeText(url)
         toast('Invite link copied.')
