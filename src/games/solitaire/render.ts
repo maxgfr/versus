@@ -1,9 +1,20 @@
 import type { Side } from '../../core/game.ts'
-import { outBack, outCubic, prog } from '../../core/fx/ease.ts'
+import { clamp, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
 import { HEADER } from '../../engines/puzzle/index.ts'
-import { type Deal, destinationFor, home, isRed, rankOf, type Src, suitOf } from './rules.ts'
+import {
+  canDrop,
+  type Deal,
+  destinationFor,
+  type Dst,
+  home,
+  isRed,
+  rankOf,
+  run,
+  type Src,
+  suitOf,
+} from './rules.ts'
 
 /*
  * Everything below is laid out in "table units": the geometry of a half panel
@@ -28,9 +39,9 @@ const UP_MAX = 52
 export const WASTE_KEY = 200
 export const FOUND_KEY = 210
 export const STOCK_KEY = 220
-/** How long a card takes to fly to its new place, and to flip over (s). */
-export const FLY = 0.2
+/** How long a tableau card takes to flip over (s), and a landing to settle. */
 export const FLIP = 0.24
+const SETTLE = 0.3
 
 export const colX = (c: number): number => X0 + c * (CARD_W + GAP)
 
@@ -94,6 +105,25 @@ export function keyPos(h: number, d: Deal, key: number): { x: number; y: number 
 }
 
 export type Hit = { kind: 'stock' } | { kind: 'src'; src: Src }
+
+/**
+ * Where a card dragged to centre (cx, cy) would land: anywhere on the
+ * foundation row is its suit's pile, otherwise the column under it. Its own
+ * column is no target (letting go there just puts it back).
+ */
+export function dropAt(h: number, d: Deal, src: Src, cx: number, cy: number): Dst | null {
+  void h
+  const first = run(d, src)[0]
+  if (first === undefined) return null
+  if (cy < TAB_Y - 14) {
+    return cx >= colX(3) - GAP ? { to: 'found', suit: suitOf(first) } : null
+  }
+  const col = Math.round((cx - X0 - CARD_W / 2) / (CARD_W + GAP))
+  if (col < 0 || col > 6) return null
+  if (Math.abs(cx - (colX(col) + CARD_W / 2)) > (CARD_W + GAP) * 0.75) return null
+  if (src.from === 'tab' && src.col === col) return null
+  return { to: 'tab', col }
+}
 
 /** What a tap at table-unit (x, y) picked, or null. */
 export function hitAt(h: number, d: Deal, x: number, y: number): Hit | null {
@@ -271,8 +301,37 @@ export interface Fly {
   x: number
   y: number
   at: number
+  /** Seconds the trip takes. */
+  dur: number
   /** 1 when it turns face up on the way (a draw from the stock). */
   flip: number
+  /** Angle it leaves with (a dragged card keeps the finger's tilt). */
+  tilt: number
+  /** 0..1 how hard it travels: scales the landing. */
+  k: number
+  /** The landing has had its sound and sparks. */
+  done: boolean
+}
+
+/** Card(s) held under a finger. Positions in table units, top-left of the first card. */
+export interface Drag {
+  id: number
+  src: Src
+  key: number
+  x: number
+  y: number
+  /** Grab offset: finger minus card corner. */
+  gx: number
+  gy: number
+  /** Where the finger went down. */
+  sx: number
+  sy: number
+  /** Smoothed finger velocity (table units / s). */
+  vx: number
+  vy: number
+  /** Travelled past the tap slop: a drag, not a tap. */
+  moved: boolean
+  at: number
 }
 
 export interface PanelView {
@@ -282,21 +341,42 @@ export interface PanelView {
   last: number
   lastAt: number
   fly: Fly | null
+  drag: Drag | null
   /** A card that just turned face up in the tableau. */
   flipKey: number
   flipAt: number
   /** A tap that could not go anywhere: that card shakes. */
   nopeKey: number
   nopeAt: number
+  recycleAt: number
   hint: boolean
+  /** Game time the board ran out of moves, or -1. */
+  stuckAt: number
   now: number
 }
 
-/** Scale a card that just landed: it pops from 92% to full size. */
-function popScale(v: PanelView, key: number): number {
-  if (v.last !== key) return 1
-  const t = prog(v.now - v.lastAt - FLY, 0, 0.25)
-  return t >= 1 ? 1 : 0.94 + 0.06 * outBack(t)
+/** Is `key` the first card of a move (`first`) or one of the run riding on it? */
+function inRun(first: number, key: number): boolean {
+  if (key === first) return true
+  return (
+    first < WASTE_KEY &&
+    key < WASTE_KEY &&
+    Math.floor(key / 24) === Math.floor(first / 24) &&
+    key % 24 > first % 24
+  )
+}
+
+/**
+ * Squash of a card that just landed: flattened on touchdown, then a damped
+ * wobble back to rest. Harder throws squash more. [sx, sy].
+ */
+function landing(v: PanelView, key: number): [number, number] {
+  const fl = v.fly
+  if (!fl || !inRun(fl.key, key)) return [1, 1]
+  const u = (v.now - fl.at - fl.dur) / SETTLE
+  if (u < 0 || u >= 1) return [1, 1]
+  const amp = (0.05 + 0.08 * fl.k) * (1 - u) * (1 - u) * Math.cos(u * Math.PI * 2.5)
+  return [1 + amp, 1 - amp]
 }
 
 function nopeX(v: PanelView, key: number): number {
@@ -305,17 +385,62 @@ function nopeX(v: PanelView, key: number): number {
   return k < 1 ? Math.sin(k * Math.PI * 6) * 9 * (1 - k) : 0
 }
 
-function scaled(g: Draw, x: number, y: number, sx: number, sy: number, fn: () => void): void {
-  if (sx === 1 && sy === 1) fn()
+function scaled(
+  g: Draw,
+  x: number,
+  y: number,
+  sx: number,
+  sy: number,
+  fn: () => void,
+  angle = 0,
+): void {
+  if (sx === 1 && sy === 1 && !angle) fn()
   else
     g.at(
       x + CARD_W / 2,
       y + CARD_H / 2,
-      0,
+      angle,
       () => g.at(-x - CARD_W / 2, -y - CARD_H / 2, 0, fn),
       sx,
       sy,
     )
+}
+
+/** A card's soft drop shadow, further and softer the higher it is lifted. */
+function lifted(g: Draw, x: number, y: number, lift: number): void {
+  g.rrect(
+    x + 6 + lift * 0.25,
+    y + 14 + lift * 0.6,
+    CARD_W,
+    CARD_H - 7,
+    16,
+    alpha('#000000', clamp(0.3 - lift * 0.0012, 0.12, 0.3)),
+  )
+}
+
+/** The cards a move carries, with their places relative to the first. */
+function carried(h: number, d: Deal, key: number): { card: number; dy: number; strip: boolean }[] {
+  if (key >= FOUND_KEY && key < STOCK_KEY) {
+    const suit = key - FOUND_KEY
+    return [{ card: suit * 13 + (d.found[suit] ?? 1) - 1, dy: 0, strip: false }]
+  }
+  if (key === WASTE_KEY) {
+    const c = d.waste[d.waste.length - 1]
+    return c === undefined ? [] : [{ card: c, dy: 0, strip: false }]
+  }
+  const col = Math.floor(key / 24)
+  const cards = d.tab[col] ?? []
+  const i0 = key % 24
+  const y0 = cardY(h, d, col, i0)
+  const out: { card: number; dy: number; strip: boolean }[] = []
+  for (let idx = i0; idx < cards.length; idx++) {
+    out.push({
+      card: cards[idx] as number,
+      dy: cardY(h, d, col, idx) - y0,
+      strip: idx < cards.length - 1,
+    })
+  }
+  return out
 }
 
 /** A soft pool of team-coloured light under the play area: the floodlit table. */
@@ -335,24 +460,19 @@ function floodlight(g: Draw, side: Side, x: number, y: number, r: number): void 
 export function drawPanel(g: Draw, h: number, v: PanelView): void {
   const d = v.deal
   floodlight(g, v.side, 500, TOP_Y + (h - TOP_Y) * 0.42, 680)
-  const fl = v.fly && v.now - v.fly.at < FLY ? v.fly : null
-  const flying = (key: number): boolean => {
-    if (!fl) return false
-    if (key === fl.key) return true
-    // A run: the cards above the first one in the same column.
-    return (
-      fl.key < WASTE_KEY &&
-      key < WASTE_KEY &&
-      Math.floor(key / 24) === Math.floor(fl.key / 24) &&
-      key % 24 > fl.key % 24
-    )
-  }
+  const fl = v.fly && v.now - v.fly.at < v.fly.dur ? v.fly : null
+  const dr = v.drag
+  /** Cards drawn elsewhere this frame: in flight, or under the finger. */
+  const away = (key: number): boolean =>
+    (fl !== null && inRun(fl.key, key)) || (dr !== null && inRun(dr.key, key))
 
-  // Stock.
+  // Stock: pops when the waste is turned back into it.
+  const rec = prog(v.now - v.recycleAt, 0, 0.3)
+  const rs = rec < 1 ? 1 + 0.14 * (1 - rec) * (1 - rec) * Math.cos(rec * Math.PI * 2) : 1
   if (d.stock.length) {
     const x = colX(0) + nopeX(v, STOCK_KEY)
     if (d.stock.length > 1) back(g, x + 4, TOP_Y - 5, v.side)
-    back(g, x, TOP_Y, v.side, d.stock.length)
+    scaled(g, x, TOP_Y, rs, rs, () => back(g, x, TOP_Y, v.side, d.stock.length))
   } else {
     slot(g, colX(0), TOP_Y)
     const cx = colX(0) + CARD_W / 2
@@ -361,20 +481,24 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
     g.arc(cx, cy, 28, -Math.PI * 0.15, Math.PI * 1.35, c, 9)
     g.poly([cx + 26, cy - 22, cx + 44, cy + 4, cx + 14, cy + 4], c)
   }
-  // Waste: the top card, and the one under it while the top is in flight.
-  const wasteFly = flying(WASTE_KEY)
-  const wTop = d.waste.length - (wasteFly ? 2 : 1)
+  // Waste: the top card, and the one under it while the top is away.
+  const wTop = d.waste.length - (away(WASTE_KEY) ? 2 : 1)
   if (wTop >= 0) {
     const x = colX(1) + nopeX(v, WASTE_KEY)
-    const s = wasteFly ? 1 : popScale(v, WASTE_KEY)
-    scaled(g, x, TOP_Y, s, s, () => face(g, x, TOP_Y, d.waste[wTop] as number))
+    const [sx, sy] = wTop === d.waste.length - 1 ? landing(v, WASTE_KEY) : [1, 1]
+    scaled(g, x, TOP_Y, sx, sy, () => face(g, x, TOP_Y, d.waste[wTop] as number))
   } else slot(g, colX(1), TOP_Y)
 
-  // Home counter in the gap of the top row.
+  // Home counter in the gap of the top row: it jumps when a card lands home.
   const n = home(d)
   const hx = colX(2) + CARD_W / 2
+  let hs = 1
+  if (v.fly && v.fly.key >= FOUND_KEY && v.fly.key < STOCK_KEY) {
+    const u = (v.now - v.fly.at - v.fly.dur) / 0.35
+    if (u >= 0 && u < 1) hs = 1 + 0.3 * (1 - u) * (1 - u)
+  }
   g.text(n, hx, TOP_Y + CARD_H / 2 - 22, {
-    size: 64,
+    size: 64 * hs,
     weight: 700,
     color: n > 0 ? C.white : alpha(C.white, 0.4),
     drop: alpha('#000000', 0.35),
@@ -389,12 +513,14 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
   // Foundations.
   for (let s = 0; s < 4; s++) {
     const x = colX(3 + s)
-    const top = (d.found[s] ?? 0) - (flying(FOUND_KEY + s) ? 1 : 0)
+    const top = (d.found[s] ?? 0) - (away(FOUND_KEY + s) ? 1 : 0)
     if (top > 0) {
-      const sc = popScale(v, FOUND_KEY + s)
-      scaled(g, x, TOP_Y, sc, sc, () => face(g, x, TOP_Y, s * 13 + top - 1))
+      const [sx, sy] = top === d.found[s] ? landing(v, FOUND_KEY + s) : [1, 1]
+      scaled(g, x, TOP_Y, sx, sy, () => face(g, x, TOP_Y, s * 13 + top - 1))
       if ((d.found[s] ?? 0) === 13) {
-        g.rrect(x - 3, TOP_Y - 3, CARD_W + 6, CARD_H - 1, 18, undefined, C.yellow, 5)
+        g.alpha(0.75 + 0.25 * Math.sin(v.now * 3 + s), () =>
+          g.rrect(x - 3, TOP_Y - 3, CARD_W + 6, CARD_H - 1, 18, undefined, C.yellow, 5),
+        )
       }
     } else {
       slot(g, x, TOP_Y)
@@ -403,6 +529,7 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
   }
 
   // Tableau: each column bottom card first, so the cards on top overlap the ones beneath.
+  const pulse = 0.5 + 0.5 * Math.sin(v.now * 6)
   for (let col = 0; col < 7; col++) {
     const cards = d.tab[col] ?? []
     if (cards.length === 0) {
@@ -415,17 +542,17 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
       continue
     }
     const down = d.down[col] ?? 0
-    const pulse = 0.5 + 0.5 * Math.sin(v.now * 6)
     cards.forEach((card, idx) => {
       const key = keyOf(col, idx)
-      if (flying(key)) return
+      if (away(key)) return
       const y = cardY(h, d, col, idx)
       const x = colX(col) + nopeX(v, key)
       if (idx < down) {
         back(g, x, y, v.side)
         return
       }
-      const strip = idx < cards.length - 1
+      // A strip while a card lies on it; full again once the cards above are lifted away.
+      const strip = idx < cards.length - 1 && !away(keyOf(col, idx + 1))
       if (key === v.flipKey) {
         const k = prog(v.now - v.flipAt, 0, FLIP)
         if (k < 1) {
@@ -436,8 +563,8 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
           return
         }
       }
-      const s = popScale(v, key)
-      scaled(g, x, y, s, s, () => face(g, x, y, card, strip))
+      const [sx, sy] = landing(v, key)
+      scaled(g, x, y, sx, sy, () => face(g, x, y, card, strip))
       if (v.hint && !strip && destinationFor(d, { from: 'tab', col, idx })) {
         g.alpha(0.3 + 0.4 * pulse, () =>
           g.rrect(x - 4, y - 4, CARD_W + 8, CARD_H - 1, 19, undefined, C.yellow, 5),
@@ -446,45 +573,93 @@ export function drawPanel(g: Draw, h: number, v: PanelView): void {
     })
   }
 
-  // Cards in flight, on top of everything, on a little arc.
-  if (fl) {
-    const e = outCubic(prog(v.now - fl.at, 0, FLY))
-    const to = keyPos(h, d, fl.key)
-    const lift = Math.sin(e * Math.PI) * 26
-    const dx = (fl.x - to.x) * (1 - e)
-    const dy = (fl.y - to.y) * (1 - e) - lift
-    const s = 1 + Math.sin(e * Math.PI) * 0.08
-    const cards: { card: number; x: number; y: number; strip: boolean }[] = []
-    if (fl.key >= FOUND_KEY && fl.key < STOCK_KEY) {
-      const suit = fl.key - FOUND_KEY
-      cards.push({ card: suit * 13 + (d.found[suit] ?? 1) - 1, x: to.x, y: to.y, strip: false })
-    } else if (fl.key === WASTE_KEY) {
-      cards.push({ card: d.waste[d.waste.length - 1] as number, x: to.x, y: to.y, strip: false })
-    } else {
-      const col = Math.floor(fl.key / 24)
-      const col0 = d.tab[col] ?? []
-      for (let idx = fl.key % 24; idx < col0.length; idx++) {
-        cards.push({
-          card: col0[idx] as number,
-          x: colX(col),
-          y: cardY(h, d, col, idx),
-          strip: idx < col0.length - 1,
-        })
+  // Dragging: every legal place glows, the one under the card brightest.
+  if (dr && dr.moved) {
+    const hover = dropAt(h, d, dr.src, dr.x + CARD_W / 2, dr.y + CARD_H / 2)
+    const first = run(d, dr.src)[0] ?? 0
+    for (let p = -1; p < 7; p++) {
+      const dst: Dst = p < 0 ? { to: 'found', suit: suitOf(first) } : { to: 'tab', col: p }
+      if (!canDrop(d, dr.src, dst)) continue
+      const on =
+        hover !== null &&
+        (dst.to === 'found' ? hover.to === 'found' : hover.to === 'tab' && hover.col === dst.col)
+      let x: number
+      let y: number
+      if (dst.to === 'found') {
+        x = colX(3 + dst.suit)
+        y = TOP_Y
+      } else {
+        const cards = d.tab[dst.col] ?? []
+        x = colX(dst.col)
+        y = cards.length ? cardY(h, d, dst.col, cards.length - 1) : TAB_Y
       }
-    }
-    for (const c of cards) {
-      const x = c.x + dx
-      const y = c.y + dy
-      g.rrect(x + 6, y + 16 + lift * 0.6, CARD_W, CARD_H - 7, 16, alpha('#000000', 0.25))
-      if (fl.flip) {
-        const sx = Math.max(0.02, Math.abs(Math.cos(e * Math.PI)))
-        scaled(g, x, y, sx * s, s, () => (e < 0.5 ? back(g, x, y, v.side) : face(g, x, y, c.card)))
-      } else scaled(g, x, y, s, s, () => face(g, x, y, c.card, c.strip))
+      g.alpha(on ? 0.85 + 0.15 * pulse : 0.25 + 0.15 * pulse, () =>
+        g.rrect(x - 5, y - 5, CARD_W + 10, CARD_H + 1, 20, undefined, C.yellow, on ? 7 : 4),
+      )
     }
   }
 
+  // Cards in flight, on top of everything: an arc, a swing, a lift.
+  if (fl) {
+    const e = outCubic(prog(v.now - fl.at, 0, fl.dur))
+    const to = keyPos(h, d, fl.key)
+    const dist = Math.hypot(to.x - fl.x, to.y - fl.y)
+    const arc = Math.sin(e * Math.PI)
+    const lift = arc * Math.min(130, 24 + dist * 0.12)
+    const x = to.x + (fl.x - to.x) * (1 - e)
+    const y = to.y + (fl.y - to.y) * (1 - e) - lift
+    const swing = clamp((to.x - fl.x) / 1600, -0.25, 0.25)
+    const angle = fl.tilt * (1 - e) + swing * arc
+    const s = 1 + arc * (0.06 + 0.06 * fl.k)
+    const cards = carried(h, d, fl.key)
+    for (const c of cards) lifted(g, x, y + c.dy, lift + 10)
+    const sx = fl.flip ? Math.max(0.02, Math.abs(Math.cos(e * Math.PI))) * s : s
+    scaled(
+      g,
+      x,
+      y,
+      sx,
+      s,
+      () => {
+        for (const c of cards) {
+          if (fl.flip && e < 0.5) back(g, x, y + c.dy, v.side)
+          else face(g, x, y + c.dy, c.card, c.strip)
+        }
+      },
+      angle,
+    )
+  }
+
+  // Under the finger: lifted, tilted by the drag's speed.
+  if (dr) {
+    const cards = carried(h, d, dr.key)
+    const lift = dr.moved ? 30 : 14
+    const angle = clamp(dr.vx * 0.00022, -0.3, 0.3)
+    for (const c of cards) lifted(g, dr.x, dr.y + c.dy, lift)
+    scaled(
+      g,
+      dr.x,
+      dr.y,
+      1.06,
+      1.06,
+      () => {
+        for (const c of cards) face(g, dr.x, dr.y + c.dy, c.card, c.strip)
+      },
+      angle,
+    )
+  }
+
+  if (v.stuckAt >= 0) {
+    const a = prog(v.now - v.stuckAt, 0, 0.3)
+    const cy = TAB_Y + (h - TAB_Y) * 0.45
+    g.alpha(a, () => {
+      g.rrect(200, cy - 56, 600, 112, 56, alpha(C.ink, 0.88))
+      g.text('No moves left', 500, cy + 2, { size: 52, weight: 700, color: C.white })
+    })
+  }
+
   if (v.hint) {
-    g.text('Tap a card to move it · tap the deck to draw', 500, h - 40, {
+    g.text('Tap or drag a card · tap the deck to draw', 500, h - 40, {
       size: 36,
       maxWidth: 940,
       weight: 600,

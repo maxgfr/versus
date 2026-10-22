@@ -63,7 +63,7 @@ export function stacks(card: number, top: number | undefined): boolean {
 }
 
 /** The cards a source moves: one for the waste, the run from `idx` to the top of a column. */
-function run(d: Deal, src: Src): number[] {
+export function run(d: Deal, src: Src): number[] {
   if (src.from === 'waste') return d.waste.length ? [d.waste[d.waste.length - 1] as number] : []
   if (src.idx < (d.down[src.col] ?? 0) || src.idx >= (d.tab[src.col]?.length ?? 0)) return []
   return (d.tab[src.col] ?? []).slice(src.idx)
@@ -100,6 +100,99 @@ export function destinationFor(d: Deal, src: Src): Dst | null {
     if (stacks(first, col[col.length - 1])) return { to: 'tab', col: c }
   }
   return empty === null ? null : { to: 'tab', col: empty }
+}
+
+/**
+ * Is dropping `src` on `dst` legal? A foundation takes a single card of its
+ * suit and next rank; a column takes a run whose first card stacks on its top
+ * (kings only on an empty one). A card never drops back onto its own column.
+ */
+export function canDrop(d: Deal, src: Src, dst: Dst): boolean {
+  const cards = run(d, src)
+  if (!cards.length) return false
+  const first = cards[0] as number
+  if (dst.to === 'found') {
+    return (
+      cards.length === 1 &&
+      suitOf(first) === dst.suit &&
+      (d.found[dst.suit] ?? 0) === rankOf(first) - 1
+    )
+  }
+  if (dst.col < 0 || dst.col >= COLUMNS) return false
+  if (src.from === 'tab' && src.col === dst.col) return false
+  const col = d.tab[dst.col] ?? []
+  // A whole column onto an empty one changes nothing.
+  if (!col.length && src.from === 'tab' && src.idx === 0) return false
+  return stacks(first, col[col.length - 1])
+}
+
+/** Every legal column a source can go to (foundations aside). */
+function tabDests(d: Deal, src: Src): number[] {
+  const out: number[] = []
+  for (let c = 0; c < COLUMNS; c++) if (canDrop(d, src, { to: 'tab', col: c })) out.push(c)
+  return out
+}
+
+/** Can `card` go to its foundation, or onto some column, on this table? */
+function placeable(d: Deal, card: number): boolean {
+  if ((d.found[suitOf(card)] ?? 0) === rankOf(card) - 1) return true
+  for (let c = 0; c < COLUMNS; c++) {
+    const col = d.tab[c] ?? []
+    if (stacks(card, col[col.length - 1])) return true
+  }
+  return false
+}
+
+/**
+ * A move that makes lasting progress: a card home, a hidden card turned up, or
+ * a card out of the deck (draw one with unlimited recycling: every stock and
+ * waste card comes up again sooner or later).
+ */
+function productive(d: Deal): boolean {
+  for (const card of d.stock) if (placeable(d, card)) return true
+  for (const card of d.waste) if (placeable(d, card)) return true
+  for (let c = 0; c < COLUMNS; c++) {
+    const col = d.tab[c] ?? []
+    const top = col[col.length - 1]
+    if (top !== undefined && (d.found[suitOf(top)] ?? 0) === rankOf(top) - 1) return true
+    const down = d.down[c] ?? 0
+    if (down > 0 && down < col.length && tabDests(d, { from: 'tab', col: c, idx: down }).length)
+      return true
+  }
+  return false
+}
+
+/**
+ * No move can ever make progress again: whatever runs the player shuffles
+ * between columns, no card can go home, no hidden card can turn up and no deck
+ * card can come out. Exact: it searches every arrangement of the face-up runs
+ * (the only moves that are left), up to `limit` positions (beyond that it
+ * assumes there is a way out).
+ */
+export function stuck(d: Deal, limit = 3000): boolean {
+  if (home(d) === CARDS) return false
+  const seen = new Set<string>()
+  const queue: Deal[] = [d]
+  seen.add(d.tab.join('|'))
+  while (queue.length) {
+    const cur = queue.shift() as Deal
+    if (productive(cur)) return false
+    for (let c = 0; c < COLUMNS; c++) {
+      const col = cur.tab[c] ?? []
+      for (let idx = cur.down[c] ?? 0; idx < col.length; idx++) {
+        const src: Src = { from: 'tab', col: c, idx }
+        for (const to of tabDests(cur, src)) {
+          const n = apply(cur, src, { to: 'tab', col: to })
+          const key = n.tab.join('|')
+          if (seen.has(key)) continue
+          if (seen.size >= limit) return false
+          seen.add(key)
+          queue.push(n)
+        }
+      }
+    }
+  }
+  return true
 }
 
 /** Move the card(s) from `src` to `dst`. The source is not changed. */

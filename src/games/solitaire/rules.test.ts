@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { chooseAction, PACE } from './bot.ts'
+import { chooseAction, clears, PACE, playableDeal } from './bot.ts'
 import {
   apply,
+  canDrop,
   CARDS,
   type Deal,
   deal,
@@ -14,6 +15,7 @@ import {
   rankOf,
   reveals,
   stacks,
+  stuck,
   suitOf,
 } from './rules.ts'
 
@@ -214,4 +216,105 @@ describe('solitaire bot', () => {
       }
     })
   }
+})
+
+describe('solitaire drops', () => {
+  it('drops a card on a column only where it stacks, and never back on its own column', () => {
+    const d = mk({ tab: [[card(1, 5)], [card(0, 6)], [card(3, 6)], []], waste: [card(1, 13)] })
+    const five = { from: 'tab' as const, col: 0, idx: 0 }
+    expect(canDrop(d, five, { to: 'tab', col: 1 })).toBe(true)
+    expect(canDrop(d, five, { to: 'tab', col: 2 })).toBe(true)
+    expect(canDrop(d, five, { to: 'tab', col: 0 })).toBe(false)
+    expect(canDrop(d, five, { to: 'tab', col: 3 })).toBe(false)
+    // A king goes into an empty column.
+    expect(canDrop(d, { from: 'waste' }, { to: 'tab', col: 3 })).toBe(true)
+  })
+
+  it('drops on a foundation only its own suit, single cards, in order', () => {
+    const d = mk({ tab: [[card(1, 2), card(0, 1)]], found: [0, 1, 0, 0], down: [0] })
+    expect(canDrop(d, { from: 'tab', col: 0, idx: 1 }, { to: 'found', suit: 0 })).toBe(true)
+    expect(canDrop(d, { from: 'tab', col: 0, idx: 1 }, { to: 'found', suit: 1 })).toBe(false)
+    // The 2♥ with the A♠ on it is a run: not to a foundation.
+    expect(canDrop(d, { from: 'tab', col: 0, idx: 0 }, { to: 'found', suit: 1 })).toBe(false)
+  })
+})
+
+describe('solitaire dead ends', () => {
+  it('sees a table with no way forward', () => {
+    // Two hidden cards under lone face-up cards that fit nowhere; the deck is empty.
+    const d = mk({
+      tab: [
+        [card(0, 2), card(1, 9)],
+        [card(3, 4), card(2, 7)],
+      ],
+      down: [1, 1],
+    })
+    expect(stuck(d)).toBe(true)
+  })
+
+  it('is not stuck while a deck card can still come out', () => {
+    const d = mk({ tab: [[card(0, 2), card(1, 9)]], down: [1], stock: [card(3, 1)] })
+    expect(stuck(d)).toBe(false)
+  })
+
+  it('finds a way out that starts with a pointless-looking move', () => {
+    // 5♥ sits on 6♠ over a hidden card. Moving the 5♥ onto the 6♣ uncovers the
+    // 6♠, which can go home onto the 5♠. Without the spades built to 5, shuffling
+    // the 5♥ between the sixes is all that is left.
+    const tab = [[card(2, 1), card(0, 6), card(1, 5)], [card(3, 6)]]
+    expect(stuck(mk({ tab, down: [1, 0], found: [5, 0, 0, 0] }))).toBe(false)
+    expect(stuck(mk({ tab, down: [1, 0] }))).toBe(true)
+  })
+
+  it('is never stuck once every card is home', () => {
+    expect(stuck(mk({ found: [13, 13, 13, 13] }))).toBe(false)
+  })
+})
+
+describe('solitaire bot sense', () => {
+  it('does not shuffle a run between two equal parents', () => {
+    // 5♥ on 6♠ could hop onto 6♣ and back forever: the bot draws instead.
+    const d = mk({ tab: [[card(0, 6), card(1, 5)], [card(3, 6)]], stock: [card(2, 12)] })
+    expect(chooseAction(d, 'hard', new Rng(1))).toEqual({ kind: 'draw' })
+  })
+
+  it('lifts a run off its parent when the card under it can then go home', () => {
+    const d = mk({
+      tab: [[card(2, 1), card(0, 6), card(1, 5)], [card(3, 6)]],
+      down: [1, 0],
+      found: [5, 0, 0, 0],
+    })
+    expect(chooseAction(d, 'hard', new Rng(1))).toEqual({
+      kind: 'play',
+      src: { from: 'tab', col: 0, idx: 2 },
+      dst: { to: 'tab', col: 1 },
+    })
+  })
+
+  it('deals races the best computer can clear, the same for the same seed', () => {
+    for (const seed of [3, 40, 777]) {
+      const d = playableDeal(seed)
+      expect(clears(d)).toBe(true)
+      expect(playableDeal(seed)).toEqual(d)
+    }
+  })
+
+  it('plays clearly better on hard than on easy', () => {
+    const score = (lv: 'easy' | 'hard'): number => {
+      let total = 0
+      for (let i = 0; i < 12; i++) {
+        let b = playableDeal(i * 31)
+        const rng = new Rng(i)
+        for (let k = 0; k < Math.floor(240 / PACE[lv]); k++) {
+          const a = chooseAction(b, lv, rng)
+          if (!a) break
+          b = a.kind === 'draw' ? (draw(b) ?? b) : apply(b, a.src, a.dst)
+          if (stuck(b)) break
+        }
+        total += home(b)
+      }
+      return total
+    }
+    expect(score('hard')).toBeGreaterThan(score('easy') + 40)
+  })
 })
