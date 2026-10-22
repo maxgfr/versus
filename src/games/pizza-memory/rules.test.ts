@@ -5,7 +5,7 @@ import type { Difficulty, GameContext, Side } from '../../core/game.ts'
 import { Input } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
 import type { Stage } from '../../core/stage.ts'
-import { memorise, nextPick, REMEMBER } from './bot.ts'
+import { memorise, nextPick, recall, REMEMBER } from './bot.ts'
 import factory, { type State } from './index.ts'
 import { tileXY } from './render.ts'
 import {
@@ -18,6 +18,8 @@ import {
   placeSpots,
   rightPick,
   SHOW,
+  SHOW_MIN,
+  showTime,
   START_LEN,
   TOPPINGS,
   watchLength,
@@ -80,6 +82,13 @@ describe('pizza memory rules', () => {
   it('times a watch: appear one by one, then hold', () => {
     expect(watchLength(3)).toBeCloseTo(LEAD + 3 * SHOW + 1.0, 6)
     expect(watchLength(4)).toBeGreaterThan(watchLength(3))
+    expect(watchLength(3, 0.6)).toBeLessThan(watchLength(3))
+  })
+
+  it('ramps up: each order played shows the toppings faster, down to a floor', () => {
+    expect(showTime(0)).toBe(SHOW)
+    expect(showTime(3)).toBeLessThan(showTime(2))
+    expect(showTime(50)).toBe(SHOW_MIN)
   })
 })
 
@@ -92,6 +101,49 @@ describe('pizza memory bot', () => {
       for (let i = 0; i < n; i++) hits += memorise(1, d, rng)[0] ? 1 : 0
       expect(Math.abs(hits / n - REMEMBER[d])).toBeLessThan(0.04)
     }
+  })
+
+  it('memory fades with longer orders, least for hard', () => {
+    for (const d of ['easy', 'normal', 'hard'] as Difficulty[]) {
+      expect(recall(START_LEN, 0, d)).toBe(REMEMBER[d])
+      expect(recall(8, 0, d)).toBeLessThan(recall(4, 0, d))
+    }
+    expect(recall(8, 4, 'hard')).toBeGreaterThan(recall(8, 4, 'normal'))
+    expect(recall(8, 4, 'normal')).toBeGreaterThan(recall(8, 4, 'easy'))
+  })
+
+  it('hard beats normal and normal beats easy in sudden-death orders', () => {
+    /** One attempt at an order: true when every pick is right. */
+    const attempt = (order: number[], d: Difficulty, rng: Rng): boolean => {
+      const known = memorise(order.length, d, rng)
+      const built: number[] = []
+      while (built.length < order.length) {
+        const t = nextPick(order, built, known, rng, d)
+        if (!rightPick(order, built, t)) return false
+        built.push(t)
+      }
+      return true
+    }
+    const duel = (a: Difficulty, b: Difficulty): number => {
+      let wins = 0
+      for (let seed = 1; seed <= 200; seed++) {
+        const rng = new Rng(seed)
+        let len = START_LEN
+        for (let round = 0; round < 40; round++) {
+          const order = makeOrder(rng, len)
+          const r: [boolean, boolean] = [attempt(order, a, rng), attempt(order, b, rng)]
+          if (r[0] !== r[1]) {
+            if (r[0]) wins++
+            break
+          }
+          len = nextLength(len, r[0] && r[1])
+        }
+      }
+      return wins / 200
+    }
+    expect(duel('hard', 'easy')).toBeGreaterThan(0.85)
+    expect(duel('hard', 'normal')).toBeGreaterThan(0.55)
+    expect(duel('normal', 'easy')).toBeGreaterThan(0.7)
   })
 
   it('picks what it remembers, otherwise an unused topping', () => {
@@ -109,7 +161,7 @@ describe('pizza memory bot', () => {
 // ---------- game level ----------
 
 function ctxFor(bots: [boolean, boolean], difficulty: Difficulty, seed: number): GameContext {
-  const audio = { play: () => {}, unlock: () => {} } as unknown as Audio
+  const audio = { play: () => {}, unlock: () => {}, buzz: () => {} } as unknown as Audio
   return {
     stage: { edge: (side: Side) => (side === 0 ? 1800 : 0) } as unknown as Stage,
     input: new Input({} as Stage, '2p', 0),

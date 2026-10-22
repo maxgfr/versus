@@ -6,7 +6,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import type { State } from './index.ts'
-import { LEAD, SHOW, TOPPINGS, watchLength } from './rules.ts'
+import { LEAD, TOPPINGS, watchLength } from './rules.ts'
 
 /** The shared pizza, pizza-centred spots are relative to this. */
 export const PIZZA = { x: 500, y: MID, r: 228 }
@@ -246,22 +246,26 @@ function drawSide(g: Draw, s: State, side: Side, now: number): void {
         )
       }
     }
-    // Tray: a dark inset with ten raised tiles, one per topping.
-    g.rrect(60, 1290, 880, 320, 40, alpha(C.ink, 0.42))
-    g.rrect(60, 1290, 880, 320, 40, undefined, alpha(SIDE[side].main, mine ? 0.5 : 0.15), 4)
-    const press = s.press[side]
-    for (let i = 0; i < TOPPINGS.length; i++) {
-      const c = tileXY(i)
-      const topping = s.perm[i] ?? 0
-      const face = mine ? SIDE[side].main : shade(SIDE[side].main, -0.5)
-      const pt = press && press.tile === i ? prog(now - press.at, 0, 0.25) : 1
-      const pressed = pt < 1 ? Math.sin(pt * Math.PI) : 0
-      g.tile(c.x - TILE / 2, c.y - TILE / 2, TILE, TILE, 28, face, 14, pressed)
-      g.alpha(mine ? 1 : 0.55, () =>
-        g.at(c.x, c.y - 4 + pressed * 10, ta, () =>
-          g.emoji(TOPPINGS[topping] ?? '', 0, 0, 92 * (1 - pressed * 0.1)),
-        ),
-      )
+    // Online, each phone shows only its own player's tray (the rival's keys are not ours to read).
+    const ownTray = g.viewer === null || g.viewer === side
+    if (ownTray) {
+      // Tray: a dark inset with ten raised tiles, one per topping.
+      g.rrect(60, 1290, 880, 320, 40, alpha(C.ink, 0.42))
+      g.rrect(60, 1290, 880, 320, 40, undefined, alpha(SIDE[side].main, mine ? 0.5 : 0.15), 4)
+      const press = s.press[side]
+      for (let i = 0; i < TOPPINGS.length; i++) {
+        const c = tileXY(i)
+        const topping = s.perm[i] ?? 0
+        const face = mine ? SIDE[side].main : shade(SIDE[side].main, -0.5)
+        const pt = press && press.tile === i ? prog(now - press.at, 0, 0.25) : 1
+        const pressed = pt < 1 ? Math.sin(pt * Math.PI) : 0
+        g.tile(c.x - TILE / 2, c.y - TILE / 2, TILE, TILE, 28, face, 14, pressed)
+        g.alpha(mine ? 1 : 0.55, () =>
+          g.at(c.x, c.y - 4 + pressed * 10, ta, () =>
+            g.emoji(TOPPINGS[topping] ?? '', 0, 0, 92 * (1 - pressed * 0.1)),
+          ),
+        )
+      }
     }
     // The wrong pick: a splat on the tile, and a "?" on the slot it should have filled.
     const bad = s.failTile[side] ?? -1
@@ -269,7 +273,7 @@ function drawSide(g: Draw, s: State, side: Side, now: number): void {
       const t = now - s.failAt[side]
       const k = outBack(prog(t, 0, 0.25))
       const c = tileXY(bad)
-      g.at(c.x, c.y, 0, () => splat(g, 0, 0, TILE * 0.62, bad + side * 11), k)
+      if (ownTray) g.at(c.x, c.y, 0, () => splat(g, 0, 0, TILE * 0.62, bad + side * 11), k)
       const slot = built.length
       const sc = slotX(slot, len)
       g.circle(sc, STRIP_Y, SLOT_R * 0.9, '#c92e22', alpha(C.ink, 0.6), 4)
@@ -359,14 +363,14 @@ export function renderPizza(
   drawPizza(g, glow)
   if (s.phase === 'watch') {
     for (let i = 0; i < s.order.length; i++) {
-      const shownAt = s.phaseAt + LEAD + i * SHOW
+      const shownAt = s.phaseAt + LEAD + i * s.show
       const spot = s.spots[i]
       const id = s.order[i]
       if (now < shownAt || !spot || id === undefined) continue
       drawTopping(g, TOPPINGS[id] ?? '', PIZZA.x + spot.x, PIZZA.y + spot.y, spot.a, now - shownAt)
     }
     // Memory timer: the arc around the board runs down while the order is on show.
-    const total = watchLength(s.order.length)
+    const total = watchLength(s.order.length, s.show)
     const left = 1 - prog(watchT, LEAD, total)
     if (watchT > LEAD)
       g.arc(

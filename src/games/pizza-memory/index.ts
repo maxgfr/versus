@@ -17,6 +17,7 @@ import {
   type Spot,
   START_LEN,
   SHOW,
+  showTime,
   TOPPINGS,
   watchLength,
 } from './rules.ts'
@@ -36,6 +37,8 @@ export interface State {
   /** Tray: tile i shows topping perm[i]. Same tray for both players. */
   perm: number[]
   phase: 'watch' | 'build' | 'after'
+  /** Seconds between two toppings appearing this round: shorter as the match goes on. */
+  show: number
   phaseAt: number
   /** Who rebuilds first this round (alternates). */
   first: Side
@@ -88,6 +91,7 @@ class PizzaMemory extends BaseGame<State> {
       spots: placeSpots(rng, order.length),
       perm: rng.shuffle(TOPPINGS.map((_, i) => i)),
       phase: 'watch',
+      show: SHOW,
       phaseAt: 0,
       first,
       builder: first,
@@ -108,7 +112,7 @@ class PizzaMemory extends BaseGame<State> {
     const s = this.s
     if (s.phase === 'watch') {
       this.reveal()
-      if (this.time - s.phaseAt >= watchLength(s.order.length)) this.beginBuild()
+      if (this.time - s.phaseAt >= watchLength(s.order.length, s.show)) this.beginBuild()
       return
     }
     if (s.phase === 'build') {
@@ -131,7 +135,7 @@ class PizzaMemory extends BaseGame<State> {
   private reveal(): void {
     const s = this.s
     const fx = this.ctx.fx
-    while (this.shown < s.order.length && this.time >= s.phaseAt + LEAD + this.shown * SHOW) {
+    while (this.shown < s.order.length && this.time >= s.phaseAt + LEAD + this.shown * s.show) {
       const spot = s.spots[this.shown]
       if (spot) {
         // The topping lands a beat after it starts dropping.
@@ -181,7 +185,13 @@ class PizzaMemory extends BaseGame<State> {
     const s = this.s
     const side = s.builder
     if (!this.isBot(side) || s.done[side] !== null || this.time < this.botAt) return
-    const topping = nextPick(s.order, s.built[side], this.known[side], this.ctx.rng)
+    const topping = nextPick(
+      s.order,
+      s.built[side],
+      this.known[side],
+      this.ctx.rng,
+      this.ctx.difficulty,
+    )
     const tile = s.perm.indexOf(topping)
     if (tile < 0) return
     this.press(side, tile)
@@ -202,15 +212,26 @@ class PizzaMemory extends BaseGame<State> {
       s.built[side].push(topping)
       s.builtAt[side][k] = this.time
       const slot = frame(side, slotX(k, s.order.length), STRIP_Y)
-      fx.burst(slot.x, slot.y, SIDE[side].light, { count: 10, speed: 300, size: 9, kind: 'spark' })
+      // Each right pick climbs in pitch and lands harder: the order builds to its finish.
+      const climb = Math.min(1, k / Math.max(1, s.order.length - 1))
+      fx.burst(slot.x, slot.y, SIDE[side].light, {
+        count: Math.round(8 + climb * 8),
+        speed: 280 + climb * 160,
+        size: 9,
+        kind: 'spark',
+      })
+      const spot = s.spots[k]
+      if (spot) fx.ring(PIZZA.x + spot.x, PIZZA.y + spot.y, SIDE[side].light, 70)
       this.ctx.audio.play('pop', 1 + k * 0.08)
+      this.ctx.audio.buzz(6 + Math.round(climb * 6))
       if (s.built[side].length === s.order.length) {
         s.done[side] = true
         fx.ring(slot.x, slot.y, C.yellow, 200)
         fx.burst(slot.x, slot.y, SIDE[side].main, { count: 26, speed: 460, size: 12 })
         fx.burst(PIZZA.x, PIZZA.y, C.yellow, { count: 14, speed: 380, size: 10, kind: 'spark' })
-        fx.shake(0.12)
-        this.ctx.audio.play('coin')
+        fx.shake(0.12 + Math.min(0.2, s.order.length * 0.02))
+        this.ctx.audio.play('coin', 0.9 + s.order.length * 0.03)
+        this.ctx.audio.buzz(25)
         this.passOn(side)
       }
     } else {
@@ -224,6 +245,7 @@ class PizzaMemory extends BaseGame<State> {
       fx.stop(5)
       this.ctx.audio.play('splash')
       this.ctx.audio.play('error', 0.8)
+      this.ctx.audio.buzz(35)
       this.passOn(side)
     }
   }
@@ -260,6 +282,7 @@ class PizzaMemory extends BaseGame<State> {
       const fx = this.ctx.fx
       fx.stop(8)
       fx.shake(0.35)
+      this.ctx.audio.buzz(40)
       if (w !== 'draw') {
         fx.flash(SIDE[w].light, 0.3)
         fx.confetti(w)
@@ -269,6 +292,7 @@ class PizzaMemory extends BaseGame<State> {
     }
     const len = nextLength(s.order.length, right[0] && right[1])
     s.round = rounds
+    s.show = showTime(rounds)
     s.order = makeOrder(this.ctx.rng, len)
     s.spots = placeSpots(this.ctx.rng, len)
     this.startRound(other(s.first))

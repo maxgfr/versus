@@ -78,10 +78,20 @@ export function decide(
 export const LEAD = 1.2
 /** Seconds between two toppings appearing. */
 export const SHOW = 0.85
+/** The fastest a topping is ever shown, late in a long match. */
+export const SHOW_MIN = 0.55
+
+/**
+ * The match ramps up: every order finished shows its toppings a little faster
+ * (`round` = orders already played), so the late rounds get tense.
+ */
+export function showTime(round: number): number {
+  return Math.max(SHOW_MIN, SHOW - round * 0.04)
+}
 /** Seconds the full order stays on the pizza after the last topping. */
 export const HOLD = 1.0
 
 /** Length of the watch phase (appear one by one, then hold) for an order of `len`. */
-export function watchLength(len: number): number {
-  return LEAD + len * SHOW + HOLD
+export function watchLength(len: number, show = SHOW): number {
+  return LEAD + len * show + HOLD
 }
