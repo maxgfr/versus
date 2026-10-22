@@ -125,24 +125,57 @@ if (isIOS && !standalone && !store.iosGuideSeen && !navigator.webdriver) {
   }, 1200)
 }
 
-// ---------- service worker: precache everything, ask before updating ----------
+// ---------- service worker: precache everything, update itself ----------
 
+// An installed app on iOS resumes from the background without ever asking for
+// a new version, and a tap-to-update toast was easy to miss (any other toast
+// replaced it). So: check whenever the app comes back to the foreground, and
+// apply the update by itself as soon as no game is in progress.
+const UPDATED_KEY = 'versus.updated'
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   void import('virtual:pwa-register').then(({ registerSW }) => {
+    const inGame = () => location.hash.startsWith('#/play/')
+    let pending = false
+    const apply = () => {
+      if (!pending || inGame()) return
+      pending = false
+      try {
+        sessionStorage.setItem(UPDATED_KEY, '1')
+      } catch {
+        // No storage: just no "updated" note.
+      }
+      void update(true)
+    }
     const update = registerSW({
       onNeedRefresh() {
-        // Never reload under a game in progress.
-        const offer = () =>
-          toast('A new version is ready.', { label: 'Update', run: () => void update(true) }, 0)
-        if (location.hash.startsWith('#/play/')) {
-          window.addEventListener('hashchange', offer, { once: true })
-        } else offer()
+        pending = true
+        apply()
       },
       onOfflineReady() {
         toast('Ready to play offline.')
       },
+      onRegisteredSW(_url, reg) {
+        if (!reg) return
+        const check = () => {
+          if (navigator.onLine) void reg.update().catch(() => {})
+        }
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') check()
+        })
+        setInterval(check, 30 * 60 * 1000)
+      },
     })
+    // Never reload under a game: wait until the players leave it.
+    window.addEventListener('hashchange', apply)
   })
+  try {
+    if (sessionStorage.getItem(UPDATED_KEY)) {
+      sessionStorage.removeItem(UPDATED_KEY)
+      setTimeout(() => toast('Updated to the latest version.'), 600)
+    }
+  } catch {
+    // No storage.
+  }
 }
 
 // Keyboard shortcut for desktop testers: Escape goes home from anywhere but a game.
