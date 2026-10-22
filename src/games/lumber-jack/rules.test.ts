@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { STEP, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { ChopBot } from './bot.ts'
+import { match } from './index.ts'
 import {
   chop,
   chopperNew,
+  COMBO_GAP,
   isStunned,
   NONE,
+  plan,
+  REBONK,
   safeSide,
   STUN,
+  STUN_MAX,
+  STUN_STEP,
   TARGET,
   TRUNK_LEN,
   trunkNew,
@@ -154,6 +160,99 @@ describe('lumber jack: safe side', () => {
   })
 })
 
+describe('lumber jack: repeat bonks', () => {
+  it('a bonk soon after the last stun stuns longer, up to a cap', () => {
+    const s = stateWith(Array(20).fill(0))
+    expect(chop(s, 0, 0, 10)).toBe('bonk')
+    expect(s.p[0].stunUntil).toBeCloseTo(10 + STUN)
+    // Right after the stun ends, into the branch again.
+    expect(chop(s, 0, 0, 11.05)).toBe('bonk')
+    expect(s.p[0].dizzy).toBe(1)
+    expect(s.p[0].stunUntil).toBeCloseTo(11.05 + STUN + STUN_STEP)
+    let t = s.p[0].stunUntil + 0.05
+    for (let i = 0; i < 4; i++) {
+      chop(s, 0, 0, t)
+      t = s.p[0].stunUntil + 0.05
+    }
+    expect(s.p[0].stunUntil - (t - 0.05 - STUN_MAX)).toBeGreaterThan(0)
+    expect(s.p[0].stunUntil - s.p[0].chopAt).toBeCloseTo(STUN_MAX)
+  })
+
+  it('a lone bonk long after the last one is a plain stun again', () => {
+    const s = stateWith(Array(20).fill(0))
+    chop(s, 0, 0, 10)
+    chop(s, 0, 0, 11.05)
+    expect(s.p[0].dizzy).toBe(1)
+    const t = s.p[0].stunUntil + REBONK + 0.1
+    expect(chop(s, 0, 0, t)).toBe('bonk')
+    expect(s.p[0].dizzy).toBe(0)
+    expect(s.p[0].stunUntil).toBeCloseTo(t + STUN)
+  })
+
+  it('blind mashing on one side loses to a normal bot that reads the trunk', () => {
+    let masher = 0
+    for (let seed = 0; seed < 6; seed++) {
+      const rng = new Rng(300 + seed)
+      const s = stateWith(trunkNew(rng))
+      const bot = new ChopBot(rng.fork(), 'normal', 1)
+      let t = 0
+      let nextTap = 0
+      while (t < 120 && winnerOf(s) === null) {
+        t += STEP
+        // Nine taps a second, always from the left, never looking.
+        if (t >= nextTap) {
+          chop(s, 0, 0, t)
+          nextTap = t + 1 / 9
+        }
+        const from = bot.step(t, s)
+        if (from !== null) chop(s, 1, from, t)
+      }
+      if (winnerOf(s) === 0) masher++
+    }
+    expect(masher).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('lumber jack: combo and pace', () => {
+  it('quick clean chops build a combo; a pause or a bonk breaks it', () => {
+    const s = stateWith([NONE, NONE, NONE, NONE, 0, NONE, NONE])
+    chop(s, 0, 0, 1)
+    expect(s.p[0].combo).toBe(1)
+    expect(s.p[0].pace).toBe(0)
+    chop(s, 0, 1, 1.2)
+    chop(s, 0, 0, 1.4)
+    expect(s.p[0].combo).toBe(3)
+    expect(s.p[0].pace).toBeGreaterThan(0.8)
+    chop(s, 0, 0, 1.4 + COMBO_GAP + 0.1)
+    expect(s.p[0].combo).toBe(1)
+    expect(s.p[0].pace).toBe(0)
+    expect(chop(s, 0, 0, 2.2)).toBe('bonk')
+    expect(s.p[0].combo).toBe(0)
+  })
+})
+
+describe('lumber jack: reading ahead', () => {
+  it('chops away from the branch of the segment being cut', () => {
+    expect(plan([0, NONE], 0, 0)).toBe(1)
+    expect(plan([1, NONE], 0, 1)).toBe(0)
+  })
+
+  it('cuts a bare segment from the side the next branch needs, saving a hop', () => {
+    expect(plan([NONE, NONE, 1], 0, 1)).toBe(0)
+    expect(plan([NONE, 0], 0, 0)).toBe(1)
+  })
+
+  it('stays put on a bare stretch', () => {
+    expect(plan([NONE, NONE, NONE, NONE, NONE], 0, 1)).toBe(1)
+    expect(plan([NONE, NONE, NONE, NONE, NONE], 0, 0)).toBe(0)
+    expect(plan([NONE], 0, -1)).toBe(0)
+  })
+
+  it('the trunk is long enough for the longest match plus the visible stack', () => {
+    expect(TRUNK_LEN).toBeGreaterThanOrEqual(match.max + 5)
+  })
+})
+
 /** A whole match, bot against bot, at the real step. */
 function botMatch(seed: number, red: 'easy' | 'normal' | 'hard', blue: 'easy' | 'normal' | 'hard') {
   const rng = new Rng(seed)
@@ -185,6 +284,35 @@ describe('lumber jack: bots', () => {
     let bonks = 0
     for (let seed = 0; seed < 4; seed++) bonks += botMatch(20 + seed, 'hard', 'hard').bonks[0] ?? 0
     expect(bonks).toBeLessThanOrEqual(4)
+  })
+
+  it('difficulty orders the bots: hard beats normal and normal beats easy most of the time', () => {
+    let hard = 0
+    let normal = 0
+    const games = 12
+    for (let seed = 0; seed < games; seed++) {
+      if (botMatch(200 + seed, 'hard', 'normal').winner === 0) hard++
+      if (botMatch(400 + seed, 'normal', 'easy').winner === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(Math.ceil(games * 0.75))
+    expect(normal).toBeGreaterThanOrEqual(Math.ceil(games * 0.75))
+  })
+
+  it('a bot waits out its stun and never chops into it', () => {
+    const rng = new Rng(9)
+    const s = stateWith(Array(60).fill(0))
+    const bot = new ChopBot(rng.fork(), 'hard', 0)
+    chop(s, 0, 0, 0.5)
+    let t = 0.5
+    while (t < 3) {
+      t += STEP
+      const from = bot.step(t, s)
+      if (from !== null) {
+        expect(isStunned(s.p[0], t)).toBe(false)
+        expect(chop(s, 0, from, t)).not.toBe('ignored')
+      }
+    }
+    expect(s.p[0].chops).toBeGreaterThan(3)
   })
 
   it('a hard bot beats an easy bot most of the time', () => {

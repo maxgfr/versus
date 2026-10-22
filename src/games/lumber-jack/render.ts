@@ -5,7 +5,7 @@ import { banner, bigScore, namePill } from '../../core/hud.ts'
 import type { Draw, Mood } from '../../core/render/draw.ts'
 import { alpha, C, mix, SIDE, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { isStunned, type Chopper, type State } from './rules.ts'
+import { isStunned, stunFor, type Chopper, type State } from './rules.ts'
 
 /*
  * The yard is drawn once in red's frame (bottom half, the trunk rising from the
@@ -190,9 +190,9 @@ function flyingLog(g: Draw, i: number): void {
   g.ellipse(SEG_W / 2 - 6, 0, 12, SEG_H / 2 - 22, alpha(WOOD, 0.6))
 }
 
-/** Leaves: a chunky cluster of glossy balls. */
-function foliage(g: Draw, x: number, y: number, dir: number, shake = 0): void {
-  const jx = Math.sin(shake * 40) * 6 * Math.min(1, shake)
+/** Leaves: a chunky cluster of glossy balls. `now` gives them a slow idle sway. */
+function foliage(g: Draw, x: number, y: number, dir: number, shake = 0, now = 0): void {
+  const jx = Math.sin(shake * 40) * 6 * Math.min(1, shake) + Math.sin(now * 1.7 + y * 0.013) * 3
   for (const [dx, dy, r, k] of [
     [-6, 18, 34, -0.25],
     [24, 6, 30, -0.1],
@@ -204,13 +204,13 @@ function foliage(g: Draw, x: number, y: number, dir: number, shake = 0): void {
 }
 
 /** A branch sticking out of the trunk on `side` (0 left, 1 right), leaves at its tip. */
-function branch(g: Draw, side: 0 | 1, yc: number, shake = 0): void {
+function branch(g: Draw, side: 0 | 1, yc: number, shake = 0, now = 0): void {
   const dir = side === 0 ? -1 : 1
   const x0 = TRUNK_X + dir * (SEG_W / 2 - 14)
   const x1 = TRUNK_X + dir * (SEG_W / 2 + 130)
   g.poly([x0, yc - 22, x1, yc - 20, x1, yc - 4, x0, yc + 26], shade(WOOD_DARK, -0.1))
   g.poly([x0, yc - 22, x1, yc - 20, x1 - dir * 6, yc - 12, x0, yc - 2], shade(WOOD, -0.05))
-  foliage(g, x1 + dir * 6, yc - 18, dir, shake)
+  foliage(g, x1 + dir * 6, yc - 18, dir, shake, now)
 }
 
 /** A falling branch, drawn around its middle. */
@@ -220,7 +220,7 @@ function branchPiece(g: Draw, dir: number): void {
 }
 
 /** The trunk: the stack settling after a chop, the cut log, and the branch that came off. */
-function trunk(g: Draw, c: Chopper, seq: number[], now: number, fall: number): void {
+function trunk(g: Draw, c: Chopper, seq: number[], now: number, fall: number, sway: number): void {
   const since = c.chopAt >= 0 ? now - c.chopAt : 99
   // Segments settle one slot down after each chop.
   const settle = outCubic(Math.min(1, since / 0.12))
@@ -239,22 +239,37 @@ function trunk(g: Draw, c: Chopper, seq: number[], now: number, fall: number): v
             if (i >= seq.length) continue
             const y = slotTop(k) - (1 - settle) * SEG_H
             const top = k === SLOTS - 1
-            g.alpha(top ? 0.55 : k === SLOTS - 2 ? 0.85 : 1, () => {
-              log(g, TRUNK_X, y, i)
-              const b = seq[i] ?? -1
-              if (b === 0 || b === 1) branch(g, b, y + SEG_H / 2, k === 0 ? since : 0)
-            })
+            // The blow shoves the stack away from the axe, the top the most.
+            const dx = sway * (0.35 + k * 0.2)
+            g.alpha(top ? 0.55 : k === SLOTS - 2 ? 0.85 : 1, () =>
+              g.at(dx, 0, 0, () => {
+                log(g, TRUNK_X, y, i)
+                const b = seq[i] ?? -1
+                if (b === 0 || b === 1) branch(g, b, y + SEG_H / 2, k === 0 ? since : 0, now)
+              }),
+            )
           }
         }),
       1,
     ),
   )
-  // The cut log is knocked out sideways, away from the axe, spinning.
+  // The cut log is knocked out sideways, away from the axe, spinning: a quick
+  // chop sends it further and faster, with a smear behind it.
   if (c.chops > 0 && since < 0.9) {
     const away = c.from === 0 ? 1 : -1
-    const x = TRUNK_X + away * since * 1100
-    const y = slotTop(0) + SEG_H / 2 - since * 260 + since * since * 1700
-    g.at(x, y, since * away * 7, () => flyingLog(g, c.chops - 1))
+    const speed = 950 + c.pace * 650
+    const at = (t: number) => ({
+      x: TRUNK_X + away * t * speed,
+      y: slotTop(0) + SEG_H / 2 - t * 260 + t * t * 1700,
+      a: t * away * (6 + c.pace * 4),
+    })
+    if (c.pace > 0.3 && since > 0.03)
+      for (const lag of [0.06, 0.03]) {
+        const q = at(Math.max(0, since - lag))
+        g.alpha(0.18 * c.pace, () => g.at(q.x, q.y, q.a, () => flyingLog(g, c.chops - 1)))
+      }
+    const p = at(since)
+    g.at(p.x, p.y, p.a, () => flyingLog(g, c.chops - 1))
   }
   // The branch from the cut segment: onto the chopper if it sat on their side, else away.
   if (c.branch >= 0 && since < 1.1) {
@@ -295,6 +310,7 @@ function jack(
   now: number,
   end: 'play' | 'win' | 'lose',
   endT: number,
+  squash: number,
 ): void {
   const since = c.chopAt >= 0 ? now - c.chopAt : 99
   const from = c.from === 1 ? 1 : 0
@@ -334,10 +350,12 @@ function jack(
     angle,
     () => {
       const toward = -dir
+      // Spring squash on each blow, a slow breath in between.
+      const sq = Math.max(0.72, Math.min(1.28, squash)) + Math.sin(now * 2.6 + side * 2) * 0.015
       g.blob(0, 0, 72, col, {
         mood,
-        sx: 1 + kick * 0.12 + (stunned ? 0.06 : 0),
-        sy: 1 - kick * 0.12 - (stunned ? 0.08 : 0),
+        sx: (2 - sq) * (1 + kick * 0.06 + (stunned ? 0.06 : 0)),
+        sy: sq * (1 - kick * 0.06 - (stunned ? 0.08 : 0)),
         look: [toward * 0.6, 0.1],
       })
       // Beanie with a pompom.
@@ -352,6 +370,10 @@ function jack(
       g.ball(0, -100, 17, C.white, 0.6)
       g.at(toward * 48, 22, 0, () => g.at(0, 0, axeA, () => axe(g)), toward, 1)
       if (stunned) {
+        // How much of the stun is left, as a shrinking bar over the head.
+        const left = Math.max(0, Math.min(1, (c.stunUntil - now) / stunFor(c.dizzy)))
+        g.rrect(-64, -150, 128, 18, 9, alpha(C.ink, 0.7))
+        g.rrect(-60, -147, Math.max(12, 120 * left), 12, 6, c.dizzy > 0 ? C.orange : C.yellow)
         g.ball(toward * -20, -72, 14, shade(col, 0.25), 0.6)
         for (let i = 0; i < 3; i++) {
           const a = now * 6 + (i * Math.PI * 2) / 3
@@ -390,7 +412,7 @@ function raceBar(
   chops: number,
   target: number,
   now: number,
-  since: number,
+  pulse: number,
 ): void {
   const w = BAR_X1 - BAR_X0
   const col = SIDE[side]
@@ -419,9 +441,8 @@ function raceBar(
   for (let r = 0; r < 4; r++)
     for (let q = 0; q < 2; q++)
       g.rect(BAR_X1 + 14 + q * 12, BAR_Y - 24 + r * 12, 12, 12, (r + q) % 2 ? C.ink : C.white)
-  const pop = since < 0.2 ? 1 - since / 0.2 : 0
   const hx = BAR_X0 + Math.max(22, w * k)
-  g.disc(hx, BAR_Y - 2, 26 + pop * 8, C.white, 5)
+  g.disc(hx, BAR_Y - 2, 26 + pulse * 10, C.white, 5)
   g.sideMark(side, hx, BAR_Y - 3, 12, col.main)
   if (chops >= target - 5 && chops < target) {
     const a = 0.5 + 0.5 * Math.sin(now * 10)
@@ -437,6 +458,20 @@ export interface YardOpts {
   winner: Side | 'draw' | null
   /** Which sides the computer plays (no tap hints for them). */
   bots: [boolean, boolean]
+  look: Look
+}
+
+/** Online, each phone shows only its own player's tap hints; local play shows both. */
+const mine = (g: Draw, side: Side): boolean => g.viewer === null || g.viewer === side
+
+/** Cosmetic springs per side, from the game (never in state). */
+export interface Look {
+  /** Trunk shove, world units. */
+  sway: [number, number]
+  /** Lumberjack squash, rest 1. */
+  squash: [number, number]
+  /** Score pop 0..1. */
+  pulse: [number, number]
 }
 
 /** The whole yard for both players, with the HUD and the start prompt. */
@@ -454,12 +489,29 @@ export function renderYard(g: Draw, s: State, now: number, o: YardOpts): void {
     inFrame(g, side, () => {
       zone(g, side, c, now)
       stump(g)
-      trunk(g, c, s.seq, now, end === 'win' ? endT - 0.25 : -1)
-      jack(g, side, c, now, end, endT)
-      const since = c.chopAt >= 0 ? now - c.chopAt : 99
-      raceBar(g, side, c.chops, o.target, now, since)
+      trunk(g, c, s.seq, now, end === 'win' ? endT - 0.25 : -1, o.look.sway[side])
+      jack(g, side, c, now, end, endT, o.look.squash[side])
+      raceBar(g, side, c.chops, o.target, now, o.look.pulse[side])
+      // A clean, quick run shows as a streak by the jack.
+      if (c.combo >= 5 && end === 'play' && !isStunned(c, now)) {
+        const since = c.chopAt >= 0 ? now - c.chopAt : 99
+        const fade = Math.max(0, 1 - Math.max(0, since - 0.45) / 0.3)
+        if (fade > 0) {
+          const x = standX(c.from)
+          g.alpha(fade, () =>
+            g.text(`x${c.combo}`, x, STAND_Y - 200, {
+              size: 44 * (1 + o.look.pulse[side] * 0.25),
+              weight: 700,
+              color: c.combo >= 20 ? C.orange : C.yellow,
+              stroke: alpha(C.ink, 0.7),
+              strokeWidth: 9,
+              angle: textAngle(g, side),
+            }),
+          )
+        }
+      }
       // Before the first chop: show where to tap.
-      if (c.chops === 0 && !o.bots[side]) {
+      if (c.chops === 0 && !o.bots[side] && mine(g, side)) {
         const a = 0.55 + 0.45 * Math.sin(now * 6)
         for (const from of [0, 1] as const) {
           const x = from === 0 ? 170 : 830
@@ -484,13 +536,15 @@ export function renderYard(g: Draw, s: State, now: number, o: YardOpts): void {
       active: since < 0.15,
       text: isStunned(c, now) ? 'Ouch!' : undefined,
     })
-    const pop = since < 0.22 ? 1 - since / 0.22 : 0
-    bigScore(g, side, c.chops, { x: frame(side, 140, 0).x, size: 80 * (1 + pop * 0.3) })
+    bigScore(g, side, c.chops, {
+      x: frame(side, 140, 0).x,
+      size: 80 * (1 + o.look.pulse[side] * 0.3),
+    })
   }
   const hint = 1 - Math.max(0, (now - 2.6) / 0.6)
   if (hint > 0) {
     for (const side of [0, 1] as Side[]) {
-      if (o.bots[side]) continue
+      if (o.bots[side] || !mine(g, side)) continue
       banner(g, side, 'Chop away from the branch!', frame(side, TRUNK_X, 1190).y, {
         size: 44,
         alpha: hint,
