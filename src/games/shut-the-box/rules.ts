@@ -76,6 +76,36 @@ function buildTable(): Float64Array {
   return E
 }
 
+const chase = new Map<number, Float64Array>()
+
+/**
+ * Chance to beat a known score `target` from a box, playing for exactly that:
+ * finishing below it wins (1), level with it draws (half). The second player
+ * of a round knows the score to beat, and the best play for it is not always
+ * the lowest average (a long shot can be right when behind, safety when ahead).
+ */
+export function winChance(open: number, target: number): number {
+  let t = chase.get(target)
+  if (!t) {
+    t = new Float64Array(ALL_OPEN + 1)
+    // A shut box wins outright, whatever the target.
+    t[0] = 1
+    for (let o = 1; o <= ALL_OPEN; o++) {
+      const left = sumOf(o)
+      const stop = left < target ? 1 : left === target ? 0.5 : 0
+      let v = 0
+      for (const { total, p } of rollOutcomes(diceCount(o))) {
+        let best = -1
+        for (const sub of subsetsSumming(o, total)) best = Math.max(best, t[o ^ sub] ?? 0)
+        v += p * (best < 0 ? stop : best)
+      }
+      t[o] = v
+    }
+    chase.set(target, t)
+  }
+  return t[open] ?? 0
+}
+
 /** The shut options for a roll, each with the expected final score it leaves. */
 export function options(open: number, total: number): { mask: number; value: number }[] {
   return subsetsSumming(open, total).map((mask) => ({ mask, value: expectedFinal(open ^ mask) }))

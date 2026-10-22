@@ -5,7 +5,6 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, mix, shade, SIDE } from '../../core/render/palette.ts'
 import {
   type ButtonLayout,
-  drawDice,
   drawRollButton,
   drawTray,
   inFrame,
@@ -13,6 +12,7 @@ import {
   textAngle,
   trayLayout,
 } from '../../engines/dice/index.ts'
+import { drawThrownDice, TAP_POW } from '../yazy/throw.ts'
 import type { State } from './index.ts'
 import { countOf, subsetsSumming, sumOf, TILES } from './rules.ts'
 
@@ -421,23 +421,26 @@ function drawHandover(g: Draw, s: State, now: number): void {
   )
 }
 
-export function renderShut(g: Draw, s: State, now: number, over: boolean): void {
+export function renderShut(g: Draw, s: State, now: number, over: boolean, rattle = 0): void {
   for (const side of [0, 1] as Side[]) {
     const mine = s.turn === side && !over
     drawBox(g, side, s, now, mine)
     const act = actionLabel(s, side, now, over)
-    drawRollButton(g, side, ACTION, act.label, { enabled: act.enabled, pulse: act.pulse })
+    // Online, each phone shows only its own button.
+    if (g.viewer === null || g.viewer === side)
+      drawRollButton(g, side, ACTION, act.label, { enabled: act.enabled, pulse: act.pulse })
     drawPlaque(g, side, s, now)
     drawTarget(g, side, s, over)
   }
   const tray = diceTray(s.dice.length)
   drawTray(g, tray, over ? null : s.turn)
-  drawDice(
+  drawThrownDice(
     g,
     tray,
     { dice: s.dice, held: s.dice.map(() => false), rolls: 1, rolledAt: s.rolledAt },
     now,
-    { turn: s.turn, dim: s.roll === 0 && !over },
+    s.pow ?? TAP_POW,
+    { dim: s.roll === 0 && !over, rattle: s.roll === 0 && !over ? Math.max(rattle, 0.2) : 0 },
   )
   drawRollSum(g, s, now)
   drawStuck(g, s, now)

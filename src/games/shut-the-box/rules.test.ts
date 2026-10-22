@@ -13,6 +13,7 @@ import {
   subsetsSumming,
   sumOf,
   tileBit,
+  winChance,
 } from './rules.ts'
 
 const mask = (...tiles: number[]) => tiles.reduce((m, t) => m | tileBit(t), 0)
@@ -148,10 +149,55 @@ describe('shut the box bot', () => {
     })
   }
 
-  it('normal shuts the most tiles it can', () => {
+  it('normal leaves the lowest expected score', () => {
     const rng = new Rng(3)
-    const m = decide(ALL_OPEN, 10, 'normal', rng)
-    expect(countOf(m ?? 0)).toBe(Math.max(...subsetsSumming(ALL_OPEN, 10).map((x) => countOf(x))))
+    const m = decide(ALL_OPEN, 10, 'normal', rng) ?? 0
+    const best = Math.min(...options(ALL_OPEN, 10).map((o) => o.value))
+    expect(expectedFinal(ALL_OPEN ^ m)).toBeCloseTo(best, 9)
+  })
+
+  it('values the chance to beat a known score', () => {
+    expect(winChance(0, 5)).toBe(1)
+    // Tiles 1 and 2 left (3) against a 4: whatever happens next, it wins.
+    expect(winChance(tileBit(1) | tileBit(2), 4)).toBeCloseTo(1, 9)
+    expect(winChance(ALL_OPEN, 1)).toBeLessThan(winChance(ALL_OPEN, 20))
+  })
+
+  it('hard, playing second, picks the shut with the best chance to beat the score', () => {
+    const rng = new Rng(5)
+    let differs = 0
+    for (let k = 0; k < 400; k++) {
+      const open = rng.int(1, ALL_OPEN)
+      const total = rng.int(2, 12)
+      const beat = rng.int(1, 30)
+      const m = decide(open, total, 'hard', rng, beat)
+      if (m === undefined) continue
+      const chances = subsetsSumming(open, total).map((x) => winChance(open ^ x, beat))
+      expect(winChance(open ^ m, beat)).toBeCloseTo(Math.max(...chances), 9)
+      const ev = decide(open, total, 'normal', rng) ?? 0
+      if (winChance(open ^ ev, beat) < winChance(open ^ m, beat) - 1e-9) differs++
+    }
+    // Playing for the average would sometimes throw away real winning chances.
+    expect(differs).toBeGreaterThan(0)
+  })
+
+  it('playing second, hard beats the score more often than normal does', () => {
+    const rate = (difficulty: 'normal' | 'hard') => {
+      const rng = new Rng(21)
+      const roll = rollFor(rng)
+      let won = 0
+      for (let k = 0; k < 2000; k++) {
+        const beat = 4 + (k % 16)
+        const r = playTurn(
+          ALL_OPEN,
+          roll,
+          (open, total) => decide(open, total, difficulty, rng, beat) ?? null,
+        )
+        won += r.score < beat ? 1 : r.score === beat ? 0.5 : 0
+      }
+      return won / 2000
+    }
+    expect(rate('hard')).toBeGreaterThan(rate('normal'))
   })
 
   it('plays a full bot vs bot game to a result in bounded steps', () => {

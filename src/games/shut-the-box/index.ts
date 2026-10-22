@@ -7,10 +7,12 @@ import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import { tableBackdrop, TurnGame } from '../../engines/board/index.ts'
 import { buttonHit, ROLL_TIME } from '../../engines/dice/index.ts'
+import { botPow, Flick, TAP_POW, turnInputs } from '../yazy/throw.ts'
 import { decide } from './bot.ts'
 import {
   ACTION,
   BOX,
+  DICE_Y,
   diceTray,
   FALL,
   FLIP_STEP,
@@ -61,7 +63,12 @@ export interface State {
   turnAt: number
   /** The game is decided. */
   end: { at: number; winner: Side | 'draw' } | null
+  /** Energy of the last throw (0..1): how hard the dice fly and land. */
+  pow: number
 }
+
+/** The band across the middle of the table where a flick throws the dice. */
+const inThrow = (x: number, y: number): boolean => x > 120 && x < 880 && Math.abs(y - DICE_Y) < 190
 
 /** Centre of a side's box, in world coordinates. */
 const boxCentre = (side: Side) => frame(side, W / 2, (BOX.top + BOX.base) / 2)
@@ -70,15 +77,19 @@ class ShutTheBox extends TurnGame<State> {
   /** Host-only bookkeeping for effects that fire when an animation lands. */
   private landedAt = -10
   private flapsDone = 0
+  // Cosmetic host state: one finger tracker per input that may throw.
+  private flicks = [new Flick(), new Flick()]
 
   private get target(): number {
     return this.ctx.target || match.default
   }
 
   protected setup(): State {
+    // Who opens the first box is a coin toss (the second player knows the score to beat).
+    const starter: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      turn: 0,
-      starter: 0,
+      turn: starter,
+      starter,
       wins: [0, 0],
       nextAt: -1,
       open: [ALL_OPEN, ALL_OPEN],
@@ -96,6 +107,7 @@ class ShutTheBox extends TurnGame<State> {
       holdUntil: 0,
       turnAt: -10,
       end: null,
+      pow: TAP_POW,
     }
   }
 
@@ -125,10 +137,14 @@ class ShutTheBox extends TurnGame<State> {
     // Dice settle.
     if (s.rolledAt !== this.landedAt && this.time - s.rolledAt >= ROLL_TIME) {
       this.landedAt = s.rolledAt
-      this.ctx.audio.play('place', 0.9)
+      // The harder the throw, the harder the dice land.
+      this.ctx.audio.play('place', 0.8 + s.pow * 0.25)
+      fx.shake(0.04 + s.pow * 0.12)
+      this.ctx.audio.buzz(Math.round(4 + s.pow * 10))
       const p = frame(s.turn, SUM_AT.x, SUM_AT.y)
       if (s.stuck) {
         this.ctx.audio.play('buzz')
+        this.ctx.audio.buzz(30)
         fx.shake(0.35)
         fx.puff(p.x, p.y, 'rgba(255,255,255,0.4)', 6)
       } else {
@@ -149,20 +165,31 @@ class ShutTheBox extends TurnGame<State> {
         const p = frame(s.flipSide, tileX(i) + BOX.tw / 2, BOX.base - 10)
         fx.puff(p.x, p.y, 'rgba(255,240,210,0.45)', 4)
         fx.burst(p.x, p.y, C.cream, { count: 6, speed: 260, size: 7, kind: 'spark' })
-        fx.shake(0.12)
+        fx.shake(0.08 + i * 0.012)
+        this.ctx.audio.buzz(6 + i)
         this.ctx.audio.play('slap', 0.9 + i * 0.05)
       }
     }
   }
 
-  protected stepTurn(_dt: number, tap: Ptr | undefined): void {
-    if (!tap) return
+  protected stepTurn(dt: number, tap: Ptr | undefined): void {
     const s = this.s
     const side = s.turn
     if (s.roll === 0) {
-      if (buttonHit(ACTION, side, tap.x, tap.y) || overDice(tap.x, tap.y)) this.roll()
+      // A flick across the middle throws the dice, its speed the throw's energy.
+      const inputs = turnInputs(this.ctx.mode, this.ctx.input.players, side)
+      for (let k = 0; k < inputs.length; k++) {
+        const g = this.flicks[k]?.update(inputs[k] as (typeof inputs)[number], dt, inThrow)
+        if (!g) continue
+        if (g.kind === 'flick') this.roll(g.pow)
+        else if (overDice(g.x, g.y)) this.roll(TAP_POW)
+        return
+      }
+      if (tap && buttonHit(ACTION, side, tap.x, tap.y)) this.roll(TAP_POW + 0.15)
       return
     }
+    for (const f of this.flicks) f.reset()
+    if (!tap) return
     const i = tileAt(side, tap.x, tap.y)
     if (i >= 0) {
       this.pick(i)
@@ -174,7 +201,7 @@ class ShutTheBox extends TurnGame<State> {
   protected botPlay(): void {
     const s = this.s
     if (s.roll === 0) {
-      this.roll()
+      this.roll(botPow(this.time))
       return
     }
     // Lift the chosen tiles first so the move reads, then shut them on the next beat.
@@ -182,7 +209,9 @@ class ShutTheBox extends TurnGame<State> {
       this.shut(s.sel)
       return
     }
-    const mask = decide(s.open[s.turn], s.roll, this.ctx.difficulty, this.ctx.rng)
+    // Playing second, the rival's score is on the table: hard plays to beat it.
+    const beat = s.scores[other(s.turn)] ?? null
+    const mask = decide(s.open[s.turn], s.roll, this.ctx.difficulty, this.ctx.rng, beat)
     if (mask === undefined) return
     s.sel = mask
     for (let i = 0; i < TILES; i++) if (mask & tileBit(i + 1)) s.selAt[i] = this.time + i * 0.04
@@ -190,22 +219,27 @@ class ShutTheBox extends TurnGame<State> {
   }
 
   protected override botDelay(): number {
-    return this.s.sel !== 0 ? 0.45 : super.botDelay()
+    const r = this.ctx.rng.range(0, 0.25)
+    if (this.s.sel !== 0) return 0.35
+    return this.s.roll === 0 ? 0.45 + r : 0.5 + r
   }
 
-  private roll(): void {
+  /** Throw with energy `pow` (0..1): the faces are a fair draw, the energy is the feel. */
+  private roll(pow: number): void {
     const s = this.s
     const side = s.turn
     const open = s.open[side]
+    s.pow = pow
     s.dice = Array.from({ length: diceCount(open) }, () => this.ctx.rng.int(1, 6))
     s.roll = s.dice.reduce((a, b) => a + b, 0)
     s.sel = 0
     s.rolledAt = this.time
     s.flipMask = 0
-    this.ctx.audio.play('roll')
-    this.ctx.fx.shake(0.1)
+    this.ctx.audio.play('roll', 0.85 + pow * 0.35)
+    this.ctx.fx.shake(0.05 + pow * 0.16)
+    this.ctx.audio.buzz(Math.round(6 + pow * 14))
     for (const slot of diceTray(s.dice.length).slots) {
-      this.ctx.fx.puff(slot.x, slot.y + 60, 'rgba(255,255,255,0.35)', 3)
+      this.ctx.fx.puff(slot.x, slot.y + 60, 'rgba(255,255,255,0.35)', Math.round(2 + pow * 4))
     }
     if (!canShut(open, s.roll)) {
       // Shown once the dice land (see effects / render), then the turn ends.
@@ -265,8 +299,10 @@ class ShutTheBox extends TurnGame<State> {
     this.flapsDone = 0
     s.holdUntil = this.time + FALL + 0.15 + FLIP_STEP * k
     const c = boxCentre(side)
-    this.ctx.fx.float(`-${sumOf(mask)}`, c.x, c.y, C.yellow, 80, side)
-    this.ctx.audio.play('flip')
+    // A big shut (many tiles, a big number) lands bigger.
+    const big = Math.min(1, sumOf(mask) / 12)
+    this.ctx.fx.float(`-${sumOf(mask)}`, c.x, c.y, C.yellow, 64 + big * 28, side)
+    this.ctx.audio.play('flip', 0.9 + big * 0.2)
     if (after === 0) this.shutAll(side)
   }
 
@@ -362,10 +398,16 @@ class ShutTheBox extends TurnGame<State> {
     s.end = null
   }
 
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    for (const f of this.flicks) f.reset()
+  }
+
   render(g: Draw): void {
     const s = this.s
     tableBackdrop(g)
-    renderShut(g, s, this.time, this.over)
+    const rattle = Math.max(this.flicks[0]?.charge ?? 0, this.flicks[1]?.charge ?? 0)
+    renderShut(g, s, this.time, this.over, rattle)
     this.drawTurns(g, undefined, s.nextAt < 0)
     if (this.target > 1) {
       pips(g, 0, s.wins[0], this.target)
