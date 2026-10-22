@@ -1,5 +1,6 @@
 import { Joystick } from '../../core/controls.ts'
 import { floatFor } from '../../core/fx/fx.ts'
+import { lerp } from '../../core/fx/ease.ts'
 import { frame } from '../../core/frame.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
@@ -38,6 +39,8 @@ class PiranhaRush extends BaseGame<State> {
   private bots: (PiranhaBot | null)[] = [null, null]
   private ev: Ev[] = []
   private lastTick = -1
+  /** Cosmetic: each swimmer's position at the previous step, for smooth drawing. */
+  private prev: [{ x: number; y: number }, { x: number; y: number }] | null = null
 
   private get total(): number {
     return this.ctx.target || match.default
@@ -55,7 +58,7 @@ class PiranhaRush extends BaseGame<State> {
       ctx.bots[side] ? new PiranhaBot(ctx.rng.fork(), ctx.difficulty) : null,
     )
     return {
-      ...newWorld(schoolsFor(ctx.rng)),
+      ...newWorld(schoolsFor(ctx.rng, this.total)),
       pads: this.looks(),
       scoredAt: [-9, -9],
       farAt: [-9, -9],
@@ -97,6 +100,10 @@ class PiranhaRush extends BaseGame<State> {
     }
 
     this.ev.length = 0
+    this.prev = [
+      { x: s.swim[0].x, y: s.swim[0].y },
+      { x: s.swim[1].x, y: s.swim[1].y },
+    ]
     stepWorld(s, dt, drives, this.ev)
     for (const e of this.ev) this.feedback(e)
     s.pads = this.looks()
@@ -155,6 +162,25 @@ class PiranhaRush extends BaseGame<State> {
         fx.ring(e.x, e.y, SIDE[e.side].main, 200)
         floatFor(fx, e.side, '+1', e.x, e.y + (e.side === 0 ? -90 : 90))
         break
+      case 'dash': {
+        // A stroke: a splash kicked back from the swimmer and a quick whoosh.
+        const back = (e.side === 0) === (this.s.swim[e.side].phase === 0) ? 1 : -1
+        audio.play('splash', 1.3 + rng.next() * 0.1)
+        audio.play('whoosh', 1.2)
+        audio.buzz(8)
+        fx.burst(e.x, e.y + back * 30, C.water, {
+          count: 12,
+          speed: 420,
+          size: 10,
+          life: 0.45,
+          gravity: 0,
+          drag: 3,
+          spread: 1.1,
+          dir: back > 0 ? Math.PI / 2 : -Math.PI / 2,
+          colors: [C.water, C.white, '#9ee6ff'],
+        })
+        break
+      }
       case 'bite': {
         const s = this.s
         s.bitAt[e.side] = this.time
@@ -183,8 +209,25 @@ class PiranhaRush extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderRiver(g, this.s, this.ctx.names, this.total - this.s.t, this.time)
+  render(g: Draw, alpha = 1): void {
+    const s = this.s
+    const pv = this.prev
+    const ended = s.endAt >= 0
+    // A bitten swimmer jumps home: never slide it back across the river.
+    const pos = s.swim.map((sw, i) => {
+      const p = pv?.[i]
+      if (!p || ended || Math.hypot(p.x - sw.x, p.y - sw.y) > 60) return null
+      return { x: lerp(p.x, sw.x, alpha), y: lerp(p.y, sw.y, alpha) }
+    })
+    renderRiver(g, s, this.ctx.names, this.total - s.t, this.time, {
+      back: ended ? 0 : (1 - alpha) / 60,
+      pos,
+    })
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
   }
 }
 

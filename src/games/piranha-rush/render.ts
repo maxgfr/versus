@@ -5,7 +5,16 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, mix, SIDE, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { PadLook, State } from './index.ts'
-import { fishAt, HOME, inRiver, RIVER_BOT, RIVER_TOP, STUN, type Swimmer } from './rules.ts'
+import {
+  DASH_TIME,
+  fishAt,
+  HOME,
+  inRiver,
+  RIVER_BOT,
+  RIVER_TOP,
+  STUN,
+  type Swimmer,
+} from './rules.ts'
 
 const JUNGLE = '#16302a'
 const MUD = '#3a2d28'
@@ -202,18 +211,28 @@ function goal(g: Draw, sw: Swimmer, now: number): void {
 }
 
 /** A swimmer: the blob mascot, head above the water while swimming, carrying a star on the way home. */
-function swimmer(g: Draw, s: State, sw: Swimmer, now: number): void {
+function swimmer(g: Draw, s: State, sw: Swimmer, now: number, at?: { x: number; y: number }): void {
   const side = sw.side
   const col = SIDE[side]
-  const { x, y } = sw
+  const { x, y } = at ?? sw
   const wet = inRiver(y)
   const stunned = sw.stunT >= 0 && s.t < sw.stunT
-  const squash = 1 + 0.07 * Math.sin(now * 9 + side)
+  // Idle paddle bob, and a long stretch on a stroke.
+  const stroke = Math.max(0, 1 - (s.t - sw.dashAt) / DASH_TIME)
+  const squash = 1 + 0.07 * Math.sin(now * 9 + side) + stroke * 0.3
   // Pop back in at the jetty after a bite.
   const bt = now - s.bitAt[side]
   const pop = bt < 0.4 ? outBack(clamp(bt / 0.4, 0, 1)) : 1
   const goingUp = (side === 0) === (sw.phase === 0)
   const look: [number, number] = [0, goingUp ? -0.6 : 0.6]
+  if (stroke > 0) {
+    // Wake behind a stroke: two quick streaks trailing the swimmer.
+    const back = (side === 0) === (sw.phase === 0) ? 1 : -1
+    g.alpha(stroke * 0.7, () => {
+      for (const dx of [-18, 18])
+        g.line(x + dx, y + back * 30, x + dx * 1.6, y + back * (30 + 90 * stroke), '#d8f1ff', 8)
+    })
+  }
   if (wet) {
     for (let k = 0; k < 2; k++) {
       const p = (now * 0.9 + k * 0.5 + side * 0.3) % 1
@@ -310,15 +329,23 @@ export function renderRiver(
   names: [string, string],
   left: number,
   now: number,
+  view: { back: number; pos: readonly ({ x: number; y: number } | null)[] } = {
+    back: 0,
+    pos: [],
+  },
 ): void {
   g.fillView(JUNGLE)
   river(g, s.t)
   banks(g, s.t)
   for (const sw of s.swim) goal(g, sw, now)
-  for (const side of [0, 1] as Side[]) pad(g, side, s.pads[side])
-  for (const f of fishAt(s.schools, s.t)) piranha(g, f.x, f.y, f.dir, s.t)
+  // Online, each phone draws only its own player's stick.
+  for (const side of [0, 1] as Side[])
+    if (g.viewer === null || g.viewer === side) pad(g, side, s.pads[side])
+  // Fish are a pure function of time: draw them where they were a fraction of a step ago.
+  const ft = s.t - view.back
+  for (const f of fishAt(s.schools, ft)) piranha(g, f.x, f.y, f.dir, ft)
   biteSplash(g, s, now)
-  for (const sw of s.swim) swimmer(g, s, sw, now)
+  for (const sw of s.swim) swimmer(g, s, sw, now, view.pos[sw.side] ?? undefined)
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, names[side], { inset: 52 })
     const dt = now - s.scoredAt[side]

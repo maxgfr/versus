@@ -18,6 +18,9 @@ import {
   SPEED,
   STUN,
   stepWorld,
+  surge,
+  DASH_BOOST,
+  DASH_COOL,
   winnerOf,
   type World,
 } from './rules.ts'
@@ -104,9 +107,38 @@ describe('crossing', () => {
 
   it('a stick only moves the swimmer as far as it can in one step', () => {
     const w = quietWorld()
+    // Eased in (no flick): plain swimming speed.
+    w.swim[0].mag = 0.95
+    w.swim[0].lowAt = -5
     const y0 = w.swim[0].y
     stepWorld(w, STEP, [{ x: 0, y: -1 }, null], [])
     expect(Math.abs(w.swim[0].y - y0)).toBeLessThanOrEqual(SPEED * STEP + 1e-9)
+  })
+
+  it('a flick from rest is a stroke: a surge that fades, once per flick, after a cooldown', () => {
+    const w = quietWorld()
+    const ev: Ev[] = []
+    stepWorld(w, STEP, [{ x: 0, y: 0 }, null], ev)
+    const y0 = w.swim[0].y
+    stepWorld(w, STEP, [{ x: 0, y: -1 }, null], ev)
+    expect(ev.filter((e) => e.k === 'dash')).toHaveLength(1)
+    expect(y0 - w.swim[0].y).toBeGreaterThan(SPEED * STEP * 1.5)
+    expect(y0 - w.swim[0].y).toBeLessThanOrEqual(SPEED * (1 + DASH_BOOST) * STEP + 1e-9)
+    // Holding the stick down does not stroke again, and the surge fades.
+    for (let i = 0; i < 60; i++) stepWorld(w, STEP, [{ x: 0, y: -1 }, null], ev)
+    expect(ev.filter((e) => e.k === 'dash')).toHaveLength(1)
+    expect(surge(w.swim[0], w.t)).toBe(1)
+    // Let go and flick again: a second stroke once the cooldown is over.
+    stepWorld(w, STEP, [{ x: 0, y: 0 }, null], ev)
+    stepWorld(w, STEP, [{ x: 0, y: -1 }, null], ev)
+    expect(ev.filter((e) => e.k === 'dash')).toHaveLength(w.t >= DASH_COOL ? 2 : 1)
+  })
+
+  it('a slow push from rest is not a stroke', () => {
+    const w = quietWorld()
+    const ev: Ev[] = []
+    for (let i = 0; i <= 20; i++) stepWorld(w, STEP, [{ x: 0, y: -i / 20 }, null], ev)
+    expect(ev.some((e) => e.k === 'dash')).toBe(false)
   })
 })
 
@@ -158,6 +190,27 @@ describe('the result', () => {
   })
 })
 
+describe('pace', () => {
+  it('two quicker schools join late, entering from off the table', () => {
+    const schools = schoolsFor(new Rng(4), 60)
+    const late = schools.filter((sc) => sc.from !== undefined)
+    expect(late.map((sc) => sc.from)).toEqual([24, 42])
+    for (const sc of late) {
+      const from = sc.from ?? 0
+      expect(fishAt([sc], from - 0.5)).toHaveLength(0)
+      // At its start time the leader is just off the left edge, sweeping in.
+      const lead = leaderAt(sc, from)
+      expect(lead?.x).toBeLessThan(0)
+    }
+    // The late schools sweep in: some of their fish are on the table soon after joining.
+    const seen = (sc: (typeof late)[number]) =>
+      Array.from({ length: 40 }, (_, i) => fishAt([sc], (sc.from ?? 0) + i * 0.1).length).some(
+        (n) => n > 0,
+      )
+    expect(late.every(seen)).toBe(true)
+  })
+})
+
 describe('bot', () => {
   for (const d of ['easy', 'normal', 'hard'] as const) {
     it(`${d} bots cross the river in a 60 s game`, () => {
@@ -178,17 +231,19 @@ describe('bot', () => {
     })
   }
 
-  it('the hard bot gets more crossings than the easy one', () => {
-    const count = (d: 'easy' | 'hard') => {
+  it('hard crosses more than normal, normal more than easy', () => {
+    const count = (d: 'easy' | 'normal' | 'hard') => {
       let n = 0
-      for (let seed = 1; seed <= 3; seed++) {
-        const w = newWorld(schoolsFor(new Rng(seed)))
+      for (let seed = 1; seed <= 4; seed++) {
+        const w = newWorld(schoolsFor(new Rng(seed), 60))
         const bot = new PiranhaBot(new Rng(seed), d)
         while (w.t < 60) stepWorld(w, STEP, [bot.drive(w, 0, STEP), null], [])
         n += w.swim[0].crossings
       }
       return n
     }
-    expect(count('hard')).toBeGreaterThanOrEqual(count('easy'))
+    const [easy, normal, hard] = [count('easy'), count('normal'), count('hard')]
+    expect(hard).toBeGreaterThan(normal)
+    expect(normal).toBeGreaterThan(easy)
   })
 })

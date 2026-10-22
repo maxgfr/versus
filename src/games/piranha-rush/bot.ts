@@ -23,10 +23,14 @@ interface Skill {
   slip: number
 }
 
+/**
+ * Easy wades in at a gentle pace (never fast enough for a stroke); normal and
+ * hard push off with a full flick, so they surge out of the bank.
+ */
 const SKILL: Record<Difficulty, Skill> = {
   easy: { react: 0.5, clear: 130, pace: 0.8, slip: 0.2 },
-  normal: { react: 0.3, clear: 110, pace: 0.95, slip: 0.06 },
-  hard: { react: 0.18, clear: 96, pace: 1, slip: 0 },
+  normal: { react: 0.22, clear: 104, pace: 1, slip: 0.04 },
+  hard: { react: 0.1, clear: 88, pace: 1, slip: 0 },
 }
 
 /** Sideways steps the bot considers when looking for a gap, nearest first. */

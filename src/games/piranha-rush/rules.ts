@@ -27,6 +27,16 @@ export const FISH = 3
 export const FISH_GAP = 64
 /** How far off the table a school sweeps before turning back (hidden). */
 const SWEEP_PAD = 140
+/**
+ * A stroke: flick the stick from rest to full in a blink and the swimmer
+ * surges (speed × (1 + DASH_BOOST), fading over DASH_TIME). Holding the stick
+ * down does not repeat it: let it come back and flick again, after DASH_COOL.
+ */
+export const DASH_BOOST = 0.9
+export const DASH_TIME = 0.45
+export const DASH_COOL = 1.3
+/** Rest-to-full within this long counts as a flick (s). */
+export const FLICK = 0.16
 
 export interface Swimmer {
   side: Side
@@ -38,6 +48,10 @@ export interface Swimmer {
   stunT: number
   crossings: number
   bites: number
+  /** Stick magnitude last step, when it was last near rest, and the last stroke (world time). */
+  mag: number
+  lowAt: number
+  dashAt: number
 }
 
 /** A school of piranhas that sweeps left and right across the river in a pattern. */
@@ -49,6 +63,8 @@ export interface School {
   speed: number
   offset: number
   pause: number
+  /** World time the school joins the river (later schools make the end of a match busier). */
+  from?: number
 }
 
 export interface World {
@@ -62,9 +78,14 @@ export type Ev =
   | { k: 'far'; side: Side; x: number; y: number }
   | { k: 'cross'; side: Side; x: number; y: number }
   | { k: 'bite'; side: Side; x: number; y: number }
+  | { k: 'dash'; side: Side; x: number; y: number }
 
-/** Schools for a match: a few lanes through the river, each on its own rhythm. */
-export function schoolsFor(rng: Rng): School[] {
+/**
+ * Schools for a match: a few lanes through the river, each on its own rhythm.
+ * Two quicker schools join at 40% and 70% of the match (`total` seconds), so
+ * the water gets busier as the clock runs down.
+ */
+export function schoolsFor(rng: Rng, total = 60): School[] {
   const n = 3
   const out: School[] = []
   for (let i = 0; i < n; i++) {
@@ -78,12 +99,42 @@ export function schoolsFor(rng: Rng): School[] {
       pause: rng.range(1.2, 2.6),
     })
   }
+  for (const [k, at] of [
+    [0.25, 0.4],
+    [0.75, 0.7],
+  ] as const) {
+    const speed = rng.range(270, 340)
+    const sweep = (W + 2 * SWEEP_PAD) / speed
+    const pause = rng.range(1.4, 2.4)
+    const from = total * at
+    const cycle = 2 * (sweep + pause)
+    out.push({
+      y: RIVER_TOP + 80 + k * (RIVER_BOT - RIVER_TOP - 160) + rng.range(-15, 15),
+      wiggle: rng.range(10, 30),
+      speed,
+      // Enter from off the table at `from`, never mid-river.
+      offset: (((-from % cycle) + cycle) % cycle) + 1e-3,
+      pause,
+      from,
+    })
+  }
   return out
 }
 
 export function newSwimmer(side: Side): Swimmer {
   const h = HOME[side] as { x: number; y: number }
-  return { side, x: h.x, y: h.y, phase: 0, stunT: -1, crossings: 0, bites: 0 }
+  return {
+    side,
+    x: h.x,
+    y: h.y,
+    phase: 0,
+    stunT: -1,
+    crossings: 0,
+    bites: 0,
+    mag: 0,
+    lowAt: 0,
+    dashAt: -9,
+  }
 }
 
 export function newWorld(schools: School[]): World {
@@ -110,6 +161,7 @@ export function fishAt(
 ): { x: number; y: number; dir: 1 | -1 }[] {
   const out: { x: number; y: number; dir: 1 | -1 }[] = []
   for (const sc of schools) {
+    if (sc.from !== undefined && t < sc.from) continue
     const lead = leaderAt(sc, t)
     if (!lead) continue
     for (let i = 0; i < FISH; i++) {
@@ -139,6 +191,11 @@ export function atHome(side: Side, y: number): boolean {
   return side === 0 ? y > RIVER_BOT : y < RIVER_TOP
 }
 
+/** Speed multiplier from the swimmer's last stroke at time t. */
+export function surge(s: Swimmer, t: number): number {
+  return 1 + DASH_BOOST * Math.max(0, 1 - (t - s.dashAt) / DASH_TIME)
+}
+
 /** Advance the river one step. `drives[side]` is the joystick vector (|v| ≤ 1) or null. */
 export function stepWorld(
   w: World,
@@ -152,13 +209,19 @@ export function stepWorld(
     const d = drives[side]
     if (s.stunT < 0 || w.t >= s.stunT) {
       s.stunT = -1
-      if (d) {
-        const m = Math.min(1, Math.hypot(d.x, d.y))
-        if (m > 0.06) {
-          const k = Math.hypot(d.x, d.y) || 1
-          s.x += (d.x / k) * SPEED * m * dt
-          s.y += (d.y / k) * SPEED * m * dt
-        }
+      const m = d ? Math.min(1, Math.hypot(d.x, d.y)) : 0
+      // A flick from rest to full is a stroke.
+      if (m >= 0.9 && s.mag < 0.9 && w.t - s.lowAt <= FLICK && w.t - s.dashAt >= DASH_COOL) {
+        s.dashAt = w.t
+        ev.push({ k: 'dash', side, x: s.x, y: s.y })
+      }
+      if (m < 0.3) s.lowAt = w.t
+      s.mag = m
+      if (d && m > 0.06) {
+        const k = Math.hypot(d.x, d.y) || 1
+        const v = SPEED * m * surge(s, w.t)
+        s.x += (d.x / k) * v * dt
+        s.y += (d.y / k) * v * dt
       }
       s.x = Math.max(EDGE_PAD, Math.min(W - EDGE_PAD, s.x))
       s.y = Math.max(40, Math.min(H - 40, s.y))
@@ -184,6 +247,8 @@ export function stepWorld(
           s.x = h.x
           s.y = h.y
           s.stunT = w.t + STUN
+          s.mag = 0
+          s.dashAt = -9
           break
         }
       }
