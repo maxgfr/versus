@@ -11,6 +11,12 @@ export interface Look {
   draw: { power: number; angle: number; landing: Pt } | null
   /** Show the "pull back" hint to the human on turn. */
   hint: boolean
+  /** Flight clock interpolated for this frame. */
+  ft: number
+  /** Spring offset of the boss rocking after a strike. */
+  thump: number
+  /** Archer squash springs (1 = rest). */
+  squash: [number, number]
 }
 
 const hash = (i: number, k: number): number => {
@@ -172,27 +178,42 @@ function drawArcher(
   active: boolean,
   mood: 'happy' | 'wow' | 'sad' | 'grin',
   pull: number,
+  squash: number,
+  now: number,
 ): void {
   const b = BOW[side]
   const f = side === 0 ? 1 : -1
   const x = b.x - f * 150
   const y = b.y + f * 6
+  // Idle breathing, the draw stretching it tall, the release squashing it.
+  const breathe = Math.sin(now * 2.4 + side * 1.7) * 0.025
+  const sq = squash + breathe
   g.shadow(x + 6, y + 44, 50, 14, 0.35)
   g.blob(x, y, 52, active ? SIDE[side].main : shade(SIDE[side].main, -0.35), {
     mood,
     look: [f * 0.5, -f * 0.9],
     angle: g.orient(side),
-    sx: 1 - pull * 0.08,
-    sy: 1 + pull * 0.08,
+    sx: (1 - pull * 0.08) * (2 - sq),
+    sy: (1 + pull * 0.08) * sq,
   })
 }
 
 export function render(g: Draw, s: State, look: Look, now: number): void {
   drawRange(g)
-  drawTarget(g)
+  // The boss rocks back on a strike, arrows and all.
+  const rock = 1 + look.thump * 0.035
+  g.at(
+    TARGET.x,
+    TARGET.y,
+    look.thump * 0.01,
+    () =>
+      g.at(-TARGET.x, -TARGET.y, 0, () => {
+        drawTarget(g)
+        for (const a of s.stuck) drawStuck(g, a, now)
+      }),
+    rock,
+  )
   floodlit(g, 0.36)
-
-  for (const a of s.stuck) drawStuck(g, a, now)
 
   // The shooter's aim: a dotted line down the arrow's path and a reticle where it would land.
   if (look.draw && s.phase === 'aim') {
@@ -235,7 +256,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
           : pull > 0.8
             ? 'wow'
             : 'happy'
-    drawArcher(g, side, on, mood, pull)
+    drawArcher(g, side, on, mood, pull, look.squash[side], now)
     const looseAge = now - s.looseAt
     const twang =
       s.flight?.side === side && looseAge < 0.25
@@ -260,7 +281,7 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 
   if (s.flight) {
     const f = s.flight
-    const k = Math.min(1, f.t / f.dur)
+    const k = Math.min(1, look.ft / f.dur)
     const e = k * (2 - k)
     const x = f.from.x + (f.to.x - f.from.x) * e
     const y = f.from.y + (f.to.y - f.from.y) * e
@@ -276,8 +297,17 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       alpha('#000000', 0.22),
       angle,
     )
-    g.alpha(0.3, () =>
-      g.line(x, y - lift, x - Math.cos(angle) * 220, y - lift - Math.sin(angle) * 220, C.white, 6),
+    // Speed streak: longer and brighter the harder the draw.
+    const streak = 120 + 260 * f.power
+    g.alpha(0.2 + 0.25 * f.power, () =>
+      g.line(
+        x,
+        y - lift,
+        x - Math.cos(angle) * streak,
+        y - lift - Math.sin(angle) * streak,
+        C.white,
+        4 + 4 * f.power,
+      ),
     )
     g.at(x, y - lift, angle, () => arrowShape(g, f.side, 120), scale, scale)
   }
@@ -296,10 +326,10 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
   if (s.endAt >= 0) tally(g, s.totals, result(s), now - s.endAt - 0.8, 'Final score')
 }
 
-/** HUD: totals big at the edge, arrows left as pips. */
-export function hud(g: Draw, s: State): void {
+/** HUD: totals big at the edge (they jump when they grow), arrows left as pips. */
+export function hud(g: Draw, s: State, pulse: [number, number]): void {
   for (const side of [0, 1] as const) {
-    bigScore(g, side, s.totals[side], { x: 130, size: 64 })
+    bigScore(g, side, s.totals[side], { x: 130, size: 64 * (1 + pulse[side] * 0.35) })
     pips(g, side, s.arrows - s.shot[side], s.arrows, { x: W - 150 })
   }
 }

@@ -46,6 +46,8 @@ export interface Flight {
   dur: number
   score: number
   label: string
+  /** The draw (0..1) it was loosed with: a harder draw flies faster and hits harder. */
+  power: number
 }
 
 export interface State {
@@ -111,18 +113,34 @@ export function newState(first: Side, wind: number, arrows = ARROWS): State {
   }
 }
 
+/** Flight time: a full draw is a fast arrow, a soft one hangs in the air. */
+export function flightTime(from: Pt, to: Pt, power: number): number {
+  const d = Math.hypot(to.x - from.x, to.y - from.y)
+  return Math.min(0.7, Math.max(0.28, d / (700 + 1300 * power)))
+}
+
 /** Loose an arrow from the side on turn. */
 export function loose(s: State, shot: ShotParams, t: number): void {
   const side = s.turn
   const to = landingOf(side, shot, t, s.wind)
   const sc = scoreAt(to)
-  s.flight = { side, from: { ...BOW[side] }, to, t: 0, dur: 0.45, score: sc.score, label: sc.label }
+  const from = { ...BOW[side] }
+  s.flight = {
+    side,
+    from,
+    to,
+    t: 0,
+    dur: flightTime(from, to, shot.power),
+    score: sc.score,
+    label: sc.label,
+    power: shot.power,
+  }
   s.shot[side]++
   s.aim = null
   s.phase = 'fly'
 }
 
-export type Event = { kind: 'stick'; arrow: Arrow } | { kind: 'turn'; side: Side }
+export type Event = { kind: 'stick'; arrow: Arrow; power: number } | { kind: 'turn'; side: Side }
 
 export function advance(s: State, dt: number, nextWind: () => number): Event[] {
   const ev: Event[] = []
@@ -137,7 +155,7 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
     s.flight = null
     s.phase = 'beat'
     s.beat = 1.0
-    ev.push({ kind: 'stick', arrow })
+    ev.push({ kind: 'stick', arrow, power: f.power })
   } else if (s.phase === 'beat') {
     s.beat -= dt
     if (s.beat > 0) return ev
@@ -153,8 +171,33 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
 /** Over once every arrow has landed (not merely been loosed), so the last one still counts. */
 export const done = (s: State): boolean => s.stuck.length >= 2 * s.arrows
 
-/** Highest total wins; equal totals draw. */
+/** How many of a side's arrows scored exactly `ring`. */
+export function countRing(s: State, side: Side, ring: number): number {
+  let n = 0
+  for (const a of s.stuck) if (a.side === side && a.score === ring) n++
+  return n
+}
+
+/**
+ * Highest total wins. Level totals go to the count-back, as on a real range:
+ * more 10s, then more 9s. Only a full match of identical arrows is a draw.
+ */
 export function result(s: State): Side | 'draw' {
   const [r, b] = s.totals
-  return r > b ? 0 : b > r ? 1 : 'draw'
+  if (r !== b) return r > b ? 0 : 1
+  for (const ring of [10, 9]) {
+    const d = countRing(s, 0, ring) - countRing(s, 1, ring)
+    if (d !== 0) return d > 0 ? 0 : 1
+  }
+  return 'draw'
+}
+
+/** Why the winner won, when the totals alone do not say it. */
+export function countBack(s: State): string | null {
+  if (s.totals[0] !== s.totals[1]) return null
+  for (const ring of [10, 9]) {
+    if (countRing(s, 0, ring) !== countRing(s, 1, ring))
+      return `Level on ${s.totals[0]}: more ${ring}s wins`
+  }
+  return null
 }

@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { type Difficulty, STEP, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './bot.ts'
+import { choose, steady } from './bot.ts'
 import {
   advance,
   ARROWS,
   BOW,
+  countBack,
   done,
+  flightTime,
   landingOf,
   loose,
   newState,
@@ -34,7 +36,8 @@ function match(
   while (!done(s) && steps < 60 * 60 * 5) {
     if (s.phase === 'aim') {
       const side = s.turn
-      loose(s, choose(side, s.wind, side === 0 ? a : b, rng), t)
+      const d = side === 0 ? a : b
+      loose(s, steady(choose(side, s.wind, d, rng), side, t, d), t)
     }
     advance(s, STEP, wind)
     t += STEP
@@ -142,5 +145,56 @@ describe('archery game', () => {
     let wins = 0
     for (let seed = 1; seed <= 5; seed++) if (result(match(seed, 'hard', 'easy').s) === 0) wins++
     expect(wins).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('archery: edge cases', () => {
+  const arrow = (side: Side, score: number) => ({ x: 0, y: 0, side, score, label: '' })
+
+  it('level totals go to the count-back: more 10s, then more 9s, else a draw', () => {
+    const s = newState(0, 0, 2)
+    s.stuck = [arrow(0, 10), arrow(0, 8), arrow(1, 9), arrow(1, 9)]
+    s.totals = [18, 18]
+    expect(result(s)).toBe(0)
+    expect(countBack(s)).toContain('10s')
+    s.stuck = [arrow(0, 9), arrow(0, 7), arrow(1, 8), arrow(1, 8)]
+    s.totals = [16, 16]
+    expect(result(s)).toBe(0)
+    expect(countBack(s)).toContain('9s')
+    s.stuck = [arrow(0, 8), arrow(0, 6), arrow(1, 7), arrow(1, 7)]
+    s.totals = [14, 14]
+    expect(result(s)).toBe('draw')
+    expect(countBack(s)).toBeNull()
+  })
+
+  it('a harder draw flies faster', () => {
+    const from = BOW[0]
+    const to = TARGET
+    expect(flightTime(from, to, 1)).toBeLessThan(flightTime(from, to, 0.5))
+    expect(flightTime(from, to, 0.2)).toBeLessThanOrEqual(0.7)
+  })
+
+  it('the computer holds against the sway: steadied shots group tighter', () => {
+    const power = (BOW[0].y - TARGET.y) / RANGE_MAX
+    let raw = 0
+    let held = 0
+    for (let i = 0; i < 40; i++) {
+      const t = i * 0.37
+      const shot = straight(0, power)
+      raw += Math.hypot(landingOf(0, shot, t, 0).x - TARGET.x, 0)
+      held += Math.hypot(landingOf(0, steady(shot, 0, t, 'hard'), t, 0).x - TARGET.x, 0)
+    }
+    expect(held).toBeLessThan(raw * 0.2)
+  })
+
+  it('the difficulties are clearly apart in average score', () => {
+    const avg = (d: Difficulty) => {
+      let t = 0
+      for (let seed = 1; seed <= 8; seed++) t += match(seed, d, d).s.totals[0]
+      return t / 8
+    }
+    const [easy, normal, hard] = [avg('easy'), avg('normal'), avg('hard')]
+    expect(normal).toBeGreaterThan(easy + 3)
+    expect(hard).toBeGreaterThan(normal + 3)
   })
 })
