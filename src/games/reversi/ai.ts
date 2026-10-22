@@ -5,12 +5,12 @@ import { type Cell, counts, hasMove, legalMoves, type Move, N, apply } from './r
 
 /**
  * The computer's search. Pure and synchronous, so it runs both on the main
- * thread (easy / normal) and in a Web Worker via `think()` (hard). Negamax with
+ * thread (tests) and in a Web Worker via `think()` (normal and hard). Negamax with
  * α-β pruning over a positional weight table plus mobility, and an exact disc
  * count once the board is nearly full.
  */
 
-const DEPTH: Record<Difficulty, number> = { easy: 1, normal: 3, hard: 5 }
+const DEPTH: Record<Difficulty, number> = { easy: 1, normal: 4, hard: 5 }
 /** Hard plays the ending perfectly once this few squares are left. */
 export const SOLVE = 9
 

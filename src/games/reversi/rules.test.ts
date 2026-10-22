@@ -142,7 +142,7 @@ describe('reversi bot', () => {
     expect(depthFor({ cells, turn: 0 }, 'hard')).toBe(5)
     const late = cells.map((c, i): Cell => c ?? (i < 64 - SOLVE ? ((i % 2) as Side) : null))
     expect(depthFor({ cells: late, turn: 0 }, 'hard')).toBe(SOLVE)
-    expect(depthFor({ cells: late, turn: 0 }, 'normal')).toBe(3)
+    expect(depthFor({ cells: late, turn: 0 }, 'normal')).toBe(4)
   })
 
   it('hard beats normal', () => {
