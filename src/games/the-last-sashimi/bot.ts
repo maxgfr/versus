@@ -4,7 +4,7 @@ import { reactionRange, slipChance } from './rules.ts'
 
 /**
  * Computer chopsticks. Answers the real bell after a difficulty-scaled
- * reaction (280-550 ms). Now and then, on easier levels, it falls for a decoy
+ * reaction (220-550 ms). Now and then, on easier levels, it falls for a decoy
  * flash and taps too soon.
  */
 export class SashimiBot {

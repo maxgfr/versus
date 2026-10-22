@@ -73,17 +73,25 @@ describe('the last sashimi rules', () => {
     expect(some).toBeGreaterThan(50)
   })
 
+  it('at match point the bell is a tenser wait: always at least one decoy, up to three', () => {
+    for (let seed = 0; seed < 100; seed++) {
+      const d = decoysFor(new Rng(seed), 3.5, true)
+      expect(d.length).toBeGreaterThanOrEqual(1)
+      expect(d.length).toBeLessThanOrEqual(3)
+    }
+  })
+
   it('no decoys when the bell is too soon for them', () => {
     expect(decoysFor(new Rng(1), DECOY_FIRST)).toEqual([])
   })
 
-  it('reaction times sit in 280 to 550 ms and get quicker with difficulty', () => {
+  it('reaction times sit in 220 to 550 ms (human range) and get quicker with difficulty', () => {
     const [ea, eb] = reactionRange('easy')
     const [na, nb] = reactionRange('normal')
     const [ha, hb] = reactionRange('hard')
-    expect(ea).toBeGreaterThanOrEqual(0.28)
+    expect(ea).toBeGreaterThanOrEqual(0.22)
     expect(eb).toBeLessThanOrEqual(0.55)
-    expect(ha).toBeGreaterThanOrEqual(0.28)
+    expect(ha).toBeGreaterThanOrEqual(0.22)
     expect(ha).toBeLessThan(na)
     expect(na).toBeLessThan(ea)
     expect(nb).toBeLessThan(eb)

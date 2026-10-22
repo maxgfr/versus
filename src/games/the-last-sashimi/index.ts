@@ -90,7 +90,8 @@ class LastSashimi extends BaseGame<State> {
   private startRound(): void {
     const s = this.s
     s.sig = roundSignal(this.ctx.rng)
-    s.decoys = decoysFor(this.ctx.rng, s.sig.at)
+    const tense = Math.max(s.rounds.wins[0], s.rounds.wins[1]) >= s.rounds.target - 1
+    s.decoys = decoysFor(this.ctx.rng, s.sig.at, tense)
     s.shown = 0
     s.ringAt = -1
     s.took = null

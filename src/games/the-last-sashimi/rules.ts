@@ -46,9 +46,13 @@ export function roundSignal(rng: Rng): SignalState {
   return signalNew(rng, WAIT_MIN, WAIT_MAX, 0)
 }
 
-/** Seeded decoy flash times (seconds since the wait began), in order, before the real bell. */
-export function decoysFor(rng: Rng, realAt: number): number[] {
-  const count = rng.int(0, 2)
+/**
+ * Seeded decoy flash times (seconds since the wait began), in order, before the
+ * real bell. More of them when `tense` (someone is one round from winning).
+ */
+export function decoysFor(rng: Rng, realAt: number, tense = false): number[] {
+  // At match point the wait gets tenser: always a decoy, sometimes three.
+  const count = tense ? rng.int(1, 3) : rng.int(0, 2)
   const hi = realAt - DECOY_GAP
   if (hi <= DECOY_FIRST) return []
   const times: number[] = []
@@ -84,10 +88,10 @@ export function grabLabel(reaction: number): string {
 
 /** Reaction time after the real bell, by difficulty (seconds). */
 export function reactionRange(d: 'easy' | 'normal' | 'hard'): [number, number] {
-  return d === 'easy' ? [0.42, 0.55] : d === 'normal' ? [0.34, 0.45] : [0.28, 0.34]
+  return d === 'easy' ? [0.42, 0.55] : d === 'normal' ? [0.3, 0.38] : [0.22, 0.28]
 }
 
 /** Chance a bot falls for a decoy flash, by difficulty. */
 export function slipChance(d: 'easy' | 'normal' | 'hard'): number {
-  return d === 'easy' ? 0.3 : d === 'normal' ? 0.15 : 0.04
+  return d === 'easy' ? 0.3 : d === 'normal' ? 0.1 : 0.03
 }
