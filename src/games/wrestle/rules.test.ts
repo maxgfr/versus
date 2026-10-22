@@ -11,6 +11,9 @@ import factory, { match } from './index.ts'
 import { botTap, newMind, type BotView } from './bot.ts'
 import {
   COOLDOWN,
+  FLICK_MIN,
+  FLICK_V,
+  flickBoost,
   grounded,
   headDown,
   HEAD_R,
@@ -19,7 +22,10 @@ import {
   matchOver,
   RING,
   roundLoser,
+  ROUND_TIME,
+  stamina,
   STAND_Y,
+  TIRED,
   timeoutLoser,
 } from './rules.ts'
 import { addRing, addWrestler, partId, uprightTorques } from './sim.ts'
@@ -31,7 +37,7 @@ function fakeCtx(seed: number, difficulty: Difficulty, target: number): GameCont
     stage: {} as Stage,
     input: { player: (s: 0 | 1) => inputs[s] } as unknown as Input,
     fx: new Fx(),
-    audio: { play: () => {} } as unknown as Audio,
+    audio: { play: () => {}, buzz: () => {} } as unknown as Audio,
     rng: new Rng(seed),
     mode: '1p',
     difficulty,
@@ -103,6 +109,28 @@ describe('wrestle rules', () => {
   })
 })
 
+describe('wrestle pacing and flicks', () => {
+  it('wrestlers tire as the round drags on, down to a floor', () => {
+    expect(stamina(0)).toBe(1)
+    expect(stamina(ROUND_TIME / 2)).toBeLessThan(1)
+    expect(stamina(ROUND_TIME / 2)).toBeGreaterThan(TIRED)
+    expect(stamina(ROUND_TIME * 3)).toBeCloseTo(TIRED)
+  })
+
+  it('a short drag is no flick; a fast one pushes its way, up to FLICK_V', () => {
+    expect(flickBoost(FLICK_MIN - 5, 0, 0.05)).toEqual({ vx: 0, vy: 0 })
+    const right = flickBoost(300, 0, 0.08)
+    expect(right.vx).toBeCloseTo(FLICK_V)
+    expect(right.vy).toBeCloseTo(0)
+    const up = flickBoost(0, -300, 0.08)
+    expect(up.vy).toBeCloseTo(-FLICK_V)
+    // A downward flick never pushes into the mat.
+    expect(flickBoost(0, 300, 0.08).vy).toBe(0)
+    // A slow drag is weaker than a flick.
+    expect(flickBoost(300, 0, 1).vx).toBeLessThan(right.vx / 2)
+  })
+})
+
 describe('wrestle bot', () => {
   const view = (over: Partial<BotView>): BotView => ({
     me: { x: 330, y: STAND_Y },
@@ -117,6 +145,25 @@ describe('wrestle bot', () => {
     const mind = newMind()
     expect(botTap(view({ time: 5 }), 'hard', rng, mind)).toBe(false)
     expect(botTap(view({ time: 5.3 }), 'hard', rng, mind)).toBe(true)
+  })
+
+  it('hard waits a beat for a ready rival to commit, then goes anyway', () => {
+    const rng = new Rng(4)
+    const mind = newMind()
+    let first = -1
+    for (let t = 5; t < 7 && first < 0; t += 1 / 60) {
+      if (botTap(view({ time: t, rivalCool: 0 }), 'hard', rng, mind)) first = t
+    }
+    expect(first).toBeGreaterThan(5.3)
+    expect(first).toBeLessThan(6)
+    // Against a rival still recovering from its own move, it goes at once.
+    const quick = newMind()
+    let at = -1
+    for (let t = 5; t < 7 && at < 0; t += 1 / 60) {
+      if (botTap(view({ time: t, rivalCool: 0.4 }), 'hard', new Rng(4), quick)) at = t
+    }
+    expect(at).toBeGreaterThan(0)
+    expect(at).toBeLessThan(first)
   })
 
   it('does not tap out of reach, in the air or while cooling down', () => {

@@ -62,8 +62,11 @@ function righting(b: Body, kp: number): number {
   return (b.inertia * (-kp * k * b.angle - 0.1 * b.angularVelocity)) / STEP2
 }
 
-/** Apply the upright reflex to one wrestler's torso, head and both legs. */
-export function uprightTorques(w: PhysicsWorld, side: Side): void {
+/**
+ * Apply the upright reflex to one wrestler's torso, head and both legs.
+ * `strength` (0..1) scales it: a tired wrestler late in a round topples sooner.
+ */
+export function uprightTorques(w: PhysicsWorld, side: Side, strength = 1): void {
   const parts: [number, number][] = [
     [PART.torso, UPRIGHT.torso],
     [PART.head, UPRIGHT.head],
@@ -72,7 +75,7 @@ export function uprightTorques(w: PhysicsWorld, side: Side): void {
   ]
   for (const [i, kp] of parts) {
     const b = w.bodies.get(partId(side, i))
-    if (b) b.torque += righting(b, kp)
+    if (b) b.torque += righting(b, kp * strength)
   }
 }
 

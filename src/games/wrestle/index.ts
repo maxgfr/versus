@@ -11,12 +11,15 @@ import {
   type M,
   PhysicsWorld,
 } from '../../engines/ragdoll/index.ts'
-import { botTap, type BotMind, newMind } from './bot.ts'
+import { BOT_FLICK, botTap, type BotMind, newMind } from './bot.ts'
 import { drawPad, type PadMsg, padRegion } from './pad.ts'
 import { BAND_TOP, drawScene, type SceneView } from './render.ts'
 import {
   AIR_LUNGE_VX,
   COOLDOWN,
+  FLICK_V,
+  FLICK_WINDOW,
+  flickBoost,
   grounded,
   HOME_X,
   JUMP_V,
@@ -27,6 +30,7 @@ import {
   ROUND_PAUSE,
   ROUND_TIME,
   roundLoser,
+  stamina,
   timeoutLoser,
 } from './rules.ts'
 import {
@@ -96,6 +100,10 @@ class Wrestle extends BaseGame<State> {
   /** Game time of each human's latest unanswered tap (host only, not state). */
   private wantAt: [number, number] = [-9, -9]
   private wasUp: [boolean, boolean] = [false, false]
+  /** Pointers whose flick has already been spent (host only). */
+  private flicked = new Set<number>()
+  /** Cosmetic only (not synced): the body snapshot of the step before, for interpolation. */
+  private prev: BodySnap[] | null = null
 
   protected setup(): State {
     void loadMatter().then((Mx) => {
@@ -144,12 +152,16 @@ class Wrestle extends BaseGame<State> {
         const s = this.s
         if (speed > 6 && this.time - s.clashAt > 0.3 && s.phase === 'fight') {
           // A real clash: freeze a beat, shake, and stamp it so everyone sees the star.
+          // The harder the two meet, the bigger it lands.
+          const k = Math.min(1, (speed - 6) / 10)
           s.clashAt = this.time
           s.clash = [Math.round(mid.x), Math.round(mid.y)]
-          this.ctx.audio.play('hit', 0.9)
-          this.ctx.fx.shake(0.22)
-          this.ctx.fx.stop(3)
-          this.ctx.fx.sparks(mid.x, mid.y, C.yellow, 14)
+          this.ctx.audio.play('hit', 1 - k * 0.25)
+          this.ctx.audio.buzz(15 + Math.round(k * 25))
+          this.ctx.fx.shake(0.16 + k * 0.3)
+          this.ctx.fx.stop(2 + Math.round(k * 4))
+          this.ctx.fx.sparks(mid.x, mid.y, C.yellow, 10 + Math.round(k * 14))
+          if (k > 0.5) this.ctx.fx.ring(mid.x, mid.y, C.white, 120 + k * 80)
         }
         const hitter = a.speed >= b.speed ? a : b
         const victim = this.part(hitter === a ? sb : sa, TORSO)
@@ -175,7 +187,13 @@ class Wrestle extends BaseGame<State> {
       const rival = this.part(other(side), TORSO)
       if (!me || !rival) return false
       return botTap(
-        { me: me.position, rival: rival.position, cool: s.cool[side], time: this.time },
+        {
+          me: me.position,
+          rival: rival.position,
+          cool: s.cool[side],
+          rivalCool: s.cool[other(side)],
+          time: this.time,
+        },
         this.ctx.difficulty,
         this.ctx.rng,
         this.minds[side],
@@ -193,6 +211,53 @@ class Wrestle extends BaseGame<State> {
     this.wantAt[side] = this.time
     const d = downs[0]
     if (d) tapRipple(this.ctx, side, d.x, d.y)
+  }
+
+  /**
+   * A flick right after a jump steers it: the finger's direction (as the
+   * player sees the ring) and speed add a push that way, or extra height.
+   */
+  private flicks(side: Side): void {
+    if (this.isBot(side)) return
+    const s = this.s
+    if (this.time - s.tapAt[side] > FLICK_WINDOW) return
+    const inp = this.ctx.input.player(side)
+    // Blue sits across the table in local 2P: the ring is upside down for them.
+    const flip = this.ctx.mode === '2p' && side === 1 ? -1 : 1
+    const check = (p: { id: number; x: number; y: number; x0: number; y0: number; t0: number }) => {
+      if (this.flicked.has(p.id) || p.t0 < s.tapAt[side] - 0.2) return
+      const b = flickBoost((p.x - p.x0) * flip, (p.y - p.y0) * flip, this.time - p.t0)
+      if (b.vx === 0 && b.vy === 0) return
+      this.flicked.add(p.id)
+      this.boost(side, b.vx, b.vy)
+    }
+    for (const p of inp.held.values()) check(p)
+    for (const p of inp.ups) check(p)
+  }
+
+  /** Push a wrestler's whole body by (vx, vy) per step: a flicked or a bot's extra-hard lunge. */
+  private boost(side: Side, vx: number, vy: number): void {
+    const Mx = this.Mx
+    if (!Mx) return
+    for (let i = 0; i < 6; i++) {
+      const p = this.part(side, i)
+      if (p) Mx.Body.setVelocity(p, { x: p.velocity.x + vx, y: p.velocity.y + vy })
+    }
+    const k = Math.min(1, Math.hypot(vx, vy) / FLICK_V)
+    const torso = this.part(side, TORSO)
+    this.ctx.audio.play('whoosh', 1.1 + k * 0.3)
+    this.ctx.audio.buzz(8 + Math.round(k * 10))
+    if (torso)
+      this.ctx.fx.burst(torso.position.x, torso.position.y, SIDE[side].light, {
+        count: 4 + Math.round(k * 8),
+        speed: 260 + k * 260,
+        size: 8,
+        life: 0.3,
+        gravity: 0,
+        spread: 0.8,
+        dir: Math.atan2(-vy, -vx),
+        kind: 'spark',
+      })
   }
 
   /** Dust and a thud when a wrestler lands back on the canvas. */
@@ -337,6 +402,8 @@ class Wrestle extends BaseGame<State> {
     s.winner = null
     this.minds = [newMind(), newMind()]
     this.wantAt = [-9, -9]
+    this.flicked.clear()
+    this.prev = null
     this.ctx.audio.play('go')
   }
 
@@ -344,6 +411,9 @@ class Wrestle extends BaseGame<State> {
     const w = this.world
     if (!w || !this.Mx) return
     const s = this.s
+    // The ring is ready (matter loads async): round 1 starts its intro now.
+    if (s.bodies.length === 0) s.phaseAt = this.time
+    this.prev = s.bodies
     if (s.phase === 'fight') {
       for (const side of [0, 1] as Side[]) {
         s.cool[side] = Math.max(0, s.cool[side] - dt)
@@ -351,8 +421,18 @@ class Wrestle extends BaseGame<State> {
         if (s.cool[side] <= 0 && this.wantsTap(side)) {
           this.wantAt[side] = -9
           this.lunge(side)
+          // Bots flick their lunges too: harder bots throw more of their weight in.
+          const f = this.isBot(side) ? BOT_FLICK[this.ctx.difficulty] : 0
+          const me = this.part(side, TORSO)
+          const rival = this.part(other(side), TORSO)
+          if (f > 0 && me && rival) {
+            const dir = lungeDir(side, me.position.x, rival.position.x)
+            this.boost(side, dir * FLICK_V * f * 0.8, -FLICK_V * f * 0.4)
+          }
         }
-        uprightTorques(w, side)
+        this.flicks(side)
+        // Wrestlers tire as the round drags on: easier to topple late.
+        uprightTorques(w, side, stamina(s.roundT))
         this.sway(side)
       }
       s.roundT += dt
@@ -406,6 +486,7 @@ class Wrestle extends BaseGame<State> {
         })
       }
     }
+    this.prev = s.bodies
     w.step(dt)
     s.bodies = w.snap()
   }
@@ -436,11 +517,29 @@ class Wrestle extends BaseGame<State> {
     return null
   }
 
-  render(g: Draw): void {
+  /** Bodies between the last two steps (the host steps at 60 Hz; screens may draw faster). */
+  private lerped(a: number): BodySnap[] {
+    const cur = this.s.bodies
+    const prev = this.prev
+    if (!prev || prev.length !== cur.length || a >= 1) return cur
+    return cur.map((b, i) => {
+      const p = prev[i]
+      if (!p || p.id !== b.id) return b
+      return {
+        id: b.id,
+        k: b.k,
+        x: p.x + (b.x - p.x) * a,
+        y: p.y + (b.y - p.y) * a,
+        a: p.a + (b.a - p.a) * a,
+      }
+    })
+  }
+
+  render(g: Draw, alpha: number): void {
     const s = this.s
     const t = this.time
     const view: SceneView = {
-      bodies: s.bodies,
+      bodies: this.lerped(alpha),
       phase: s.phase,
       phaseAge: t - s.phaseAt,
       winner: s.winner,
@@ -463,7 +562,7 @@ class Wrestle extends BaseGame<State> {
       const label = urgent
         ? `0:${String(Math.max(0, Math.ceil(left))).padStart(2, '0')}`
         : human
-          ? 'Tap to jump'
+          ? 'Tap to jump, flick to push'
           : ''
       const pad = {
         side,
@@ -474,10 +573,17 @@ class Wrestle extends BaseGame<State> {
         time: t,
         msg: this.padMsg(side),
       }
-      drawPad(g, urgent ? { ...pad, labelColor: C.yellow } : pad)
+      // Online, each phone shows only its own player's pad.
+      if (g.viewer === null || side === g.viewer)
+        drawPad(g, urgent ? { ...pad, labelColor: C.yellow } : pad)
       namePill(g, side, this.ctx.names[side], { active: false })
       pips(g, side, s.wins[side], this.goal, { x: side === 0 ? W - 150 : 150 })
     }
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
   }
 
   override destroy(): void {

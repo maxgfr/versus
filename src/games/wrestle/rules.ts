@@ -31,6 +31,36 @@ export const HEAD_R = 30 * SCALE
 /** Where each wrestler starts a round, red on the left. */
 export const HOME_X: readonly [number, number] = [330, 670]
 
+/**
+ * Wrestlers tire as a round drags on: their upright reflex fades to this
+ * share by the end of the round clock, so long rounds tip over into a fall.
+ */
+export const TIRED = 0.45
+/** Upright reflex strength `roundT` seconds into a round (1 fresh, TIRED at the clock). */
+export function stamina(roundT: number): number {
+  return 1 - (1 - TIRED) * Math.min(1, Math.max(0, roundT / ROUND_TIME))
+}
+
+/** A flick right after a jump adds up to this much speed (per step) in the flick's direction. */
+export const FLICK_V = 3.4
+/** The flick must come within this many seconds of the jump, and travel this far. */
+export const FLICK_WINDOW = 0.25
+export const FLICK_MIN = 60
+/** Finger speed (units/s) for a full-strength flick. */
+export const FLICK_FULL = 2600
+
+/**
+ * Extra velocity (per step) for a flick moving (dx, dy) in `dur` seconds, in
+ * the flicker's own view: sideways becomes a push that way, upward extra
+ * height. Downward flicks only steer sideways.
+ */
+export function flickBoost(dx: number, dy: number, dur: number): { vx: number; vy: number } {
+  const d = Math.hypot(dx, dy)
+  if (d < FLICK_MIN) return { vx: 0, vy: 0 }
+  const k = Math.min(1, d / Math.max(dur, 1 / 60) / FLICK_FULL)
+  return { vx: (dx / d) * FLICK_V * k, vy: Math.min(0, dy / d) * FLICK_V * k }
+}
+
 /** Upward speed of a jump, per step. */
 export const JUMP_V = 12.5
 /** Sideways speed of a lunge toward the rival, per step. */
