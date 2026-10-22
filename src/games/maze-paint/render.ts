@@ -2,8 +2,8 @@ import type { Side } from '../../core/game.ts'
 import { inCubic, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
-import { HEADER } from '../../engines/puzzle/index.ts'
-import { DX, DY, roll } from './rules.ts'
+import { fmtTime, HEADER } from '../../engines/puzzle/index.ts'
+import { DX, DY, impactOf, neighbour, paintTime, roll } from './rules.ts'
 
 /** Board geometry for a panel of w × h, an n × n maze. */
 export interface Layout {
@@ -39,21 +39,8 @@ export function resetRect(w: number, h: number): { x: number; y: number; w: numb
   return { x: w / 2 - 170, y: h - 98, w: 340, h: 76 }
 }
 
-/** Seconds a roll of `len` tiles takes to animate. */
-export const rollSeconds = (len: number): number => 0.07 + 0.035 * len
-
 /** How long a cleared board celebrates before the next level pops in. */
 export const CLEAR_SECONDS = 0.85
-
-/**
- * Game time the ball paints the `k`-th tile (0-based) of a roll of `len` tiles
- * that began at `rollAt`: when its centre is half a tile short of the tile's
- * centre. Inverts the roll's `outCubic` easing.
- */
-export function paintTime(rollAt: number, len: number, k: number): number {
-  const e = Math.min(1, (k + 0.5) / len)
-  return rollAt + rollSeconds(len) * (1 - Math.cbrt(1 - e))
-}
 
 export interface PanelView {
   side: Side
@@ -66,6 +53,12 @@ export interface PanelView {
   dir: number
   len: number
   rollAt: number
+  /** How long the last roll lasts, and how hard its swipe was (0..1). */
+  dur: number
+  pow: number
+  /** A swipe into a wall: the ball nudges that way and back. */
+  bumpAt: number
+  bumpDir: number
   /** Tiles the last roll painted for the first time (they splash in as the ball passes). */
   newly: readonly number[]
   /** 1-based level number and the total. */
@@ -78,6 +71,10 @@ export interface PanelView {
   now: number
   /** Show the how-to line. */
   hint: boolean
+  /** The rival finished first: the clock to beat, shown instead of the level label. */
+  chase: number | null
+  /** Draw the controls (restart pill, arrows, how-to)? Online, only on the viewer's own board. */
+  controls: boolean
   /** Show yellow arrows around the ball for the rolls that move (0..1 opacity). */
   arrows: number
   /** No roll can finish this board: the restart pill glows. */
@@ -88,7 +85,12 @@ export interface PanelView {
 /** Which levels are done / current, as glossy pips beside the level label. */
 function levelRow(g: Draw, w: number, l: Layout, v: PanelView): void {
   const col = SIDE[v.side]
-  const label = v.hint ? 'Swipe to roll' : `Level ${v.levelNo}`
+  const label =
+    v.chase !== null
+      ? `Beat ${fmtTime(v.chase)}!`
+      : v.hint && v.controls
+        ? 'Swipe to roll'
+        : `Level ${v.levelNo}`
   const size = 40
   const tw = g.measure(label, size, 700)
   const gap = 40
@@ -96,7 +98,13 @@ function levelRow(g: Draw, w: number, l: Layout, v: PanelView): void {
   const total = tw + 30 + pipsW
   const x = w / 2 - total / 2
   const y = Math.max(HEADER + 36, l.y0 - 62)
-  g.text(label, x, y, { size, weight: 700, align: 'left', color: C.white })
+  const urgent = v.chase !== null ? 0.5 + 0.5 * Math.sin(v.now * 8) : 0
+  g.text(label, x, y, {
+    size,
+    weight: 700,
+    align: 'left',
+    color: v.chase !== null ? mix(C.yellow, C.white, urgent * 0.4) : C.white,
+  })
   for (let i = 0; i < v.levels; i++) {
     const px = x + tw + 30 + 13 + i * gap
     const done = i < v.levelNo - 1
@@ -203,14 +211,24 @@ function board(g: Draw, l: Layout, v: PanelView): void {
   const fr = Math.floor(v.from / n)
   const fc = v.from % n
   const cleared = v.clearAt >= 0 && v.now >= v.clearAt
+  // The wall the ball just hit gives a little, harder for a harder hit.
+  const hitWall = v.len > 0 && v.dir >= 0 ? neighbour(n, v.pos, v.dir) : -1
+  const hitT = v.now - v.rollAt - v.dur
+  const give =
+    hitWall >= 0 && v.walls[hitWall] && hitT >= 0 && hitT < 0.3
+      ? impactOf(v.len, v.pow) * Math.sin((hitT / 0.3) * Math.PI) * (1 - hitT / 0.3)
+      : 0
+  const hdx = DX[v.dir] ?? 0
+  const hdy = DY[v.dir] ?? 0
   for (let i = 0; i < v.walls.length; i++) {
     const row = Math.floor(i / n)
     const colI = i % n
     const pop = v.now - v.levelAt - (row + colI) * 0.025
     const s = pop <= 0 ? 0 : outBack(prog(pop, 0, 0.3))
     if (s <= 0.001) continue
-    const cx = x0 + colI * c + c / 2
-    const cy = y0 + row * c + c / 2
+    const shove = i === hitWall ? give * c * 0.1 : 0
+    const cx = x0 + colI * c + c / 2 + hdx * shove
+    const cy = y0 + row * c + c / 2 + hdy * shove
     g.at(
       cx,
       cy,
@@ -224,7 +242,8 @@ function board(g: Draw, l: Layout, v: PanelView): void {
         let paint = v.painted[i] ? 1 : 0
         if (paint && v.newly.includes(i)) {
           const k = Math.abs(row - fr) + Math.abs(colI - fc) - 1
-          paint = prog(v.now, paintTime(v.rollAt, v.len, k), paintTime(v.rollAt, v.len, k) + 0.2)
+          const at = paintTime(v.rollAt, v.dur, v.len, k)
+          paint = prog(v.now, at, at + 0.2)
         }
         let glow = 0
         if (cleared) {
@@ -309,8 +328,9 @@ function piece(g: Draw, side: Side, r: number): void {
 function ball(g: Draw, l: Layout, v: PanelView): void {
   const { n, c, x0, y0 } = l
   const r = c * 0.3
-  const duration = rollSeconds(v.len)
+  const duration = v.dur
   const since = v.now - v.rollAt
+  const hit = impactOf(v.len, v.pow)
   const rolling = v.len > 0 && since < duration
   const base = v.len > 0 ? v.from : v.pos
   const dx = DX[v.dir] ?? 0
@@ -323,18 +343,23 @@ function ball(g: Draw, l: Layout, v: PanelView): void {
     }
   }
   const p = at(since)
-  // Motion trail while it slides.
+  // Motion trail while it slides: longer and brighter for a harder swipe.
   if (rolling) {
-    for (let k = 4; k >= 1; k--) {
-      const q = at(since - k * 0.022)
-      g.alpha(0.16 * (5 - k), () => g.circle(q.x, q.y, r * (1 - k * 0.12), SIDE[v.side].light))
+    const steps = 4 + Math.round(v.pow * 3)
+    for (let k = steps; k >= 1; k--) {
+      const q = at(since - k * 0.02)
+      g.alpha((0.6 + 0.4 * v.pow) * (1 - k / (steps + 1)) * 0.75, () =>
+        g.circle(q.x, q.y, r * (1 - k * 0.09), SIDE[v.side].light),
+      )
     }
   }
-  // Stretch along the roll while fast, squash against the wall it stops at.
+  // Stretch along the roll while fast, squash against the wall it stops at:
+  // both scale with how hard it was launched.
   const tt = prog(since, 0, duration)
-  const stretch = rolling ? 0.22 * (1 - tt) ** 2 : 0
+  const stretch = rolling ? (0.16 + 0.16 * v.pow) * (1 - tt) ** 2 : 0
   const stop = v.len > 0 ? since - duration : 1
-  const squash = v.len > 0 && stop >= 0 && stop < 0.3 ? 0.24 * Math.max(0, 1 - stop * 5) : 0
+  const squash =
+    v.len > 0 && stop >= 0 && stop < 0.3 ? (0.12 + 0.2 * hit) * Math.max(0, 1 - stop * 5) : 0
   const along = 1 + stretch - squash
   const across = 1 - stretch * 0.5 + squash * 0.6
   const horiz = v.dir % 2 === 1
@@ -343,9 +368,14 @@ function ball(g: Draw, l: Layout, v: PanelView): void {
   const sy = (horiz ? across : along) - idle
   // Shift toward the wall while squashed so it reads as pressed against it.
   const push = squash * r * 0.5
-  g.shadow(p.x, p.y + r * 0.9, r * 0.95, r * 0.3, 0.45)
-  g.at(p.x + dx * push, p.y + dy * push, 0, () => piece(g, v.side, r), sx, sy)
-  if (!rolling) arrows(g, l, v, p.x, p.y, r)
+  // A swipe into a wall: the ball nudges that way and comes back.
+  const bt = (v.now - v.bumpAt) / 0.16
+  const bump = bt >= 0 && bt < 1 ? Math.sin(bt * Math.PI) * c * 0.12 : 0
+  const bx = p.x + dx * push + (DX[v.bumpDir] ?? 0) * bump
+  const by = p.y + dy * push + (DY[v.bumpDir] ?? 0) * bump
+  g.shadow(bx, p.y + r * 0.9, r * 0.95, r * 0.3, 0.45)
+  g.at(bx, by, 0, () => piece(g, v.side, r), sx, sy)
+  if (!rolling && v.controls) arrows(g, l, v, p.x, p.y, r)
 }
 
 /** A "Level 2" card that pops over the board as it appears. */
@@ -421,5 +451,5 @@ export function drawPanel(g: Draw, w: number, h: number, v: PanelView): void {
   board(g, l, v)
   ball(g, l, v)
   levelCard(g, l, v)
-  restartPill(g, w, h, v)
+  if (v.controls) restartPill(g, w, h, v)
 }

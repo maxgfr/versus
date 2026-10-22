@@ -1,4 +1,4 @@
-import { type MatchSpec, type Side } from '../../core/game.ts'
+import { type MatchSpec, type Side, STEP } from '../../core/game.ts'
 import { banner, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -6,27 +6,24 @@ import { Rng } from '../../core/rng.ts'
 import { MID } from '../../core/stage.ts'
 import { fmtTime, newRace, PuzzleRace, type RaceBase, toWorld } from '../../engines/puzzle/index.ts'
 import { toLocal } from '../../engines/runner/frame.ts'
-import { PACE, Pilot } from './bot.ts'
-import {
-  CLEAR_SECONDS,
-  drawPanel,
-  layout,
-  paintTime,
-  type PanelView,
-  resetRect,
-  rollSeconds,
-} from './render.ts'
+import { PACE, Pilot, POWER } from './bot.ts'
+import { CLEAR_SECONDS, drawPanel, layout, type PanelView, resetRect } from './render.ts'
 import {
   countPainted,
   DX,
   DY,
   generateLevel,
+  impactOf,
   LEVEL_SIZES,
   type Level,
+  paintTime,
+  raceVerdict,
   roll,
+  rollSeconds,
   roundSeed,
   startPaint,
   stuck,
+  swipePower,
 } from './rules.ts'
 
 /** A match is first to N round wins; each round is a whole run through the levels. */
@@ -51,6 +48,12 @@ interface Panel {
   dir: number
   len: number
   rollAt: number
+  /** How long the last roll takes, and how hard its swipe was (0..1). */
+  dur: number
+  pow: number
+  /** The last swipe into a wall (the ball nudges and comes back), and its direction. */
+  bumpAt: number
+  bumpDir: number
   /** Tiles the last roll painted for the first time. */
   newly: number[]
   /** Rolls made on this level. */
@@ -59,6 +62,8 @@ interface Panel {
   busyUntil: number
   /** A swipe made while the ball is still rolling; played when it stops. */
   queued: number
+  /** How hard that queued swipe was. */
+  queuedPow: number
   /** Game time the ball comes to rest (squash and thud), or -1. */
   stopAt: number
   /** Game time this level appeared (tiles pop in). */
@@ -95,10 +100,15 @@ function fresh(level: Level, lv: number, t: number): Panel {
     dir: -1,
     len: 0,
     rollAt: -10,
+    dur: 0,
+    pow: 0,
+    bumpAt: -10,
+    bumpDir: -1,
     newly: [],
     moves: 0,
     busyUntil: t,
     queued: -1,
+    queuedPow: 0,
     stopAt: -1,
     levelAt: t,
     clearAt: -10,
@@ -115,6 +125,8 @@ function rewind(p: Panel, level: Level, t: number): void {
   p.dir = -1
   p.len = 0
   p.rollAt = -10
+  p.dur = 0
+  p.pow = 0
   p.newly = []
   p.busyUntil = t
   p.queued = -1
@@ -124,6 +136,8 @@ function rewind(p: Panel, level: Level, t: number): void {
 interface Anchor {
   x: number
   y: number
+  /** Game time the finger was at (x, y): the swipe's speed is measured from here. */
+  t: number
   /** Direction this finger last fired, so a long drag does not fire it twice. */
   fired: number
 }
@@ -143,6 +157,8 @@ class MazePaint extends PuzzleRace<State> {
   private anchors: [Map<number, Anchor>, Map<number, Anchor>] = [new Map(), new Map()]
   /** Newly painted tiles already given their splash, per side (cosmetic). */
   private splashed: [number, number] = [0, 0]
+  /** Sub-step time for smooth motion between fixed steps (cosmetic). */
+  private alpha = 0
 
   protected setup(): State {
     this.load(0)
@@ -175,6 +191,7 @@ class MazePaint extends PuzzleRace<State> {
   override restore(snap: unknown): void {
     super.restore(snap)
     if (this.loaded !== this.s.round) this.load(this.s.round)
+    this.anchors = [new Map(), new Map()]
   }
 
   /** Clocks count from the round's start and stop when the round is won. */
@@ -187,21 +204,57 @@ class MazePaint extends PuzzleRace<State> {
   protected override step(dt: number): void {
     if (this.s.nextAt >= 0 && this.time >= this.s.nextAt) this.nextRound()
     super.step(dt)
+    if (this.solo || this.over || this.s.nextAt >= 0) return
+    // A finished board keeps playing its last roll (the engine no longer steps it).
+    for (const side of [0, 1] as Side[]) {
+      const p = this.s.panels[side]
+      if (this.s.race[side].done === null) continue
+      this.splash(side)
+      if (p.stopAt >= 0 && this.time >= p.stopAt) this.settle(side)
+    }
+    this.judge()
+  }
+
+  /**
+   * Versus is a race on the clock, penalties included: a finished side takes
+   * the round once the other can no longer stop its own clock lower.
+   */
+  private judge(): void {
+    const racers = ([0, 1] as Side[]).map((side) => {
+      const r = this.s.race[side]
+      const done = r.done !== null && this.time >= r.done
+      return { done, clock: this.elapsed(side), at: r.done ?? Infinity }
+    })
+    const won = raceVerdict(racers)
+    if (won === 0 || won === 1) this.complete(won)
+  }
+
+  /** The clock to beat for `side`: the rival's finished time, when they finished first. */
+  private chase(side: Side): number | null {
+    if (this.solo || this.s.nextAt >= 0 || this.over) return null
+    const rival = side === 0 ? 1 : 0
+    const r = this.s.race[rival]
+    if (r.done === null || this.time < r.done || this.s.race[side].done !== null) return null
+    return this.elapsed(rival)
   }
 
   protected override complete(side: Side): void {
     if (this.over || this.s.nextAt >= 0) return
     this.s.endAt = this.time
     this.s.wins[side]++
-    if (this.solo) super.complete(side)
-    else if (this.s.wins[side] < this.target) this.roundWon(side)
+    if (this.solo) {
+      super.complete(side)
+      return
+    }
+    this.ctx.fx.confetti(side)
+    if (this.s.wins[side] < this.target) this.roundWon(side)
     else this.matchWon(side)
   }
 
   /** A round is won: the ending plays and the banner shows, then the next maze. */
   private roundWon(side: Side): void {
     const r = this.s.race[side]
-    r.done = this.time
+    r.done ??= this.time
     r.progress = 1
     this.s.roundWinner = side
     this.s.nextAt = this.time + ROUND_GAP
@@ -211,7 +264,7 @@ class MazePaint extends PuzzleRace<State> {
   /** The last round is won: the match ends, with the round score on the result screen. */
   private matchWon(side: Side): void {
     const r = this.s.race[side]
-    r.done = this.time
+    r.done ??= this.time
     r.progress = 1
     this.ctx.audio.play('coin')
     this.finish(side, {
@@ -290,7 +343,7 @@ class MazePaint extends PuzzleRace<State> {
         p.botT = 0
         const m = this.pilot(side).decide(p.pos, p.painted)
         if (m === 'reset') this.restart(side)
-        else this.roll(side, m)
+        else this.roll(side, m, POWER[this.ctx.difficulty])
       }
       return
     }
@@ -303,14 +356,15 @@ class MazePaint extends PuzzleRace<State> {
     if (p.queued >= 0 && this.time >= p.busyUntil) {
       const d = p.queued
       p.queued = -1
-      this.roll(side, d)
+      this.roll(side, d, p.queuedPow)
     }
   }
 
   /**
    * Swipes fire as soon as the finger has travelled far enough (no need to
    * lift), read in the player's own frame. One drag can bend into a second
-   * direction; it never fires the same direction twice in a row.
+   * direction; it never fires the same direction twice in a row. How fast the
+   * finger covered the distance is the swipe's power: it rolls the ball faster.
    */
   private readSwipes(side: Side): void {
     const f = this.frames[side]
@@ -320,19 +374,26 @@ class MazePaint extends PuzzleRace<State> {
       let a = anchors.get(id)
       if (!a) {
         const l = toLocal(f, x0, y0)
-        a = { x: l.x, y: l.y, fired: -1 }
+        a = { x: l.x, y: l.y, t: this.time, fired: -1 }
         anchors.set(id, a)
       }
       const b = toLocal(f, x, y)
       const dx = b.x - a.x
       const dy = b.y - a.y
-      if (Math.hypot(dx, dy) < SWIPE) return
+      const dist = Math.hypot(dx, dy)
+      if (dist < SWIPE) {
+        // A finger resting in place: measure the next swipe from where it rests.
+        if (dist < 8) a.t = this.time
+        return
+      }
       const d = dirOf(dx, dy)
+      const power = swipePower(dist, this.time - a.t + STEP)
       a.x = b.x
       a.y = b.y
+      a.t = this.time
       if (d === a.fired) return
       a.fired = d
-      this.swipe(side, d)
+      this.swipe(side, d, power)
     }
     for (const p of inp.held.values()) check(p.id, p.x, p.y, p.x0, p.y0)
     for (const up of inp.ups) {
@@ -341,26 +402,40 @@ class MazePaint extends PuzzleRace<State> {
     }
   }
 
-  private swipe(side: Side, d: number): void {
+  private swipe(side: Side, d: number, power: number): void {
     const p = this.s.panels[side]
-    if (this.time >= p.busyUntil) this.roll(side, d)
-    else p.queued = d
+    // Swipes made on a cleared board (before the next level appears) are not
+    // carried over: they would roll the fresh level before it is even seen.
+    if (this.time < p.levelAt) return
+    if (this.time >= p.busyUntil) this.roll(side, d, power)
+    else {
+      p.queued = d
+      p.queuedPow = power
+    }
   }
 
-  /** Roll the ball in `d` until it hits a wall, painting every tile it passes. */
-  private roll(side: Side, d: number): void {
+  /**
+   * Roll the ball in `d` until it hits a wall, painting every tile it passes.
+   * `power` (0..1) is how hard the swipe was: it rolls up to a third faster.
+   */
+  private roll(side: Side, d: number, power = 0): void {
     const p = this.s.panels[side]
     const lv = this.level(side)
     const r = roll(lv, p.pos, d)
     if (r.path.length === 0) {
       p.busyUntil = this.time + 0.12
-      this.ctx.audio.play('click')
+      p.bumpAt = this.time
+      p.bumpDir = d
+      this.ctx.audio.play('click', 0.9 + power * 0.2)
+      if (!this.isBot(side)) this.ctx.audio.buzz(5)
       return
     }
-    const duration = rollSeconds(r.path.length)
+    const duration = rollSeconds(r.path.length, power)
     p.from = p.pos
     p.dir = d
     p.len = r.path.length
+    p.dur = duration
+    p.pow = power
     p.rollAt = this.time
     p.busyUntil = this.time + duration
     p.stopAt = this.time + duration
@@ -369,11 +444,12 @@ class MazePaint extends PuzzleRace<State> {
     p.newly = r.path.filter((t) => !p.painted[t])
     for (const t of p.newly) p.painted[t] = 1
     this.splashed[side] = 0
-    this.ctx.audio.play('roll', 1.15 - Math.min(0.35, r.path.length * 0.05))
+    this.ctx.audio.play('roll', 1.15 - Math.min(0.35, r.path.length * 0.05) + power * 0.2)
+    if (power > 0.6) this.ctx.audio.play('whoosh', 0.9 + power * 0.3)
     if (countPainted(p.painted) === lv.floors) this.clearLevel(side)
   }
 
-  /** The ball came to rest: a thud, a puff and a little shake. */
+  /** The ball came to rest: a thud, dust and a shake, all as hard as the hit. */
   private settle(side: Side): void {
     const p = this.s.panels[side]
     p.stopAt = -1
@@ -388,16 +464,21 @@ class MazePaint extends PuzzleRace<State> {
     const ly = l.y0 + (Math.floor(tile / lv.n) + 0.5 + dy * 0.42) * l.c
     const at = toWorld(f, lx, ly)
     const back = toWorld(f, lx - dx * 10, ly - dy * 10)
-    this.ctx.audio.play('wall', 1.1 - Math.min(0.3, p.len * 0.05))
-    this.ctx.fx.burst(at.x, at.y, C.cream, {
-      count: 6,
-      speed: 260,
-      size: 7,
+    const k = impactOf(p.len, p.pow)
+    const { fx, audio } = this.ctx
+    audio.play(k > 0.6 ? 'thud' : 'wall', 1.15 - k * 0.4)
+    fx.burst(at.x, at.y, C.cream, {
+      count: Math.round(4 + k * 10),
+      speed: 200 + k * 280,
+      size: 7 + k * 3,
       life: 0.3,
       spread: 1.8,
       dir: Math.atan2(back.y - at.y, back.x - at.x),
     })
-    if (p.len >= 3) this.ctx.fx.shake(0.06 + Math.min(0.06, p.len * 0.01))
+    if (k > 0.5) fx.sparks(at.x, at.y, SIDE[side].light, Math.round(k * 8))
+    if (k > 0.3) fx.shake(0.04 + k * 0.14)
+    if (k > 0.8) fx.stop(2)
+    if (!this.isBot(side)) audio.buzz(Math.round(4 + k * 16))
   }
 
   /** Splash each newly painted tile as the ball passes over it. */
@@ -410,10 +491,20 @@ class MazePaint extends PuzzleRace<State> {
     while (this.splashed[side] < p.newly.length) {
       const t = p.newly[this.splashed[side]] as number
       const k = Math.abs(Math.floor(t / n) - fr) + Math.abs((t % n) - fc) - 1
-      if (this.time < paintTime(p.rollAt, p.len, k)) break
+      if (this.time < paintTime(p.rollAt, p.dur, p.len, k)) break
       this.splashed[side]++
       const at = this.tileWorld(side, t, lv)
-      this.ctx.fx.burst(at.x, at.y, SIDE[side].light, { count: 5, speed: 200, size: 9, life: 0.35 })
+      // Paint flies forward off the ball, further for a harder swipe.
+      const ahead = toWorld(this.frames[side], 0, 0)
+      const fwd = toWorld(this.frames[side], DX[p.dir] ?? 0, DY[p.dir] ?? 0)
+      this.ctx.fx.burst(at.x, at.y, SIDE[side].light, {
+        count: Math.round(4 + p.pow * 4),
+        speed: 170 + p.pow * 200,
+        size: 9,
+        life: 0.35,
+        spread: 2.4,
+        dir: Math.atan2(fwd.y - ahead.y, fwd.x - ahead.x),
+      })
       this.ctx.audio.play('tick', 1 + Math.min(0.6, this.splashed[side] * 0.08))
     }
   }
@@ -425,7 +516,7 @@ class MazePaint extends PuzzleRace<State> {
   private clearLevel(side: Side): void {
     const p = this.s.panels[side]
     const lv = p.lv
-    const arrive = this.time + rollSeconds(p.len)
+    const arrive = this.time + p.dur
     const at = this.tileWorld(side, p.pos)
     const f = this.frames[side]
     const l = layout(f.w, f.h, this.level(side).n)
@@ -439,8 +530,16 @@ class MazePaint extends PuzzleRace<State> {
       this.ctx.fx.stop(6)
       this.ctx.fx.flash(SIDE[side].light, 0.25)
       this.ctx.fx.burst(mid.x, mid.y, SIDE[side].main, { count: 40, speed: 700, size: 16, life: 1 })
-      this.ctx.fx.confetti(this.solo ? undefined : side)
-      this.complete(side)
+      this.ctx.audio.buzz(30)
+      if (this.solo) {
+        this.ctx.fx.confetti()
+        this.complete(side)
+        return
+      }
+      // Versus: the clock stops as the ball arrives; `judge` names the winner.
+      const r = this.s.race[side]
+      r.done = arrive
+      r.progress = 1
       return
     }
     this.ctx.fx.float(`Level ${lv + 1} clear!`, mid.x, mid.y, C.yellow, 60, side)
@@ -450,6 +549,8 @@ class MazePaint extends PuzzleRace<State> {
     next.from = p.from
     next.dir = p.dir
     next.len = p.len
+    next.dur = p.dur
+    next.pow = p.pow
     next.rollAt = p.rollAt
     next.newly = p.newly
     next.stopAt = p.stopAt
@@ -473,6 +574,8 @@ class MazePaint extends PuzzleRace<State> {
 
   protected renderPanel(g: Draw, side: Side, w: number, h: number): void {
     const p = this.s.panels[side]
+    // Between two fixed steps: the ball glides at the display's own rate.
+    const now = this.time + this.alpha * STEP
     const human = !this.isBot(side)
     if (this.showingPrev(side)) {
       // The cleared board, fully painted, with the last roll finishing and a wave.
@@ -487,13 +590,19 @@ class MazePaint extends PuzzleRace<State> {
         dir: p.dir,
         len: p.len,
         rollAt: p.rollAt,
+        dur: p.dur,
+        pow: p.pow,
+        bumpAt: -10,
+        bumpDir: -1,
         newly: p.newly,
         levelNo: p.lv,
         levels: this.levels.length,
         levelAt: -10,
-        clearAt: p.rollAt + rollSeconds(p.len),
-        now: this.time,
+        clearAt: p.rollAt + p.dur,
+        now,
         hint: false,
+        chase: this.chase(side),
+        controls: g.viewer === null || g.viewer === side,
         arrows: 0,
         stuck: false,
         restartCost: RESTART_COST,
@@ -504,7 +613,7 @@ class MazePaint extends PuzzleRace<State> {
     // A roll made on the previous level does not belong on this board.
     const own = p.rollAt >= p.levelAt || p.lv === 0
     const len = own ? p.len : 0
-    const restAt = own && len > 0 ? p.rollAt + rollSeconds(len) : p.levelAt + 0.4
+    const restAt = own && len > 0 ? p.rollAt + p.dur : p.levelAt + 0.4
     const idle = this.time - restAt
     const fresh = p.lv === 0 && p.moves === 0
     const view: PanelView = {
@@ -517,13 +626,19 @@ class MazePaint extends PuzzleRace<State> {
       dir: own ? p.dir : -1,
       len,
       rollAt: own ? p.rollAt : -10,
+      dur: p.dur,
+      pow: p.pow,
+      bumpAt: p.bumpAt,
+      bumpDir: p.bumpDir,
       newly: own ? p.newly : [],
       levelNo: p.lv + 1,
       levels: this.levels.length,
       levelAt: p.levelAt,
       clearAt: p.clearAt,
-      now: this.time,
+      now,
       hint: human && fresh && this.time < 8,
+      chase: this.chase(side),
+      controls: g.viewer === null || g.viewer === side,
       arrows:
         human && p.clearAt < 0 && idle > 0
           ? Math.min(1, (idle - (fresh ? 0.6 : NUDGE)) * 3) * 0.9
@@ -535,7 +650,8 @@ class MazePaint extends PuzzleRace<State> {
   }
 
   /** Round wins as pips under each player's edge; the round's banner in the middle. */
-  override render(g: Draw): void {
+  override render(g: Draw, alpha = 0): void {
+    this.alpha = this.over || this.s.nextAt >= 0 ? 0 : alpha
     super.render(g)
     if (this.target <= 1) return
     for (const side of [0, 1] as Side[]) pips(g, side, this.s.wins[side], this.target)

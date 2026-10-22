@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { plan, Pilot } from './bot.ts'
+import { greedy, plan, Pilot, shortest } from './bot.ts'
 import {
   countPainted,
   generateLevel,
+  impactOf,
   LEVEL_SIZES,
   type Level,
   neighbour,
+  paintTime,
+  raceVerdict,
   roll,
+  rollSeconds,
   roundSeed,
   startPaint,
   stuck,
+  swipePower,
 } from './rules.ts'
 
 describe('match rounds', () => {
@@ -197,6 +202,95 @@ describe('bot vs bot', () => {
       }
     })
   }
+})
+
+describe('swipe power', () => {
+  it('a lazy drag has no power, a flick has full power, never outside 0..1', () => {
+    expect(swipePower(60, 0.5)).toBe(0)
+    expect(swipePower(120, 1 / 60)).toBe(1)
+    expect(swipePower(100, 0)).toBe(1)
+    expect(swipePower(Number.NaN, 0.1)).toBe(0)
+    const mid = swipePower(80, 0.05)
+    expect(mid).toBeGreaterThan(0)
+    expect(mid).toBeLessThan(1)
+  })
+
+  it('a harder swipe rolls faster, by at most a third', () => {
+    expect(rollSeconds(4, 1)).toBeLessThan(rollSeconds(4, 0))
+    expect(rollSeconds(4, 1)).toBeCloseTo(rollSeconds(4) * 0.65, 6)
+    expect(rollSeconds(4, 9)).toBe(rollSeconds(4, 1))
+    expect(rollSeconds(4, Number.NaN)).toBe(rollSeconds(4, 0))
+  })
+
+  it('paints each tile of a roll in order, the last one as the ball arrives', () => {
+    const dur = rollSeconds(5, 0.7)
+    let last = 0
+    for (let k = 0; k < 5; k++) {
+      const t = paintTime(1, dur, 5, k)
+      expect(t).toBeGreaterThan(last)
+      last = t
+    }
+    expect(paintTime(1, dur, 5, 4)).toBeLessThanOrEqual(1 + dur + 1e-9)
+  })
+
+  it('the wall hit grows with the roll length and the swipe power', () => {
+    expect(impactOf(1, 0)).toBeLessThan(impactOf(5, 0))
+    expect(impactOf(5, 0)).toBeLessThan(impactOf(5, 1))
+    expect(impactOf(9, 1)).toBe(1)
+    expect(impactOf(0, 1)).toBe(0)
+  })
+})
+
+describe('race verdict (versus is on the clock, penalties included)', () => {
+  const r = (done: boolean, clock: number, at = clock) => ({ done, clock, at })
+  it('stays open while nobody has finished', () => {
+    expect(raceVerdict([r(false, 30), r(false, 31)])).toBeNull()
+  })
+  it('a finisher wins at once when the rival is already past their time', () => {
+    expect(raceVerdict([r(true, 40), r(false, 45)])).toBe(0)
+  })
+  it('a finisher with penalties waits: the rival can still stop the clock lower', () => {
+    // Red finished first in real time but restarted twice (+10 s): blue still has 8 s.
+    expect(raceVerdict([r(true, 40, 30), r(false, 32)])).toBeNull()
+    expect(raceVerdict([r(true, 40, 30), r(true, 38, 38)])).toBe(1)
+    // Blue's clock runs past 40 without finishing: red takes it.
+    expect(raceVerdict([r(true, 40, 30), r(false, 40)])).toBe(0)
+  })
+  it('a tie on the clock goes to the earlier finish', () => {
+    expect(raceVerdict([r(true, 40, 35), r(true, 40, 34)])).toBe(1)
+  })
+})
+
+describe('bot search', () => {
+  it('the shortest plan clears the level and is never longer than the greedy plan', () => {
+    for (const seed of [31, 32, 33, 34]) {
+      const rng = new Rng(seed)
+      for (const n of LEVEL_SIZES) {
+        const lv = generateLevel(rng, n)
+        const best = shortest(lv, lv.start, startPaint(lv))
+        const any = plan(lv, lv.start, startPaint(lv))
+        expect(best).not.toBeNull()
+        expect(countPainted(replay(lv, best ?? []).painted)).toBe(lv.floors)
+        expect((best ?? []).length).toBeLessThanOrEqual((any ?? []).length)
+      }
+    }
+  })
+
+  it('the greedy fallback never rolls into a sure dead end', () => {
+    const lv = grid(['S.#.', '..#.', '###.', '....'])
+    // From the start, every roll leaves the far corridor unreachable: no safe roll.
+    expect(greedy(lv, lv.start, startPaint(lv))).toBe(-1)
+    const rng = new Rng(5)
+    for (const n of LEVEL_SIZES) {
+      const open = generateLevel(rng, n)
+      const d = greedy(open, open.start, startPaint(open))
+      expect(d).toBeGreaterThanOrEqual(0)
+      const after = roll(open, open.start, d)
+      const painted = startPaint(open)
+      for (const t of after.path) painted[t] = 1
+      expect(stuck(open, after.end, painted)).toBe(false)
+    }
+  })
 })
 
 describe('stuck', () => {

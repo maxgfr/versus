@@ -73,6 +73,69 @@ export function roll(
   return { end: cur, path }
 }
 
+/**
+ * Seconds a roll of `len` tiles takes. `power` (0..1, how hard the swipe was)
+ * makes it up to a third quicker: a flick rolls faster than a lazy drag.
+ */
+export function rollSeconds(len: number, power = 0): number {
+  const p = Math.max(0, Math.min(1, Number.isFinite(power) ? power : 0))
+  return (0.07 + 0.035 * len) * (1 - 0.35 * p)
+}
+
+/**
+ * Game time the ball paints the `k`-th tile (0-based) of a roll of `len` tiles
+ * that began at `rollAt` and lasts `dur`: when its centre is half a tile short
+ * of the tile's centre. Inverts the roll's `outCubic` easing.
+ */
+export function paintTime(rollAt: number, dur: number, len: number, k: number): number {
+  const e = Math.min(1, (k + 0.5) / len)
+  return rollAt + dur * (1 - Math.cbrt(1 - e))
+}
+
+/** Swipe speeds (panel-local units per second) that map to power 0 and 1. */
+export const SWIPE_SLOW = 700
+export const SWIPE_FAST = 3200
+
+/** How hard a swipe was, 0..1, from the distance the finger covered and how long it took. */
+export function swipePower(dist: number, seconds: number): number {
+  const speed = dist / Math.max(1 / 60, seconds)
+  if (!Number.isFinite(speed)) return 0
+  return Math.max(0, Math.min(1, (speed - SWIPE_SLOW) / (SWIPE_FAST - SWIPE_SLOW)))
+}
+
+/** How hard the ball meets the wall, 0..1: a long roll launched by a hard swipe hits hardest. */
+export function impactOf(len: number, power: number): number {
+  return Math.max(0, Math.min(1, (len / 6) * (0.55 + 0.45 * power)))
+}
+
+/** One racer's clock, for `raceVerdict`. */
+export interface Racer {
+  /** The ball has finished the last board. */
+  done: boolean
+  /** Seconds on the clock, penalties included: final when done, still running otherwise. */
+  clock: number
+  /** Game time it finished (ties on the clock go to the earlier finish). */
+  at: number
+}
+
+/**
+ * Who takes a versus round, or null while it is still open. The race is on the
+ * clock, penalties included: a finisher wins once no one still playing can
+ * stop their clock lower. A tie on the clock goes to whoever finished first.
+ */
+export function raceVerdict(racers: readonly Racer[]): number | null {
+  let best = -1
+  racers.forEach((r, i) => {
+    if (!r.done) return
+    const b = racers[best]
+    if (!b || r.clock < b.clock || (r.clock === b.clock && r.at < b.at)) best = i
+  })
+  const b = racers[best]
+  if (!b) return null
+  for (const r of racers) if (!r.done && r.clock < b.clock) return null
+  return best
+}
+
 /** Painted tiles at the start of a level: just the start tile. */
 export function startPaint(level: Pick<Level, 'n' | 'start'>): number[] {
   return Array.from({ length: level.n * level.n }, (_, i) => (i === level.start ? 1 : 0))

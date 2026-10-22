@@ -1,9 +1,11 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { type Level, roll } from './rules.ts'
+import { type Level, roll, stuck } from './rules.ts'
 
 /** Seconds between the computer's rolls. */
 export const PACE: Record<Difficulty, number> = { easy: 1.3, normal: 0.85, hard: 0.5 }
+/** How hard the computer swipes (0..1): a harder swipe rolls faster. */
+export const POWER: Record<Difficulty, number> = { easy: 0.15, normal: 0.45, hard: 0.8 }
 /** Chance per roll that the computer rolls at random instead of following its plan. */
 const SLIP: Record<Difficulty, number> = { easy: 0.2, normal: 0.04, hard: 0 }
 /** Expansions allowed per plan; past it the generator's own solution is used. */
@@ -89,9 +91,84 @@ function rebuild(nodes: Node[], last: number): number[] {
 }
 
 /**
+ * The fewest rolls from `pos` that paint every remaining floor tile
+ * (breadth-first), or null when the search budget runs out first.
+ */
+export function shortest(
+  level: Level,
+  pos: number,
+  painted: readonly number[],
+  budget = BUDGET,
+): number[] | null {
+  let lo = 0
+  let hi = 0
+  let left = level.floors
+  painted.forEach((v, t) => {
+    if (!v) return
+    const [a, b] = bit(t)
+    lo |= a
+    hi |= b
+    left--
+  })
+  if (left <= 0) return []
+  const nodes: Node[] = [{ pos, lo, hi, left, parent: -1, d: -1 }]
+  const seen = new Set<string>([`${pos}.${lo}.${hi}`])
+  for (let qi = 0; qi < nodes.length && qi < budget; qi++) {
+    const cur = nodes[qi] as Node
+    for (let d = 0; d < 4; d++) {
+      const { end, path } = roll(level, cur.pos, d)
+      if (end === cur.pos) continue
+      let nlo = cur.lo
+      let nhi = cur.hi
+      let nleft = cur.left
+      for (const t of path) {
+        if (isSet(nlo, nhi, t)) continue
+        const [a, b] = bit(t)
+        nlo |= a
+        nhi |= b
+        nleft--
+      }
+      const key = `${end}.${nlo}.${nhi}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      nodes.push({ pos: end, lo: nlo, hi: nhi, left: nleft, parent: qi, d })
+      if (nleft === 0) return rebuild(nodes, nodes.length - 1)
+    }
+  }
+  return null
+}
+
+/**
+ * One roll when no full plan was found in time: the one that paints the most
+ * new tiles without walking into a sure dead end, or -1 if every roll does.
+ */
+export function greedy(level: Level, pos: number, painted: readonly number[]): number {
+  let best = -1
+  let gain = -1
+  for (let d = 0; d < 4; d++) {
+    const r = roll(level, pos, d)
+    if (r.path.length === 0) continue
+    const next = painted.slice()
+    let g = 0
+    for (const t of r.path) {
+      if (!next[t]) g++
+      next[t] = 1
+    }
+    if (stuck(level, r.end, next)) continue
+    if (g > gain) {
+      gain = g
+      best = d
+    }
+  }
+  return best
+}
+
+/**
  * The computer's hands for one level. `decide` returns the next roll direction,
  * or 'reset' when it has walked into a dead end (the level is not solvable from
- * here, so the player restarts it, as a person would).
+ * here, so the player restarts it, as a person would). Hard plays the fewest
+ * rolls; easy and normal follow the first full plan they find and slip now and
+ * then. Out of search budget but not lost, it keeps painting greedily.
  */
 export class Pilot {
   private queue: number[] = []
@@ -109,10 +186,16 @@ export class Pilot {
 
   decide(pos: number, painted: readonly number[]): number | 'reset' {
     if (this.queue.length === 0) {
-      const found = plan(this.level, pos, painted)
+      const found =
+        (this.difficulty === 'hard' ? shortest(this.level, pos, painted) : null) ??
+        plan(this.level, pos, painted)
       if (found && found.length > 0) this.queue = found
       else if (pos === this.level.start) this.queue = this.level.solution.slice()
-      else return 'reset'
+      else if (stuck(this.level, pos, painted)) return 'reset'
+      else {
+        const d = greedy(this.level, pos, painted)
+        return d >= 0 ? d : 'reset'
+      }
     }
     if (this.rng.chance(SLIP[this.difficulty])) {
       this.queue = []
