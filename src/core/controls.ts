@@ -14,6 +14,9 @@ import type { Rect } from './stage.ts'
 const inRect = (p: { x: number; y: number }, r: Rect) =>
   p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h
 
+/** Online, each phone only shows its own player's controls. */
+const rivals = (g: Draw, side: Side) => g.viewer !== null && g.viewer !== side
+
 /** Floating joystick: the base appears where the finger lands inside `zone`. */
 export class Joystick {
   x = 0
@@ -94,6 +97,7 @@ export class Joystick {
   }
 
   render(g: Draw): void {
+    if (rivals(g, this.side)) return
     const col = SIDE[this.side]
     g.alpha(this.active ? 0.9 : 0.4, () => {
       g.circle(this.baseX, this.baseY, this.radius, alpha(col.dark, 0.35), alpha(col.light, 0.5), 5)
@@ -151,6 +155,7 @@ export class Button {
   }
 
   render(g: Draw): void {
+    if (rivals(g, this.side)) return
     const depth = this.r * 0.16
     const press = this.pressed ? 1 : 0
     g.circle(this.x, this.y + depth, this.r, shade(this.color, -0.4))
@@ -264,6 +269,7 @@ export class DragAim {
 
   /** Default rubber-band visual from the press point to the finger. */
   render(g: Draw): void {
+    if (rivals(g, this.side)) return
     const o = this.origin
     const f = this.finger
     if (!o || !f) return
