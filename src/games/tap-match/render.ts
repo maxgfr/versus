@@ -1,5 +1,5 @@
 import type { Side } from '../../core/game.ts'
-import { inOutCubic, outCubic, prog } from '../../core/fx/ease.ts'
+import { inOutCubic, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { HEADER } from '../../engines/puzzle/index.ts'
@@ -83,19 +83,23 @@ export function slotCenter(g: Geo, i: number): { x: number; y: number } {
   return { x: g.tx0 + (i + 0.5) * g.pitch, y: g.trayY + g.trayH / 2 }
 }
 
-/** The free tile under a panel-local point (topmost layer wins), or -1. */
+/**
+ * The tile under a panel-local point (topmost layer wins), or -1: only free
+ * tiles unless `covered` is set (a press on a buried tile gets a nudge).
+ */
 export function tileAt(
   lay: Layout,
   taken: readonly boolean[],
   g: Geo,
   px: number,
   py: number,
+  covered = false,
 ): number {
   let best = -1
   let bestL = -1
   const pad = TILE_GAP / 2 + 2
   lay.tiles.forEach((t, i) => {
-    if (taken[i] || !isFree(lay, taken, i) || t.l < bestL) return
+    if (taken[i] || (!covered && !isFree(lay, taken, i)) || t.l < bestL) return
     const c = tileCenter(g, t)
     const half = c.s / 2 + pad
     if (Math.abs(px - c.x) <= half && Math.abs(py - c.y) <= half) {
@@ -120,8 +124,16 @@ export function face(
   s: number,
   glyph: string,
   lit: number,
-  o: { tint?: string; shadow?: number } = {},
+  o: { tint?: string; shadow?: number; sx?: number; sy?: number; angle?: number } = {},
 ): void {
+  const sx = o.sx ?? 1
+  const sy = o.sy ?? 1
+  if (sx !== 1 || sy !== 1 || o.angle) {
+    // Squash, stretch or spin about the tile's centre.
+    const { sx: _x, sy: _y, angle = 0, ...rest } = o
+    g.at(cx, cy, angle, () => face(g, 0, 0, s, glyph, lit, rest), sx, sy)
+    return
+  }
   const x = cx - s / 2
   const y = cy - s / 2
   const depth = DEPTH * (s / 114)
@@ -142,6 +154,8 @@ export function drawStack(
   geo: Geo,
   emoji: readonly string[],
   now: number,
+  nudge = -1,
+  nudgeAt = -10,
 ): void {
   // Floor first, then upper layers; tiles on one layer never overlap.
   const order = lay.tiles
@@ -154,15 +168,27 @@ export function drawStack(
     const c = tileCenter(geo, t)
     let lit = 0
     let s = c.s
+    let y = c.y
+    let angle = 0
+    let shadow = t.l ? 0.3 : 0.22
     if (isFree(lay, taken, i)) {
-      // Uncovered when the last tile on top of it went: brighten and pop.
+      // Uncovered when the last tile on top of it went: brighten, then rise
+      // onto its toes with a springy pop. Free tiles stay a touch raised.
       let freedAt = -10
       for (const j of lay.above[i] ?? []) freedAt = Math.max(freedAt, takenAt[j] ?? -10)
       const age = now - freedAt
       lit = prog(age, 0, 0.2)
-      if (age < 0.3) s *= 1 + Math.sin(prog(age, 0, 0.3) * Math.PI) * 0.06
+      const rise = outBack(prog(age, 0.05, 0.4))
+      y -= 4 * rise
+      shadow += 0.08 * rise
+      if (age < 0.4) s *= 1 + Math.sin(prog(age, 0, 0.4) * Math.PI) * 0.08
     }
-    face(g, c.x, c.y, s, emoji[t.k] ?? '⭐', lit, { shadow: t.l ? 0.3 : 0.22 })
+    if (i === nudge && now - nudgeAt < 0.3) {
+      // A press on a buried tile: it shakes its head.
+      const d = 1 - (now - nudgeAt) / 0.3
+      angle = Math.sin((now - nudgeAt) * 55) * 0.09 * d
+    }
+    face(g, c.x, y, s, emoji[t.k] ?? '⭐', lit, { shadow, angle })
   }
 }
 
@@ -184,6 +210,8 @@ export interface Clear {
   at: number
   fx: number
   fy: number
+  /** Combo intensity 0..1: a bigger squeeze and pop. */
+  heat?: number
 }
 
 /** Where a flying tile is: an arc from where it was picked to its slot, shrinking to tray size. */
@@ -196,12 +224,27 @@ function flight(
   to: number,
   t: number,
 ) {
+  // Anticipation: the tile hops up off the stack (bigger) before it heads for the tray.
+  const hop = Math.sin(prog(t, 0, 0.3) * Math.PI)
   const e = inOutCubic(t)
+  // Stretched along the flight while it is fast, round again as it lands.
+  const v = Math.sin(t * Math.PI)
   return {
     x: fx + (tx - fx) * e,
-    y: fy + (ty - fy) * e - Math.sin(t * Math.PI) * 70,
-    s: from + (to - from) * e,
+    y: fy + (ty - fy) * e - v * 90 - hop * 18,
+    s: (from + (to - from) * e) * (1 + hop * 0.12),
+    sx: 1 - v * 0.1,
+    sy: 1 + v * 0.14,
+    angle: (tx > fx ? 1 : -1) * v * 0.35,
   }
+}
+
+/** A landing squash that rings out: wide and short, then a little tall, then still. */
+function squash(age: number): { sx: number; sy: number } {
+  if (age < 0 || age > 0.32) return { sx: 1, sy: 1 }
+  const t = age / 0.32
+  const w = Math.sin(t * Math.PI * 2.2) * (1 - t) * 0.16
+  return { sx: 1 + w, sy: 1 - w }
 }
 
 export function drawTray(
@@ -218,7 +261,9 @@ export function drawTray(
   const lost = lostAt >= 0 && now >= lostAt + FLY
   const filled = tray.length
   const danger = filled >= TRAY - 1 || lost
-  const pulse = danger ? 0.5 + 0.5 * Math.sin(now * 10) : 0
+  // Danger: a heartbeat, two quick thumps a beat.
+  const beat = (now * 1.6) % 1
+  const pulse = danger ? Math.max(0, Math.sin(beat * Math.PI * 4)) * (beat < 0.5 ? 1 : 0) : 0
   const shake = lost
     ? Math.sin((now - lostAt) * 60) * 10 * Math.max(0, 1 - (now - lostAt - FLY) * 2)
     : 0
@@ -237,26 +282,37 @@ export function drawTray(
     g.rrect(c.x - well / 2 + shake, wy + well - 10, well, 10, 5, alpha(C.white, 0.04))
   }
   const ts = geo.ts
+  // A kind with two in the tray is one tile from a set: those two bob and glow.
+  const count = new Map<number, number>()
+  for (const it of tray) count.set(it.k, (count.get(it.k) ?? 0) + 1)
   tray.forEach((it, i) => {
     const c = slotCenter(geo, i)
     const age = now - it.at
     let x = c.x
     let y = c.y - 4
     let s = ts
+    let o: { tint?: string; sx?: number; sy?: number; angle?: number } = {}
     if (age < FLY) {
       const p = flight(it.fx, it.fy, c.x, y, geo.u * 2 - TILE_GAP, ts, Math.max(0, age) / FLY)
       x = p.x
       y = p.y
       s = p.s
-    } else if (age < FLY + 0.16) {
-      // Land with a squash.
-      s *= 1 + Math.sin(prog(age - FLY, 0, 0.16) * Math.PI) * 0.08
+      o = { sx: p.sx, sy: p.sy, angle: p.angle }
+    } else {
+      o = squash(age - FLY)
+      if (count.get(it.k) === 2 && !lost) {
+        y -= 3 + Math.sin(now * 6 + it.k) * 3
+        g.alpha(0.25 + 0.15 * Math.sin(now * 6 + it.k), () =>
+          g.rrect(x - s / 2 - 6, y - s / 2 - 6, s + 12, s + 12, s * 0.22, C.yellow),
+        )
+      }
     }
-    if (it.ps !== i && now < it.mv + 0.16) {
+    if (it.ps !== i && now < it.mv + 0.2) {
       const from = slotCenter(geo, it.ps)
-      x = from.x + (x - from.x) * outCubic(prog(now - it.mv, 0, 0.16))
+      x = from.x + (x - from.x) * outBack(prog(now - it.mv, 0, 0.2))
     }
-    face(g, x + shake, y, s, emoji[it.k] ?? '⭐', 1, lost ? { tint: C.red } : {})
+    if (lost) o.tint = C.red
+    face(g, x + shake, y, s, emoji[it.k] ?? '⭐', 1, o)
   })
   if (clear) drawClear(g, geo, clear, emoji, now)
   if (filled === TRAY - 1 && !lost) {
@@ -275,6 +331,7 @@ function drawClear(g: Draw, geo: Geo, c: Clear, emoji: readonly string[], now: n
   const glyph = emoji[c.k] ?? '⭐'
   const ts = geo.ts
   const mid = slotCenter(geo, c.slot + 1)
+  const k = c.heat ?? 0
   const sq = outCubic(prog(age - FLY, 0, SQUEEZE))
   const pop = prog(age - FLY - SQUEEZE, 0, POP)
   for (let n = 0; n < 3; n++) {
@@ -289,14 +346,17 @@ function drawClear(g: Draw, geo: Geo, c: Clear, emoji: readonly string[], now: n
       s = p.s
     }
     x += (mid.x - x) * sq
-    y -= sq * 16
-    s *= 1 + sq * 0.12 - pop * 1.1
+    y -= sq * (16 + k * 14)
+    s *= 1 + sq * (0.12 + k * 0.1) - pop * 1.1
     if (s <= 2) continue
-    face(g, x, y, s, glyph, 1, sq > 0 ? { tint: mix(C.yellow, C.cream, 1 - sq) } : {})
+    // The squeeze presses them flat and wide before the pop.
+    const o =
+      sq > 0 ? { tint: mix(C.yellow, C.cream, 1 - sq), sx: 1 + sq * 0.1, sy: 1 - sq * 0.12 } : {}
+    face(g, x, y, s, glyph, 1, o)
   }
   if (sq > 0 && pop < 1) {
     g.alpha(1 - pop, () =>
-      g.circle(mid.x, mid.y - 16, ts * (0.6 + pop * 0.9), alpha(C.yellow, 0.35)),
+      g.circle(mid.x, mid.y - 16, ts * (0.6 + pop * (0.9 + k * 0.8)), alpha(C.yellow, 0.35)),
     )
   }
 }

@@ -107,24 +107,34 @@ export function settle<T extends { k: number }>(
 }
 
 /**
- * Can every tile be cleared from this layout by a player who always knows the
- * best move? Depth-first search with memoised states; a node budget keeps it
- * bounded (a layout that runs out of budget is rejected and redrawn).
+ * From a position (tiles taken, tray), the first move of a line that clears
+ * the whole stack, found by a player who always knows the best move: -1 when
+ * none was found. Depth-first search with memoised states; a node budget keeps
+ * it bounded (running out counts as not found).
  */
-export function solvable(lay: Layout, budget = 30000): boolean {
+export function solve(
+  lay: Layout,
+  taken: readonly boolean[],
+  tray: readonly { k: number }[],
+  budget = 30000,
+): number {
   const n = lay.tiles.length
-  const taken = Array.from({ length: n }, () => false)
+  const cur = taken.slice()
+  let left = 0
+  for (const t of cur) if (!t) left++
+  if (left === 0) return -1
   const seen = new Set<string>()
   let nodes = 0
-  const dfs = (tray: { k: number }[], left: number): boolean => {
+  let first = -1
+  const dfs = (tray: readonly { k: number }[], left: number, depth: number): boolean => {
     if (left === 0) return true
     if (++nodes > budget) return false
-    const key = taken.map((v) => (v ? '1' : '0')).join('') + tray.map((s) => s.k).join('')
+    const key = cur.map((v) => (v ? '1' : '0')).join('') + tray.map((s) => s.k).join('')
     if (seen.has(key)) return false
     seen.add(key)
     const moves: { i: number; same: number }[] = []
     for (let i = 0; i < n; i++) {
-      if (taken[i] || !isFree(lay, taken, i)) continue
+      if (cur[i] || !isFree(lay, cur, i)) continue
       const k = lay.tiles[i]?.k ?? 0
       moves.push({ i, same: tray.filter((s) => s.k === k).length })
     }
@@ -133,48 +143,88 @@ export function solvable(lay: Layout, budget = 30000): boolean {
     for (const m of moves) {
       const r = settle(tray, { k: lay.tiles[m.i]?.k ?? 0 })
       if (r.lost) continue
-      taken[m.i] = true
-      if (dfs(r.tray, left - 1)) return true
-      taken[m.i] = false
+      cur[m.i] = true
+      if (dfs(r.tray, left - 1, depth + 1)) {
+        if (depth === 0) first = m.i
+        return true
+      }
+      cur[m.i] = false
     }
     return false
   }
-  return dfs([], n)
+  return dfs(tray, left, 0) ? first : -1
 }
 
-/** Seeded layout: stack positions, kinds (each kind a whole number of sets), solvable. */
-export function buildLayout(seed: number, level: { kinds: number; sets: number }): Layout {
+/** Can every tile be cleared from the start of this layout? */
+export function solvable(lay: Layout, budget = 30000): boolean {
+  const n = lay.tiles.length
+  return (
+    solve(
+      lay,
+      Array.from({ length: n }, () => false),
+      [],
+      budget,
+    ) >= 0
+  )
+}
+
+/** Every kind gets one set, the spare sets are dealt at random: kind per set. */
+function setKinds(rng: Rng, level: { kinds: number; sets: number }): number[] {
+  const kinds = Array.from({ length: level.kinds }, (_, k) => k)
+  for (let s = level.kinds; s < level.sets; s++) kinds.push(rng.int(0, level.kinds - 1))
+  return rng.shuffle(kinds)
+}
+
+/**
+ * Kinds dealt so the stack is solvable by construction: tiles are taken off a
+ * copy of the stack in a random order (always a free one), and each three in a
+ * row share a kind, so playing that order never holds more than two tiles.
+ */
+function dealSolvable(rng: Rng, lay: Layout, level: { kinds: number; sets: number }): void {
+  const n = lay.tiles.length
+  const taken = Array.from({ length: n }, () => false)
+  const kinds = setKinds(rng, level)
+  for (let pick = 0; pick < n; pick++) {
+    const free: number[] = []
+    for (let i = 0; i < n; i++) if (!taken[i] && isFree(lay, taken, i)) free.push(i)
+    const i = free[rng.int(0, free.length - 1)] ?? 0
+    taken[i] = true
+    const t = lay.tiles[i]
+    if (t) t.k = kinds[Math.floor(pick / SET)] ?? 0
+  }
+}
+
+/**
+ * Seeded layout: stack positions, kinds (each kind a whole number of sets),
+ * solvable. Kinds are dealt at random and checked by the solver; after
+ * `attempts` misses they are dealt by construction, so the stack is always
+ * solvable and always inside the grid.
+ */
+export function buildLayout(
+  seed: number,
+  level: { kinds: number; sets: number },
+  attempts = 200,
+): Layout {
   const rng = new Rng(seed)
   const n = level.sets * SET
-  let last: Layout | null = null
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const tiles = place(rng, n)
-    if (!tiles) continue
-    // Every kind gets one set, the spare sets are dealt at random.
-    const sets = Array.from({ length: level.kinds }, () => 1)
-    for (let s = level.kinds; s < level.sets; s++) {
-      const k = rng.int(0, level.kinds - 1)
-      sets[k] = (sets[k] ?? 0) + 1
-    }
+  let tiles: Tile[] | null = null
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const got = place(rng, n)
+    if (!got) continue
+    tiles = got
     const bag: number[] = []
-    sets.forEach((count, k) => {
-      for (let i = 0; i < count * SET; i++) bag.push(k)
-    })
+    for (const k of setKinds(rng, level)) for (let i = 0; i < SET; i++) bag.push(k)
     rng.shuffle(bag)
     tiles.forEach((t, i) => {
       t.k = bag[i] ?? 0
     })
-    last = link(tiles)
-    if (solvable(last)) return last
+    const lay = link(tiles)
+    if (solvable(lay)) return lay
   }
-  if (last) return last
-  // Unreachable in practice: a plain floor of tiles keeps the game playable.
-  return link(
-    Array.from({ length: n }, (_, i) => ({
-      k: i % level.kinds,
-      x: (i % 7) * 2,
-      y: Math.floor(i / 7) * 2,
-      l: 0,
-    })),
-  )
+  // place() fits a stack within a try or two; the bound only guards the loop.
+  for (let tries = 0; !tiles && tries < 1000; tries++) tiles = place(rng, n)
+  if (!tiles) throw new Error('tap-match: no room for the stack')
+  const lay = link(tiles)
+  dealSolvable(rng, lay, level)
+  return lay
 }

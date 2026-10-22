@@ -21,7 +21,7 @@ import {
   tileAt,
   tileCenter,
 } from './render.ts'
-import { buildLayout, isFree, LEVELS, type Layout, settle } from './rules.ts'
+import { buildLayout, isFree, LEVELS, type Layout, settle, TRAY } from './rules.ts'
 
 const EMOJI = [
   '🍎',
@@ -67,7 +67,16 @@ interface Board {
   lostAt: number
   /** When the stack and tray were cleared: the win lands once the last set has popped. */
   solvedAt: number
+  /** Sets cleared in quick succession, and when the last one went (the combo window). */
+  combo: number
+  setAt: number
+  /** The last buried tile pressed (it shakes its head), and when. */
+  nudge: number
+  nudgeAt: number
 }
+
+/** Seconds between two sets that keep a combo going. */
+const COMBO_WINDOW = 3
 
 export interface State extends RaceBase {
   boards: [Board, Board]
@@ -130,6 +139,10 @@ class TapMatch extends PuzzleRace<State> {
       botT: 0,
       lostAt: -1,
       solvedAt: -1,
+      combo: 0,
+      setAt: -10,
+      nudge: -1,
+      nudgeAt: -10,
     })
     return {
       race: newRace(),
@@ -250,8 +263,19 @@ class TapMatch extends PuzzleRace<State> {
     for (const t of taps) {
       const i = tileAt(this.lay, b.taken, geo, t.x, t.y)
       if (i >= 0) this.take(side, i)
+      else this.nudge(side, tileAt(this.lay, b.taken, geo, t.x, t.y, true))
       if (this.over || b.solvedAt >= 0) return
     }
+  }
+
+  /** A press on a buried tile: it shakes its head (no penalty, the stack is the timer). */
+  private nudge(side: Side, i: number): void {
+    if (i < 0) return
+    const b = this.s.boards[side]
+    b.nudge = i
+    b.nudgeAt = this.time
+    this.ctx.audio.play('click', 0.6)
+    this.ctx.audio.buzz(6)
   }
 
   /** Move a free tile into the side's tray. */
@@ -287,39 +311,69 @@ class TapMatch extends PuzzleRace<State> {
       }
     })
     b.tray = r.tray
+    const { fx, audio } = this.ctx
     const at = toWorld(f, c.x, c.y)
-    this.ctx.audio.play('tap', 0.85 + tile.k * 0.04)
-    this.ctx.fx.burst(at.x, at.y, SIDE[side].light, { count: 6, speed: 240, size: 8, life: 0.3 })
+    audio.play('tap', 0.85 + tile.k * 0.04)
+    fx.burst(at.x, at.y, SIDE[side].light, { count: 6, speed: 240, size: 8, life: 0.3 })
     if (r.lost) {
       this.lose(side)
       return
     }
     if (r.cleared) {
-      b.clear = { k: tile.k, slot: r.at, at: now, fx: c.x, fy: c.y }
+      // Sets in quick succession build a combo: pitch, particles, shake and haptics climb.
+      b.combo = now - b.setAt < COMBO_WINDOW ? b.combo + 1 : 1
+      b.setAt = now
+      const combo = b.combo
+      const k = Math.min(1, (combo - 1) / 4)
+      b.clear = { k: tile.k, slot: r.at, at: now, fx: c.x, fy: c.y, heat: k }
       const mid = slotCenter(geo, r.at + 1)
       const w = toWorld(f, mid.x, mid.y)
       const sets = this.lay.tiles.length / 3 - (b.left + b.tray.length) / 3
+      const up = f.angle ? 110 : -110
       this.later.push({
         at: now + FLY + SQUEEZE,
         fn: () => {
-          this.ctx.audio.play('pop', 1.1)
-          this.ctx.audio.play('score', 1 + Math.min(0.5, sets * 0.03))
-          this.ctx.fx.burst(w.x, w.y, C.yellow, { count: 18, speed: 520, size: 11, life: 0.55 })
-          this.ctx.fx.burst(w.x, w.y, C.white, {
-            count: 3,
-            speed: 260,
+          audio.play('pop', 1.1 + k * 0.3)
+          audio.play('score', 1 + Math.min(0.4, sets * 0.03) + k * 0.35)
+          audio.buzz(12 + Math.round(k * 24))
+          fx.burst(w.x, w.y, C.yellow, {
+            count: Math.round(18 + k * 22),
+            speed: 520 + k * 380,
+            size: 11,
+            life: 0.55,
+          })
+          fx.burst(w.x, w.y, C.white, {
+            count: 3 + Math.round(k * 3),
+            speed: 260 + k * 200,
             size: 46,
             life: 0.6,
             kind: 'emoji',
             glyph: this.emoji[tile.k] ?? '⭐',
             gravity: 600,
           })
-          this.ctx.fx.ring(w.x, w.y, C.yellow, 150)
-          this.ctx.fx.float('Set!', w.x, w.y + (f.angle ? 110 : -110), C.yellow, 56, side)
+          fx.ring(w.x, w.y, C.yellow, 150 + k * 140)
+          if (combo >= 2) {
+            fx.shake(0.06 + k * 0.22)
+            fx.sparks(w.x, w.y, C.white, Math.round(6 + k * 10))
+          }
+          if (combo >= 3) fx.stop(2 + Math.round(k * 3))
+          const label = combo >= 2 ? `Combo ×${combo}` : 'Set!'
+          fx.float(label, w.x, w.y + up, C.yellow, 56 + k * 14, side)
         },
       })
     } else {
-      this.later.push({ at: now + FLY, fn: () => this.ctx.audio.play('place', 1.2) })
+      // Six in the tray: one more that pairs nothing loses. Warn on landing.
+      const brink = b.tray.length === TRAY - 1
+      this.later.push({
+        at: now + FLY,
+        fn: () => {
+          audio.play('place', 1.2)
+          if (brink) {
+            audio.play('tick', 0.6)
+            audio.buzz(25)
+          }
+        },
+      })
     }
     if (b.left === 0 && b.tray.length === 0) b.solvedAt = now
   }
@@ -351,7 +405,7 @@ class TapMatch extends PuzzleRace<State> {
     const b = this.s.boards[side]
     const geo = geometry(w, h)
     backdrop(g, side, geo)
-    drawStack(g, this.lay, b.taken, b.takenAt, geo, this.emoji, this.time)
+    drawStack(g, this.lay, b.taken, b.takenAt, geo, this.emoji, this.time, b.nudge, b.nudgeAt)
     drawTray(g, geo, side, b.tray, b.clear, this.emoji, this.time, b.lostAt)
     if (
       b.tray.length === 0 &&

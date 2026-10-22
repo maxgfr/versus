@@ -9,6 +9,7 @@ import {
   overlaps,
   settle,
   SET,
+  solve,
   solvable,
   TRAY,
 } from './rules.ts'
@@ -90,6 +91,57 @@ describe('tap match layouts', () => {
   })
 })
 
+describe('tap match solver and deal', () => {
+  it('solve gives a first move, and following it clears the whole stack', () => {
+    for (const level of [EASY, HARD]) {
+      const lay = buildLayout(5, level)
+      const n = lay.tiles.length
+      const taken = Array.from({ length: n }, () => false)
+      let tray: { k: number }[] = []
+      for (let left = n; left > 0; left--) {
+        const i = solve(lay, taken, tray)
+        expect(i).toBeGreaterThanOrEqual(0)
+        expect(taken[i]).toBe(false)
+        expect(isFree(lay, taken, i)).toBe(true)
+        taken[i] = true
+        const r = settle(tray, { k: lay.tiles[i]?.k ?? 0 })
+        expect(r.lost).toBe(false)
+        tray = r.tray
+      }
+      expect(tray).toEqual([])
+    }
+  })
+
+  it('solve finds no line from a lost cause', () => {
+    const lay = buildLayout(5, EASY)
+    const taken = Array.from({ length: lay.tiles.length }, () => false)
+    // One of each of the six kinds: whatever tile comes next is a seventh with no set.
+    const tray = [0, 1, 2, 3, 4, 5].map((k) => ({ k }))
+    expect(EASY.kinds).toBe(6)
+    expect(solve(lay, taken, tray, 2000)).toBe(-1)
+  })
+
+  it('when random deals keep failing, the constructive deal is solvable and inside the grid', () => {
+    for (const level of [EASY, NORMAL, HARD]) {
+      for (let seed = 1; seed <= 6; seed++) {
+        const lay = buildLayout(seed, level, 0)
+        expect(lay.tiles.length).toBe(level.sets * SET)
+        for (const t of lay.tiles) {
+          expect(t.x).toBeGreaterThanOrEqual(0)
+          expect(t.x + 2).toBeLessThanOrEqual(14)
+          expect(t.y).toBeGreaterThanOrEqual(0)
+          expect(t.y + 2).toBeLessThanOrEqual(10)
+        }
+        const counts = new Map<number, number>()
+        for (const t of lay.tiles) counts.set(t.k, (counts.get(t.k) ?? 0) + 1)
+        expect(counts.size).toBe(level.kinds)
+        for (const c of counts.values()) expect(c % SET).toBe(0)
+        expect(solvable(lay, 200000)).toBe(true)
+      }
+    }
+  })
+})
+
 describe('tap match tray', () => {
   it('keeps the tray sorted by kind and vanishes a set of three', () => {
     let tray: { k: number }[] = []
@@ -157,10 +209,18 @@ describe('tap match bot', () => {
     })
   }
 
-  it('the hard bot clears at least one of the sample layouts', () => {
-    const wins = [1, 2, 3, 4, 5, 6].filter(
-      (s) => playBot(buildLayout(s, HARD), 'hard', s).outcome === 'cleared',
-    )
-    expect(wins.length).toBeGreaterThan(0)
+  it('the hard bot clears every sample layout (it looks ahead with the solver)', () => {
+    for (let s = 1; s <= 6; s++)
+      expect(playBot(buildLayout(s, HARD), 'hard', s).outcome).toBe('cleared')
+  })
+
+  it('clears more stacks the harder it plays', () => {
+    const cleared = (d: 'easy' | 'normal' | 'hard') =>
+      Array.from({ length: 16 }, (_, s) => s + 1).filter(
+        (s) => playBot(buildLayout(s, HARD), d, s).outcome === 'cleared',
+      ).length
+    const [e, n, h] = [cleared('easy'), cleared('normal'), cleared('hard')]
+    expect(h).toBeGreaterThanOrEqual(n)
+    expect(n).toBeGreaterThan(e)
   })
 })

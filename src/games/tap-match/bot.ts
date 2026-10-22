@@ -1,12 +1,21 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { isFree, type Layout, SET, TRAY } from './rules.ts'
+import { isFree, type Layout, SET, solve, TRAY } from './rules.ts'
 
 /** Seconds between the computer's taps (it plays in demos, tests and 1P vs computer). */
 export const PACE: Record<Difficulty, number> = { easy: 1.6, normal: 1.0, hard: 0.6 }
 
 /**
- * The free tile the computer takes next. A tile that completes a set in the
+ * How hard the computer looks ahead: nodes of the full solver it may spend
+ * per tap (0: none). Normal sees a short way, hard nearly always finds a
+ * clearing line when there is one.
+ */
+export const SEARCH: Record<Difficulty, number> = { easy: 0, normal: 0, hard: 6000 }
+
+/**
+ * The free tile the computer takes next. Normal and hard first ask the solver
+ * for a line that clears the whole stack and play its first tile; when it
+ * finds none in its budget (or on easy) a heuristic picks. A tile that completes a set in the
  * tray wins outright; then a tile whose set can be finished from tiles that
  * are free now (or that taking it uncovers), keeping the tray short; then
  * tiles that uncover others. Opening a kind with no partners in sight costs
@@ -20,7 +29,12 @@ export function pickTile(
   d: Difficulty,
   rng: Rng,
 ): number {
-  const noise = d === 'easy' ? 160 : d === 'normal' ? 60 : 0
+  const budget = SEARCH[d]
+  if (budget > 0) {
+    const i = solve(lay, taken, tray, budget)
+    if (i >= 0) return i
+  }
+  const noise = d === 'easy' ? 520 : d === 'normal' ? 90 : 0
   const free: number[] = []
   lay.tiles.forEach((_, i) => {
     if (!taken[i] && isFree(lay, taken, i)) free.push(i)
