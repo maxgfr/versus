@@ -114,8 +114,16 @@ function rope(g: Draw, pos: number, wobble: number, now: number): void {
   }
 }
 
-function knot(g: Draw, pos: number, now: number, wobble: number): void {
+function knot(g: Draw, pos: number, vel: number, now: number, wobble: number, sq: number): void {
   const y = knotY(pos)
+  // Motion smear: ghost knots trail behind a fast-moving knot.
+  const sp = Math.min(1, Math.abs(vel) / 1.6)
+  if (sp > 0.2) {
+    for (let i = 3; i >= 1; i--)
+      g.alpha(sp * 0.18 * (4 - i), () =>
+        g.circle(ROPE_X, y - Math.sign(vel) * i * 22 * sp, 24 - i * 3, C.yellow),
+      )
+  }
   const flap = Math.sin(now * 9) * 10 * (0.4 + wobble)
   g.poly([ROPE_X, y - 14, ROPE_X - 120, y - 40 + flap, ROPE_X - 104, y + 4 + flap * 0.4], C.yellow)
   g.poly([ROPE_X, y - 14, ROPE_X + 120, y - 40 - flap, ROPE_X + 104, y + 4 - flap * 0.4], C.yellow)
@@ -127,10 +135,10 @@ function knot(g: Draw, pos: number, now: number, wobble: number): void {
     [ROPE_X, y + 2, ROPE_X + 70, y + 30 - flap * 0.5, ROPE_X + 60, y + 6],
     shade(C.yellow, -0.2),
   )
-  g.ball(ROPE_X, y, 26, '#a8692f')
+  g.at(ROPE_X, y, 0, () => g.ball(0, 0, 26, '#a8692f'), 2 - sq, sq)
 }
 
-function team(g: Draw, s: State, side: Side, now: number): void {
+function team(g: Draw, s: State, side: Side, now: number, pos: number, lean: number): void {
   const col = SIDE[side].main
   const r = s.rounds
   const strain = Math.min(1, s.mash[side].rate / 8)
@@ -138,12 +146,16 @@ function team(g: Draw, s: State, side: Side, now: number): void {
   if (r.phase === 'between')
     mood = r.last === side ? 'grin' : r.last === other(side) ? 'dizzy' : 'wow'
   const angle = g.orient(side)
-  const members = teamLayout(side, s.rope.pos)
+  const members = teamLayout(side, pos)
+  const dir = side === 0 ? 1 : -1
   // Draw the far ones first so nearer heads overlap them.
   for (let i = members.length - 1; i >= 0; i--) {
-    const m = members[i] as { x: number; y: number }
+    const base = members[i] as { x: number; y: number }
     const delay = i * 0.05
     const p = mashPulse(s.mash[side], now - delay)
+    // Lean back on each pull (the near puller first), breathe when idle.
+    const breathe = Math.sin(now * 3 + i * 1.3 + side) * 0.025 * (1 - strain)
+    const m = { x: base.x, y: base.y - dir * lean * (1 - i * 0.2) }
     const rad = 64 - i * 3
     const hx = ROPE_X + (m.x < ROPE_X ? -16 : 16)
     g.shadow(m.x, m.y + rad * 0.85, rad * 0.9, rad * 0.3)
@@ -152,8 +164,8 @@ function team(g: Draw, s: State, side: Side, now: number): void {
     g.blob(m.x, m.y, rad, col, {
       mood,
       angle,
-      sx: 1 + p * 0.14 + strain * 0.04,
-      sy: 1 - p * 0.14,
+      sx: 1 + p * 0.14 + strain * 0.04 - breathe,
+      sy: 1 - p * 0.14 + breathe,
       look: [m.x < ROPE_X ? 0.7 : -0.7, 0],
     })
     g.ball(hx, m.y - (side === 0 ? 1 : -1) * 6, 15, shade(col, 0.15), 0.6)
@@ -164,7 +176,17 @@ export function renderRope(
   g: Draw,
   s: State,
   now: number,
-  o: { teams: boolean; names: [string, string]; over: boolean },
+  o: {
+    teams: boolean
+    names: [string, string]
+    over: boolean
+    /** Interpolated knot position. */
+    pos: number
+    /** Lean-back of each team (springs), world units. */
+    lean: [number, number]
+    /** Knot squash (1 = round). */
+    knot: number
+  },
 ): void {
   field(g)
   // Each half glows with its team's tapping.
@@ -180,10 +202,20 @@ export function renderRope(
   mud(g, splash)
   teamLine(g, 0)
   teamLine(g, 1)
-  rope(g, s.rope.pos, s.wobble, now)
-  team(g, s, 1, now)
-  team(g, s, 0, now)
-  knot(g, s.rope.pos, now, s.wobble)
+  // The line about to be crossed throbs.
+  const near = Math.abs(o.pos)
+  if (near > 0.6 && s.rounds.phase === 'play') {
+    const ly = knotY(o.pos > 0 ? 1 : -1)
+    const a = (near - 0.6) * 2.5 * (0.6 + 0.4 * Math.sin(now * 14))
+    const v = g.stage.view
+    g.alpha(Math.min(1, a) * 0.5, () =>
+      g.rect(v.x, ly - 22, v.w, 44, SIDE[o.pos > 0 ? 0 : 1].light),
+    )
+  }
+  rope(g, o.pos, s.wobble, now)
+  team(g, s, 1, now, o.pos, o.lean[1])
+  team(g, s, 0, now, o.pos, o.lean[0])
+  knot(g, o.pos, s.rope.vel, now, s.wobble, o.knot)
 
   // "TAP!" hints at the start of each round.
   const since = now - s.rounds.at

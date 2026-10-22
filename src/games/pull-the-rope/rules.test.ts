@@ -3,7 +3,7 @@ import { STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { MashBot, mashNew, mashStep, mashTap } from '../../engines/reflex/index.ts'
 import { RopeBot } from './bot.ts'
-import { pull, pullFactor, ropeNew, ropeWinner } from './rules.ts'
+import { haulPower, HAUL, OVERTIME, pull, pullFactor, ropeNew, ropeWinner } from './rules.ts'
 
 describe('pull the rope rules', () => {
   it('moves the knot toward the side that taps more', () => {
@@ -29,6 +29,38 @@ describe('pull the rope rules', () => {
 
   it('pulls harder in overtime', () => {
     expect(pullFactor(30)).toBeGreaterThan(pullFactor(5))
+  })
+
+  it('an even tug cannot deadlock: overtime leans to the faster pace', () => {
+    // Same pulls both ways, but red keeps a slightly higher tap rate.
+    const r = ropeNew()
+    let t = 0
+    while (ropeWinner(r) === null && t < 60) {
+      t += STEP
+      pull(r, 0, 0, STEP, pullFactor(t), 0.5, t)
+    }
+    expect(ropeWinner(r)).toBe(0)
+    expect(t).toBeGreaterThan(OVERTIME)
+  })
+
+  it('pace does not count before overtime', () => {
+    const r = ropeNew()
+    for (let t = STEP; t < OVERTIME; t += STEP) pull(r, 0, 0, STEP, 1, 3, t)
+    expect(r.pos).toBe(0)
+  })
+})
+
+describe('hauls', () => {
+  it('a short or slow drag is just a tap', () => {
+    expect(haulPower(20, 0.1)).toBe(0)
+    expect(haulPower(-300, 0.1)).toBe(0)
+    expect(haulPower(300, 2)).toBeLessThan(0.15)
+  })
+
+  it('a long fast stroke toward your edge pulls up to HAUL extra', () => {
+    expect(haulPower(400, 0.15)).toBeCloseTo(HAUL)
+    expect(haulPower(400, 0.15)).toBeGreaterThan(haulPower(160, 0.15))
+    expect(haulPower(320, 0.12)).toBeGreaterThan(haulPower(320, 0.4))
   })
 })
 
