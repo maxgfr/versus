@@ -118,6 +118,8 @@ export interface PanelView {
   /** Game time this puzzle was dealt (its cells pop in), or far in the past. */
   dealtAt: number
   now: number
+  /** Draw the number pad (off for the rival's half online: each phone shows its own controls). */
+  pad: boolean
 }
 
 /** A soft pool of team-coloured light under the play area: the floodlit table. */
@@ -260,7 +262,7 @@ export function drawPanel(g: Draw, l: Layout, v: PanelView): void {
   if (ds !== 1)
     g.at(x0 + size / 2, y0 + size / 2, 0, () => g.at(-x0 - size / 2, -y0 - size / 2, 0, board), ds)
   else board()
-  drawPad(g, l.keys, col.main, v)
+  if (v.pad) drawPad(g, l.keys, col.main, v)
   if (v.beat !== null) drawBeat(g, l, v.side, v.beat, now)
 }
 

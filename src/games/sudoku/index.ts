@@ -411,6 +411,8 @@ class Sudoku extends PuzzleRace<State> {
       sv.y = approach(sv.y, ty, 26, 1 / 60)
     } else this.selVis[side] = sv = null
     const race = this.s.race[side]
+    // Online, the rival's half shows its board but not its keypad or prompts.
+    const own = g.viewer === null || g.viewer === side
     drawPanel(g, l, {
       side,
       puzzle: this.puzzle,
@@ -431,9 +433,10 @@ class Sudoku extends PuzzleRace<State> {
       beat: this.beatTime(side),
       dealtAt: this.s.round > 0 ? this.s.roundAt : -10,
       now: this.time,
+      pad: own,
     })
     if (this.goal > 1) drawRoundWins(g, side, w, h, this.s.wins[side], this.goal, this.wonAt(side))
-    if (b.sel < 0 && this.time - this.s.roundAt < 6 && !this.isBot(side)) drawHint(g, l)
+    if (b.sel < 0 && this.time - this.s.roundAt < 6 && !this.isBot(side) && own) drawHint(g, l)
   }
 
   /** The rival's finished time this side must beat, while it still can. */
