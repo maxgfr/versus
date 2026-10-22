@@ -4,7 +4,7 @@ import { toLocal } from '../../core/frame.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { findDelay } from './bot.ts'
+import { findDelay, SLIP } from './bot.ts'
 import {
   drawCentre,
   drawOwn,
@@ -19,6 +19,8 @@ import {
 import {
   CARD_R,
   champion,
+  FREEZE,
+  heat,
   newFind,
   symbolAt,
   tap,
@@ -62,7 +64,7 @@ class FindMatchGame extends BaseGame<State> {
   private planBots(): void {
     for (const side of [0, 1] as Side[]) {
       this.s.botAt[side] = this.isBot(side)
-        ? this.time + findDelay(this.ctx.difficulty, this.ctx.rng)
+        ? this.time + findDelay(this.ctx.difficulty, this.ctx.rng, heat(this.s, this.goal))
         : -1
     }
   }
@@ -74,7 +76,17 @@ class FindMatchGame extends BaseGame<State> {
       if (this.isBot(side)) {
         if (s.botAt[side] >= 0 && this.time >= s.botAt[side]) {
           s.botAt[side] = -1
-          this.attempt(side, target(s, side))
+          const want = target(s, side)
+          // Now and then a look-alike catches its eye first: it is frozen like anyone.
+          const wrongs = s.own[side].items.filter((it) => it.s !== want)
+          if (wrongs.length > 0 && this.ctx.rng.chance(SLIP[this.ctx.difficulty])) {
+            this.attempt(side, this.ctx.rng.pick(wrongs).s)
+            // After the freeze it looks again (more quickly: it has half seen it).
+            s.botAt[side] =
+              this.time +
+              FREEZE +
+              findDelay(this.ctx.difficulty, this.ctx.rng, heat(s, this.goal)) * 0.5
+          } else this.attempt(side, want)
         }
         continue
       }
@@ -128,7 +140,7 @@ class FindMatchGame extends BaseGame<State> {
     const item = s.own[side].items.find((it) => it.s === sym)
     const at = item ? symbolWorld(side, item.x, item.y) : ownCentre(side)
     const before = s.centre
-    const result = tap(s, side, sym, this.time, this.ctx.rng)
+    const result = tap(s, side, sym, this.time, this.ctx.rng, this.goal)
     if (result === 'ignored') return
     if (result === 'miss') {
       fx.burst(at.x, at.y, C.ink4, {

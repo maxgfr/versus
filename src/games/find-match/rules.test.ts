@@ -5,6 +5,8 @@ import {
   champion,
   DECK,
   FREEZE,
+  CARD_R,
+  heat,
   layoutCard,
   newFind,
   projectivePlane,
@@ -76,6 +78,33 @@ describe('find match layouts', () => {
         }
       }
     }
+  })
+
+  it('late cards spread their sizes wider, still without overlap and inside the card', () => {
+    const rng = new Rng(9)
+    let small = Infinity
+    let big = 0
+    for (let line = 0; line < 57; line++) {
+      const l = layoutCard(rng, line, 1)
+      for (const a of l.items) {
+        small = Math.min(small, a.r)
+        big = Math.max(big, a.r)
+        expect(Math.hypot(a.x, a.y) + a.r).toBeLessThanOrEqual(CARD_R)
+        for (const b of l.items)
+          if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(a.r + b.r)
+      }
+    }
+    expect(small).toBeLessThan(46)
+    expect(big).toBeGreaterThan(60)
+  })
+
+  it('heat rises as the leader nears the goal', () => {
+    const s = newFind(new Rng(1), 0)
+    expect(heat(s, 10)).toBe(0)
+    s.score = [4, 9]
+    expect(heat(s, 10)).toBe(1)
+    s.score = [5, 2]
+    expect(heat(s, 10)).toBeCloseTo(5 / 9, 5)
   })
 
   it('reads the symbol under a point, or none', () => {

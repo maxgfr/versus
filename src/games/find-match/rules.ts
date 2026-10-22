@@ -127,20 +127,25 @@ export function shared(a: readonly number[], b: readonly number[]): number {
 }
 
 const SYMBOL_RADIUS: [number, number] = [46, 60]
+/** Late in a match the sizes spread out (tiny next to big), which makes the search harder. */
+const SYMBOL_RADIUS_LATE: [number, number] = [36, 72]
 
 /**
  * Scatter the card's symbols on the disc at random sizes and rotations without
  * overlaps. Each symbol is tried at random spots; if the disc is too crowded the
- * symbols shrink a little and it tries again.
+ * symbols shrink a little and it tries again. `spread` (0..1) widens the size
+ * range as the match heats up.
  */
-export function layoutCard(rng: Rng, line: number): Layout {
+export function layoutCard(rng: Rng, line: number, spread = 0): Layout {
   const syms = DECK[line] ?? []
-  let base = SYMBOL_RADIUS[1]
+  const k = Math.min(1, Math.max(0, spread))
+  const lo = SYMBOL_RADIUS[0] + (SYMBOL_RADIUS_LATE[0] - SYMBOL_RADIUS[0]) * k
+  let base = SYMBOL_RADIUS[1] + (SYMBOL_RADIUS_LATE[1] - SYMBOL_RADIUS[1]) * k
   for (let attempt = 0; attempt < 40; attempt++) {
     const items: Item[] = []
     let ok = true
     for (const s of syms) {
-      const r = rng.range(SYMBOL_RADIUS[0], base)
+      const r = rng.range(lo, Math.max(lo, base))
       let placed: Item | null = null
       for (let t = 0; t < 400 && !placed; t++) {
         const reach = CARD_R - r - 12
@@ -158,7 +163,7 @@ export function layoutCard(rng: Rng, line: number): Layout {
       items.push(placed)
     }
     if (ok) return { line, items }
-    base = Math.max(SYMBOL_RADIUS[0], base - 3)
+    base = Math.max(lo, base - 3)
   }
   throw new Error('card layout failed')
 }
@@ -227,7 +232,14 @@ export type Tap = 'hit' | 'miss' | 'ignored'
  * A side taps symbol `sym` on its card. The right one: +1, its card becomes the
  * centre and a new card is dealt to it. Any other: a second of lock-out.
  */
-export function tap(s: FindState, side: Side, sym: number, now: number, rng: Rng): Tap {
+export function tap(
+  s: FindState,
+  side: Side,
+  sym: number,
+  now: number,
+  rng: Rng,
+  goal = TARGET,
+): Tap {
   if (sym < 0) return 'ignored'
   if (s.frozen[side] >= 0 && now < s.frozen[side]) return 'ignored'
   s.tapAt[side] = now
@@ -242,20 +254,25 @@ export function tap(s: FindState, side: Side, sym: number, now: number, rng: Rng
   s.centre = s.own[side]
   s.flyAt = now
   s.flySide = side
-  s.own[side] = nextCard(s, rng, side, now)
+  s.own[side] = nextCard(s, rng, side, now, heat(s, goal))
   return 'hit'
 }
 
+/** 0..1 how close the leader is to the goal: later cards get harder to read. */
+export function heat(s: FindState, goal = TARGET): number {
+  return Math.min(1, Math.max(s.score[0], s.score[1]) / Math.max(1, goal - 1))
+}
+
 /** Deal `side` the next card from the queue (distinct from both visible cards by construction). */
-function nextCard(s: FindState, rng: Rng, side: Side, now: number): Layout {
+function nextCard(s: FindState, rng: Rng, side: Side, now: number, spread: number): Layout {
   s.dealAt[side] = now
   const line = s.queue.shift()
-  if (line !== undefined) return layoutCard(rng, line)
+  if (line !== undefined) return layoutCard(rng, line, spread)
   // Only reached if a match runs past the whole deck: pick any other card.
   let pick = 0
   const other = s.own[side === 0 ? 1 : 0].line
   while (pick === s.centre.line || pick === other) pick++
-  return layoutCard(rng, pick)
+  return layoutCard(rng, pick, spread)
 }
 
 export function champion(s: FindState, target = TARGET): Side | null {
