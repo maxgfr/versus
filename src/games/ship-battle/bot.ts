@@ -1,6 +1,7 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import {
+  BALL_SPEED,
   clearLine,
   type Drive,
   onIsle,
@@ -30,12 +31,14 @@ interface Skill {
   react: number
   /** Max lateral aim error, as a fraction of the distance. */
   err: number
+  /** How much of the rival's motion during the balls' flight it leads (0..1). */
+  lead: number
 }
 
 const SKILL: Record<Difficulty, Skill> = {
-  easy: { orbit: 290, tol: 60, react: 0.7, err: 0.08 },
-  normal: { orbit: 270, tol: 52, react: 0.45, err: 0.05 },
-  hard: { orbit: 250, tol: 40, react: 0.2, err: 0.01 },
+  easy: { orbit: 290, tol: 60, react: 0.7, err: 0.08, lead: 0.3 },
+  normal: { orbit: 270, tol: 52, react: 0.45, err: 0.05, lead: 0.65 },
+  hard: { orbit: 250, tol: 40, react: 0.2, err: 0.01, lead: 1 },
 }
 
 /**
@@ -47,6 +50,10 @@ export class ShipBot {
   private sk: Skill
   private err: number
   private alignT = 0
+  /** Seconds since its last salvo: two ships chasing round a circle can stay
+   * just off each other's beam forever, so an idle captain takes wider shots
+   * (the salvo's fan still covers them) and eases the throttle to break the circle. */
+  private idleT = 0
 
   constructor(
     private rng: Rng,
@@ -69,14 +76,19 @@ export class ShipBot {
       }
     }
     const sk = this.sk
-    const dist = Math.max(1, Math.sqrt(best))
     const fx = Math.cos(me.a)
     const fy = Math.sin(me.a)
+    // Where the rival will be when a salvo fired now arrives (better captains
+    // lead more). Both the orbit and the firing solution use that point.
+    const lead = (sk.lead * Math.sqrt(best) * foe.v) / BALL_SPEED
+    const px = foe.x + Math.cos(foe.a) * lead
+    const py = foe.y + Math.sin(foe.a) * lead
+    const dist = Math.max(1, Math.hypot(px - me.x, py - me.y))
 
     // Steering: orbit at the chosen radius, tangent to the circle, so the
     // rival stays on the broadside. Far away, close in first.
-    const rx = (me.x - foe.x) / dist
-    const ry = (me.y - foe.y) / dist
+    const rx = (me.x - px) / dist
+    const ry = (me.y - py) / dist
     let tx = -ry
     let ty = rx
     if (tx * fx + ty * fy < 0) {
@@ -119,20 +131,30 @@ export class ShipBot {
         pick = th
       }
     }
-    const jx = Math.cos(pick)
-    const jy = Math.sin(pick)
+    this.idleT += dt
+    const restless = Math.max(0, this.idleT - 3)
+    // Every few idle seconds, ease off for a moment so the circle breaks.
+    const ease = restless > 0 && restless % 4 < 1.2 ? 0.45 : 1
+    const jx = Math.cos(pick) * ease
+    const jy = Math.sin(pick) * ease
 
-    // Fire when the rival is abeam (along-hull offset small) inside reach and in clear water.
-    const vx = foe.x - me.x
-    const vy = foe.y - me.y
+    // Fire when the rival is abeam (along-hull offset small) inside reach and in
+    // clear water. Better captains aim where it will be when the balls arrive.
+    const vx = px - me.x
+    const vy = py - me.y
     const along = fx * vx + fy * vy
     const lateral = Math.abs(-fy * vx + fx * vy)
-    const lined = Math.abs(along - this.err * dist) < sk.tol && lateral < RANGE - 40 && lateral > 90
+    const tol = Math.min(sk.tol + restless * 25, 150)
+    const lined = Math.abs(along - this.err * dist) < tol && lateral < RANGE - 40 && lateral > 90
     this.alignT = lined ? this.alignT + dt : 0
     const fire =
-      lined && this.alignT > sk.react && me.cd <= 0 && clearLine(w.isles, me.x, me.y, foe.x, foe.y)
+      lined &&
+      this.alignT > sk.react &&
+      me.cd <= 0 &&
+      (restless > 6 || clearLine(w.isles, me.x, me.y, foe.x, foe.y))
     if (fire) {
       this.alignT = 0
+      this.idleT = 0
       this.err = this.rng.range(-sk.err, sk.err)
     }
     return { jx, jy, fire }

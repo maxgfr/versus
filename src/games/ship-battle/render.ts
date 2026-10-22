@@ -4,6 +4,8 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { drawControl } from '../../engines/arena/index.ts'
 import { H, MID, W } from '../../core/stage.ts'
+import { lerp, outBack } from '../../core/fx/ease.ts'
+import { angleTo } from '../../engines/arena/index.ts'
 import type { State } from './index.ts'
 import {
   BALL_LIFE,
@@ -18,6 +20,26 @@ import {
   type Ship,
   WAKE_T,
 } from './rules.ts'
+
+/** Cosmetic extras from the game (never in the state). */
+export interface Look {
+  alpha: number
+  /** Last step's pose of each ship (by index), for interpolation. */
+  prev: readonly { x: number; y: number; a: number }[]
+  ballPrev: ReadonlyMap<number, { x: number; y: number }>
+  /** Roll of each ship (by id): + heels to starboard. */
+  heel: [number, number]
+  /** Wake points of each ship (by id), sampled from frames. */
+  wakes: readonly (readonly { x: number; y: number; t: number }[])[]
+}
+
+/** Where a ship is drawn this frame: blended between the last two steps. */
+function pose(s: Ship, look: Look): { x: number; y: number; a: number } {
+  const p = look.prev[s.id]
+  if (!p) return { x: s.x, y: s.y, a: s.a }
+  const k = look.alpha
+  return { x: lerp(p.x, s.x, k), y: lerp(p.y, s.y, k), a: p.a + angleTo(p.a, s.a) * k }
+}
 
 const DEEP = '#0a3a5c'
 const WATER = '#14689a'
@@ -149,10 +171,10 @@ function hull(p: CanvasRenderingContext2D): void {
 }
 
 /** Foam trail behind a moving ship: a wide fading V of white water. */
-function wake(g: Draw, s: Ship, now: number): void {
-  for (let i = 1; i < s.wake.length; i++) {
-    const a = s.wake[i - 1]
-    const b = s.wake[i]
+function wake(g: Draw, list: readonly { x: number; y: number; t: number }[], now: number): void {
+  for (let i = 1; i < list.length; i++) {
+    const a = list[i - 1]
+    const b = list[i]
     if (!a || !b) continue
     const k = 1 - clamp01((now - b.t) / WAKE_T)
     g.line(a.x, a.y, b.x, b.y, alpha('#ffffff', 0.12 * k), 14 + 46 * (1 - k))
@@ -192,8 +214,10 @@ function aimGuide(g: Draw, s: Ship, foe: Ship | undefined, now: number): void {
 }
 
 /** A toy galleon: team-coloured hull, deck, cannons on both rails, a sail that fills with speed, a flag. */
-function ship(g: Draw, s: Ship, now: number, cheer: boolean): void {
+function ship(g: Draw, s: Ship, now: number, cheer: boolean, look: Look): void {
   const col = SIDE[s.side]
+  const at = pose(s, look)
+  const heel = look.heel[s.id] ?? 0
   const sunk = !s.alive
   const p = sunk ? clamp01((now - s.sunkT) / SINK_T) : 0
   if (sunk && p >= 1) return
@@ -201,12 +225,16 @@ function ship(g: Draw, s: Ship, now: number, cheer: boolean): void {
   const hurt = clamp01(1 - (now - s.hitT) / 0.2)
   const bob = Math.sin(now * 2.4 + s.id * 2) * 0.03
   const fill = clamp01(s.v / 170)
-  g.shadow(s.x + 5, s.y + 10, 70 * (1 - p * 0.4), 36, sunk ? 0.25 * (1 - p) : 0.3)
+  g.shadow(at.x + 5, at.y + 10, 70 * (1 - p * 0.4), 36, sunk ? 0.25 * (1 - p) : 0.3)
   g.alpha(1 - p * 0.9, () => {
-    g.at(s.x, s.y, s.a + bob + p * 0.6 + (cheer ? Math.sin(now * 6) * 0.08 : 0), () => {
+    g.at(at.x, at.y, at.a + bob + p * 0.6 + (cheer ? Math.sin(now * 6) * 0.08 : 0), () => {
       const sc = (1 - p * 0.5) * HULL_SCALE
       g.save()
-      g.ctx.scale(sc, sc)
+      // Roll seen from above: the hull slides toward the low rail and its beam narrows;
+      // it also pitches gently in the swell.
+      const pitch = 1 + Math.sin(now * 2.1 + s.id * 1.3) * 0.02
+      g.ctx.translate(0, heel * 26)
+      g.ctx.scale(sc * pitch, sc * (1 - Math.min(0.35, Math.abs(heel) * 0.8)))
       // Cannons: three per rail, the firing side kicks back.
       for (const side of [1, -1] as const) {
         const kick = s.fireSide === side ? fire * 5 : 0
@@ -281,35 +309,34 @@ function ship(g: Draw, s: Ship, now: number, cheer: boolean): void {
   })
   if (sunk) {
     // Rings of foam where it went down.
-    g.ring(s.x, s.y, 40 + p * 90, alpha('#ffffff', 0.5 * (1 - p)), 6)
-    g.ring(s.x, s.y, 20 + p * 50, alpha('#ffffff', 0.4 * (1 - p)), 4)
+    g.ring(at.x, at.y, 40 + p * 90, alpha('#ffffff', 0.5 * (1 - p)), 6)
+    g.ring(at.x, at.y, 20 + p * 50, alpha('#ffffff', 0.4 * (1 - p)), 4)
     return
   }
-  // Hull points, upright for the player who owns the ship.
-  g.forSide(s.side, s.x, s.y, () => {
+  // Hull points, upright for the player who owns the ship; the one just lost pops away.
+  const lost = (now - s.hitT) / 0.4
+  g.forSide(s.side, at.x, at.y, () => {
     g.rrect(-44, -100, 88, 26, 13, alpha(C.ink, 0.7))
     for (let i = 0; i < HP; i++) {
       const x = (i - (HP - 1) / 2) * 26
       g.sideMark(s.side, x, -87, 8, i < s.hp ? col.light : alpha('#ffffff', 0.15))
+      if (i === s.hp && lost < 1)
+        g.alpha(1 - lost, () => g.sideMark(s.side, x, -87 - lost * 30, 8 + lost * 10, C.yellow))
     }
   })
 }
 
 /** A cannonball in flight: it arcs up and comes down, its shadow skimming the water. */
-function ball(g: Draw, b: Ball, now: number): void {
+function ball(g: Draw, b: Ball, now: number, look: Look): void {
+  const p = look.ballPrev.get(b.id)
+  const x = p ? lerp(p.x, b.x, look.alpha) : b.x
+  const y = p ? lerp(p.y, b.y, look.alpha) : b.y
   const k = clamp01((now - b.born) / BALL_LIFE)
   const h = Math.sin(Math.PI * k) * 34
   const m = Math.hypot(b.vx, b.vy) || 1
-  g.circle(b.x + 3, b.y + 5, BALL_R * (1 - h / 120), alpha('#001a2e', 0.35))
-  g.line(
-    b.x,
-    b.y - h,
-    b.x - (b.vx / m) * 30,
-    b.y - h * 0.8 - (b.vy / m) * 30,
-    alpha('#ffffff', 0.35),
-    6,
-  )
-  g.ball(b.x, b.y - h, BALL_R * (1 + h / 100), '#2d2b38', 0.9)
+  g.circle(x + 3, y + 5, BALL_R * (1 - h / 120), alpha('#001a2e', 0.35))
+  g.line(x, y - h, x - (b.vx / m) * 30, y - h * 0.8 - (b.vy / m) * 30, alpha('#ffffff', 0.35), 6)
+  g.ball(x, y - h, BALL_R * (1 + h / 100), '#2d2b38', 0.9)
 }
 
 export interface View {
@@ -320,11 +347,11 @@ export interface View {
 }
 
 /** Sea, shores, islands, wakes, ships and cannonballs, the docks with their controls and HUD, the round banners. */
-export function renderShips(g: Draw, s: State, now: number, v: View): void {
+export function renderShips(g: Draw, s: State, now: number, v: View, look: Look): void {
   const w = s.w
   const r = s.rounds
   sea(g, w.t)
-  for (const sh of w.ships) wake(g, sh, w.t)
+  for (const sh of w.ships) wake(g, look.wakes[sh.id] ?? [], w.t)
   shores(g, w.t)
   isles(g, w.isles, w.t)
   if (r.phase === 'play' && !v.over)
@@ -337,9 +364,9 @@ export function renderShips(g: Draw, s: State, now: number, v: View): void {
           w.t,
         )
   const champ = v.over && r.last !== 'draw' ? r.last : null
-  for (const sh of w.ships) if (!sh.alive) ship(g, sh, w.t, false)
-  for (const sh of w.ships) if (sh.alive) ship(g, sh, w.t, champ === sh.side)
-  for (const b of w.balls) ball(g, b, w.t)
+  for (const sh of w.ships) if (!sh.alive) ship(g, sh, w.t, false, look)
+  for (const sh of w.ships) if (sh.alive) ship(g, sh, w.t, champ === sh.side, look)
+  for (const b of w.balls) ball(g, b, w.t, look)
   dock(g, 1)
   dock(g, 0)
   g.vignette(0.3)
@@ -358,6 +385,10 @@ export function renderShips(g: Draw, s: State, now: number, v: View): void {
       alpha: Math.min(1, (now - r.at) * 4),
       color: col,
     })
-  } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1)
-    banner(g, undefined, `Round ${r.round}`, MID, { size: 64 })
+  } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1) {
+    // Pops in, then fades as the ships get under way.
+    const k = now - r.at
+    const size = 64 * outBack(Math.min(1, k / 0.3))
+    banner(g, undefined, `Round ${r.round}`, MID, { size, alpha: Math.min(1, (1.1 - k) / 0.3) })
+  }
 }

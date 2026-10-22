@@ -21,8 +21,10 @@ export const BALL_LIFE = RANGE / BALL_SPEED
 export const BALL_R = 8
 /** How long a sinking ship takes to disappear (s). */
 export const SINK_T = 2.4
-/** Seconds a wake point lingers. */
+/** Seconds a wake point lingers (the trail itself is cosmetic, drawn from frames). */
 export const WAKE_T = 1.5
+/** Closing speed under which two hulls just nudge each other (no bump event). */
+export const BUMP_MIN = 60
 
 /**
  * Open water between the two docks (the controls sit in the dock bands) and
@@ -102,8 +104,6 @@ export interface Ship {
   fireSide: 1 | -1
   /** World time the ship went down, or -1 while afloat. */
   sunkT: number
-  /** Recent wake points for the trail. */
-  wake: { x: number; y: number; t: number }[]
 }
 
 export interface Ball {
@@ -138,8 +138,20 @@ export type Ev =
   | { k: 'fire'; x: number; y: number; a: number; side: Side }
   | { k: 'splash'; x: number; y: number }
   | { k: 'rock'; x: number; y: number }
-  | { k: 'hit'; x: number; y: number; side: Side; left: number }
-  | { k: 'sink'; x: number; y: number; side: Side }
+  | {
+      k: 'hit'
+      x: number
+      y: number
+      side: Side
+      left: number
+      /** 0..1: how close the shot was fired from (point-blank = 1). */
+      close: number
+      vx: number
+      vy: number
+    }
+  | { k: 'sink'; x: number; y: number; side: Side; vx: number; vy: number }
+  /** Two hulls knocking together at `speed` (closing speed, units/s). */
+  | { k: 'bump'; x: number; y: number; speed: number }
 
 export function newWorld(layout: number): World {
   const ships: Ship[] = ([0, 1] as Side[]).map((side) => {
@@ -158,7 +170,6 @@ export function newWorld(layout: number): World {
       fireT: -9,
       fireSide: 1,
       sunkT: -1,
-      wake: [],
     }
   })
   return { ships, balls: [], isles: layoutIsles(layout), nextId: 1, t: 0 }
@@ -289,8 +300,6 @@ export function stepWorld(
     s.y += Math.sin(s.a) * s.v * dt
     for (const isle of w.isles) pushOut(s, isle)
     clampSea(s)
-    if (s.v > 12) s.wake.push({ x: s.x - Math.cos(s.a) * 34, y: s.y - Math.sin(s.a) * 34, t: w.t })
-    while (s.wake.length && w.t - (s.wake[0]?.t ?? 0) > WAKE_T) s.wake.shift()
     if (d?.fire && s.cd <= 0) {
       const foe = w.ships.find((f) => f.alive && f.side !== s.side)
       if (foe) salvo(w, s, foe, ev)
@@ -300,9 +309,24 @@ export function stepWorld(
     for (let j = i + 1; j < w.ships.length; j++) {
       const a = w.ships[i] as Ship
       const b = w.ships[j] as Ship
-      if (a.alive && b.alive && separate(a, b, SHIP_R, SHIP_R)) {
+      if (!a.alive || !b.alive) continue
+      // Closing speed along the line between them, before they are pushed apart.
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const d = Math.hypot(dx, dy) || 1
+      const close =
+        ((Math.cos(a.a) * a.v - Math.cos(b.a) * b.v) * dx +
+          (Math.sin(a.a) * a.v - Math.sin(b.a) * b.v) * dy) /
+        d
+      if (separate(a, b, SHIP_R, SHIP_R)) {
         clampSea(a)
         clampSea(b)
+        if (close > BUMP_MIN) {
+          // A knock bleeds the speed of both hulls; it never sinks anyone.
+          a.v *= 0.55
+          b.v *= 0.55
+          ev.push({ k: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, speed: close })
+        }
       }
     }
   const keep: Ball[] = []
@@ -327,11 +351,21 @@ export function stepWorld(
       s.hp--
       s.hitT = w.t
       spent.add(b.salvo)
-      ev.push({ k: 'hit', x: b.x, y: b.y, side: s.side, left: Math.max(0, s.hp) })
+      ev.push({
+        k: 'hit',
+        x: b.x,
+        y: b.y,
+        side: s.side,
+        left: Math.max(0, s.hp),
+        close: Math.max(0, 1 - (w.t - b.born) / BALL_LIFE),
+        vx: b.vx,
+        vy: b.vy,
+      })
       if (s.hp <= 0) {
         s.alive = false
         s.sunkT = w.t
-        ev.push({ k: 'sink', x: s.x, y: s.y, side: s.side })
+        s.v = 0
+        ev.push({ k: 'sink', x: s.x, y: s.y, side: s.side, vx: b.vx, vy: b.vy })
       }
       hit = true
       break
@@ -340,6 +374,15 @@ export function stepWorld(
   }
   w.balls = keep.filter((b) => !spent.has(b.salvo))
   w.t += dt
+}
+
+/**
+ * The round is decided: every cannonball still flying drops into the sea, so
+ * a stray one can't sink the survivor under the banner or during the ending.
+ */
+export function settle(w: World, ev: Ev[]): void {
+  for (const b of w.balls) ev.push({ k: 'splash', x: b.x, y: b.y })
+  w.balls = []
 }
 
 /** The side still afloat, 'draw' if neither is, null while both fight on. */
