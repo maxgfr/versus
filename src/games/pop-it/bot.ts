@@ -3,16 +3,16 @@ import type { Rng } from '../../core/rng.ts'
 import { legalMoves, type Move, winningMoves } from './rules.ts'
 
 /** How often each level plays the solved (perfect) move while the board is still busy. */
-const SHARP: Record<Difficulty, number> = { easy: 0.2, normal: 0.55, hard: 1 }
+const SHARP: Record<Difficulty, number> = { easy: 0.2, normal: 0.7, hard: 1 }
 /** Normal sees the ending clearly once this few bubbles are left, like a human would. */
-const CLEAR_END = 12
+const CLEAR_END = 16
 
 /**
  * The computer's turn: which row to pop from and how many. Misère Nim is
  * solved exactly (see rules), so the levels differ in how often they use it:
  * - easy: the perfect move a fifth of the time, otherwise a random pop of one
  *   to three bubbles (a beginner rarely clears whole rows);
- * - normal: perfect half the time, and always once the ending is clear;
+ * - normal: perfect most of the time, and always once the ending is clear;
  * - hard: always perfect. From a lost position it pops a single bubble from
  *   the fullest row, keeping the board as complicated as possible so a human
  *   can still go wrong.
