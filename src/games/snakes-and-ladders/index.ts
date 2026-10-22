@@ -6,6 +6,7 @@ import { C, SIDE } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import { tableBackdrop, TurnGame, type TurnState } from '../../engines/board/index.ts'
 import { buttonHit, type ButtonLayout, frame } from '../../engines/dice/index.ts'
+import { botPow, Flick, TAP_POW, turnInputs } from '../yazy/throw.ts'
 import { decide } from './bot.ts'
 import { finished, GOAL, makeBoard, move, type Link } from './rules.ts'
 import {
@@ -63,11 +64,16 @@ export interface State extends TurnState {
   anim: Move | null
   /** The winner and when they reached 100, for the closing celebration. */
   end: { winner: Side; at: number } | null
+  /** Energy of each side's last throw (0..1): how hard its die flies and lands. */
+  pow: [number, number]
 }
 
 const DIE_HIT: ButtonLayout = { x: DIE.x, y: DIE.y, w: DIE.hit, h: DIE.hit }
 
 class SnakesAndLadders extends TurnGame<State> {
+  // Cosmetic host state: one finger tracker per input that may throw.
+  private flicks = [new Flick(), new Flick()]
+
   private get target(): number {
     return this.ctx.target || match.default
   }
@@ -86,6 +92,7 @@ class SnakesAndLadders extends TurnGame<State> {
       rolls: [0, 0],
       anim: null,
       end: null,
+      pow: [TAP_POW, TAP_POW],
     }
   }
 
@@ -106,8 +113,11 @@ class SnakesAndLadders extends TurnGame<State> {
     const t0 = a.start + ROLL_T
     const n = a.path.length
     if (a.hop === 0 && this.time >= t0) {
-      // The die has settled.
-      this.ctx.audio.play('place', 0.9)
+      // The die has settled: the harder the throw, the harder it lands.
+      const pow = s.pow[a.side]
+      this.ctx.audio.play('place', 0.8 + pow * 0.25)
+      fx.shake(0.04 + pow * 0.1)
+      this.ctx.audio.buzz(Math.round(4 + pow * 10))
       if (a.face === 6) {
         const at = frame(a.side, DIE.x, DIE.y)
         fx.sparks(at.x, at.y, C.yellow, 14)
@@ -165,6 +175,7 @@ class SnakesAndLadders extends TurnGame<State> {
       // The snake bites.
       this.ctx.audio.play('chomp', 0.9)
       this.ctx.audio.play('hit', 0.8)
+      this.ctx.audio.buzz(40)
       fx.stop(6)
       fx.shake(0.45)
       fx.ring(at.x, at.y, C.orange, 110)
@@ -178,6 +189,7 @@ class SnakesAndLadders extends TurnGame<State> {
     const fx = this.ctx.fx
     if (link.to > link.from) {
       this.ctx.audio.play('coin', 1.1)
+      this.ctx.audio.buzz(20)
       fx.sparks(to.x, to.y, C.yellow, 18)
       fx.ring(to.x, to.y, C.yellow, 110)
       fx.float(
@@ -243,16 +255,25 @@ class SnakesAndLadders extends TurnGame<State> {
     s.nextAt = -1
   }
 
-  protected stepTurn(_dt: number, tap: Ptr | undefined): void {
-    if (!tap || this.over) return
-    if (buttonHit(DIE_HIT, this.s.turn, tap.x, tap.y)) this.roll()
+  protected stepTurn(dt: number, _tap: Ptr | undefined): void {
+    if (this.over) return
+    const side = this.s.turn
+    // A flick off your die throws it (its speed is the throw's energy); a tap rolls gently.
+    const onDie = (x: number, y: number) => buttonHit(DIE_HIT, side, x, y)
+    const inputs = turnInputs(this.ctx.mode, this.ctx.input.players, side)
+    for (let k = 0; k < inputs.length; k++) {
+      const g = this.flicks[k]?.update(inputs[k] as (typeof inputs)[number], dt, onDie)
+      if (!g) continue
+      this.roll(g.kind === 'flick' ? g.pow : TAP_POW)
+      return
+    }
   }
 
   protected botPlay(): void {
-    if (decide(this.ctx.difficulty) === 'roll') this.roll()
+    if (decide(this.ctx.difficulty) === 'roll') this.roll(botPow(this.time))
   }
 
-  private roll(): void {
+  private roll(pow: number): void {
     const s = this.s
     const side = s.turn
     const face = this.ctx.rng.int(1, 6)
@@ -260,6 +281,7 @@ class SnakesAndLadders extends TurnGame<State> {
     const link = m.link ? { from: m.link.from, to: m.link.to } : null
     const tail = link ? LINK_PAUSE + LINK_T + 0.3 : 0.25
     s.dice[side] = face
+    s.pow[side] = pow
     s.rolledAt[side] = this.time
     s.rolls[side]++
     s.anim = {
@@ -276,10 +298,16 @@ class SnakesAndLadders extends TurnGame<State> {
       end: this.time + ROLL_T + m.path.length * HOP + tail,
     }
     s.pos[side] = m.to
-    this.ctx.audio.play('roll')
-    this.ctx.fx.shake(0.08)
+    this.ctx.audio.play('roll', 0.85 + pow * 0.35)
+    this.ctx.fx.shake(0.04 + pow * 0.14)
+    this.ctx.audio.buzz(Math.round(6 + pow * 12))
     const at = frame(side, DIE.x, DIE.y)
     this.ctx.fx.puff(at.x, at.y + (side === 0 ? 70 : -70), 'rgba(255,255,255,0.3)', 5)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    for (const f of this.flicks) f.reset()
   }
 
   render(g: Draw): void {

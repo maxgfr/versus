@@ -399,6 +399,8 @@ export interface RenderState {
   pos: [number, number]
   dice: [number, number]
   rolledAt: [number, number]
+  /** Energy of each side's last throw (0..1). Optional: older snapshots lack it. */
+  pow?: [number, number]
   anim: Anim | null
   end: { winner: Side; at: number } | null
 }
@@ -463,7 +465,10 @@ export function renderSnakes(
     const active = s.turn === side && !over
     const since = now - s.rolledAt[side]
     const tumbling = since < ROLL_T
-    const ready = active && !s.anim && !isBot(side)
+    // Online, the roll prompt is for the die's owner only.
+    const ready = active && !s.anim && !isBot(side) && (g.viewer === null || g.viewer === side)
+    const pow = s.pow?.[side] ?? 0.4
+    const e = 0.5 + pow * 0.9
     inFrame(g, side, () => {
       // Felt cup behind the die, owned by the side, glowing when it is yours to roll.
       const col = SIDE[side].main
@@ -492,12 +497,14 @@ export function renderSnakes(
       let squash = 0
       if (tumbling) {
         const p = since / ROLL_T
-        face0 = p > 0.85 ? face0 : 1 + (Math.floor(now * 22 + side * 3) % 6)
-        y -= Math.abs(Math.sin(p * 3 * Math.PI)) * (1 - p) * 60
-        x += Math.sin(p * 9) * (1 - p) * 22
-        angle = (1 - outCubic(p)) * 7
-      } else if (since < ROLL_T + 0.25) {
-        squash = Math.max(0, 1 - outBack(prog(since, ROLL_T, ROLL_T + 0.25)))
+        // A harder throw bounces more often and higher, skids and spins more.
+        const hops = 2 + Math.round(pow * 2)
+        face0 = p > 0.85 ? face0 : 1 + (Math.floor(now * (16 + pow * 14) + side * 3) % 6)
+        y -= Math.abs(Math.sin(p * hops * Math.PI)) * (1 - p) * 64 * e
+        x += Math.sin(p * 9) * (1 - p) * 24 * e
+        angle = (1 - outCubic(p)) * 7 * e
+      } else if (since < ROLL_T + 0.3) {
+        squash = Math.max(0, 1 - outBack(prog(since, ROLL_T, ROLL_T + 0.3))) * (0.7 + pow * 0.8)
       }
       const breathe = ready ? Math.sin(now * 5) * 5 : 0
       g.alpha(active ? 1 : 0.55, () =>
@@ -510,7 +517,7 @@ export function renderSnakes(
       const ta = textAngle(g, side)
       if (ready)
         g.at(DIE.x, DIE.y + 160, ta, () =>
-          g.text('Tap to roll', 0, 0, {
+          g.text('Flick to roll', 0, 0, {
             size: 38,
             weight: 700,
             color: C.yellow,

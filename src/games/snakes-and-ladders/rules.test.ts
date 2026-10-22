@@ -1,4 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { Fx } from '../../core/fx/fx.ts'
+import type { GameContext } from '../../core/game.ts'
+import { Input } from '../../core/input.ts'
+import type { Stage } from '../../core/stage.ts'
+import { frame } from '../../engines/dice/index.ts'
+import { TAP_POW } from '../yazy/throw.ts'
+import makeGame, { type State } from './index.ts'
+import { DIE } from './render.ts'
 import { Rng } from '../../core/rng.ts'
 import { decide } from './bot.ts'
 import { colOf, finished, GOAL, linkAt, makeBoard, move, rowOf, type Board } from './rules.ts'
@@ -125,4 +133,49 @@ describe('snakes and ladders', () => {
       expect(rolls).toBeLessThan(5000)
     })
   }
+})
+
+describe('snakes and ladders throw', () => {
+  const ctx = (): GameContext => ({
+    stage: {} as Stage,
+    input: new Input({} as Stage, '1p', 0),
+    fx: new Fx(),
+    audio: { play: () => {}, buzz: () => {} } as unknown as GameContext['audio'],
+    rng: new Rng(3),
+    mode: '1p',
+    difficulty: 'normal',
+    bots: [false, false],
+    teams: false,
+    names: ['Red', 'Blue'],
+    local: 0,
+    seed: 3,
+  })
+  const step = (game: ReturnType<typeof makeGame>, c: GameContext) => {
+    game.update(1 / 60)
+    c.input.endStep()
+  }
+
+  it('a tap on your die rolls gently, a fast flick off it throws hard', () => {
+    for (const flick of [false, true]) {
+      const c = ctx()
+      const game = makeGame()
+      game.init(c)
+      const s = (game.snapshot() as { s: State }).s
+      s.turn = 0
+      const at = frame(0, DIE.x, DIE.y)
+      const p = c.input.player(0)
+      p.press(1, at.x, at.y)
+      step(game, c)
+      if (flick)
+        for (let k = 1; k <= 4; k++) {
+          p.move(1, at.x + k * 30, at.y - k * 120)
+          step(game, c)
+        }
+      p.release(1)
+      step(game, c)
+      expect(s.rolls[0]).toBe(1)
+      if (flick) expect(s.pow[0]).toBeGreaterThan(TAP_POW)
+      else expect(s.pow[0]).toBe(TAP_POW)
+    }
+  })
 })
