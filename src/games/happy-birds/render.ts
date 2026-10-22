@@ -6,8 +6,24 @@ import { LANE_H, LANE_W, repeatX } from '../../engines/runner/index.ts'
 import { counterPill, laneCard, winPips } from './hud.ts'
 import { BIRD_R, BIRD_X, type Bird, GROUND, pipe, PIPE_W, SPACING, FIRST } from './rules.ts'
 
+/** The bird's recent path, as a ring buffer of (height, scroll) samples. */
+export interface Trail {
+  y: Float32Array
+  d: Float32Array
+  n: number
+  head: number
+}
+
 export interface LaneView {
   bird: Bird
+  /** Interpolated height and scroll for this frame. */
+  y: number
+  dist: number
+  /** Body squash spring (1 at rest, above 1 stretched tall). */
+  squash: number
+  trail: Trail
+  /** Scroll speed (units/s): the faster, the longer the speed streaks. */
+  speed: number
   course: number
   time: number
   phase: 'wait' | 'fly' | 'end'
@@ -114,20 +130,28 @@ function ground(g: Draw, v: View, scroll: number): void {
   g.rect(v.x0, GROUND + 22, v.x1 - v.x0, 8, C.grassDark)
 }
 
-function drawBird(g: Draw, side: Side, b: Bird, time: number, phase: LaneView['phase']): void {
+function drawBird(
+  g: Draw,
+  side: Side,
+  b: Bird,
+  y: number,
+  squash: number,
+  time: number,
+  phase: LaneView['phase'],
+): void {
   const col = SIDE[side].main
   const dead = !b.alive
   const angle = dead
     ? Math.min(Math.PI * 0.6, (time - b.deadAt) * 4)
     : Math.max(-0.45, Math.min(1.1, b.vy / 1100))
   const sinceFlap = time - b.flapAt
-  // Squash & stretch on each flap.
-  const sq = sinceFlap < 0.18 ? 1 + 0.18 * Math.sin((sinceFlap / 0.18) * Math.PI) : 1
+  // Squash & stretch: the spring, kicked by flaps, crashes and wins.
+  const sq = Math.max(0.6, Math.min(1.5, squash))
   const r = BIRD_R * 1.28
   // Ground shadow, smaller the higher it flies.
-  const hgt = Math.max(0, GROUND - b.y)
+  const hgt = Math.max(0, GROUND - y)
   g.shadow(BIRD_X, GROUND + 8, r * Math.max(0.3, 1 - hgt / 900), 9, 0.25)
-  g.at(BIRD_X, b.y, angle, () => {
+  g.at(BIRD_X, y, angle, () => {
     // Wing behind the body, flapping fast after a flap and gliding otherwise.
     const beat =
       phase === 'wait' ? Math.sin(time * 14) : sinceFlap < 0.3 ? Math.cos(sinceFlap * 30) : 0.2
@@ -162,10 +186,32 @@ function drawBird(g: Draw, side: Side, b: Bird, time: number, phase: LaneView['p
 }
 
 /** A crown bobs over the round's winner. */
-function crown(g: Draw, b: Bird, t: number): void {
+function crown(g: Draw, y: number, t: number): void {
   const k = outBack(prog(t, 0, 0.35))
   if (k <= 0.01) return
-  g.emoji('👑', BIRD_X + 6, b.y - BIRD_R * 2.4 + Math.sin(t * 5) * 8, 62 * k, 0.15)
+  g.emoji('👑', BIRD_X + 6, y - BIRD_R * 2.4 + Math.sin(t * 5) * 8, 62 * k, 0.15)
+}
+
+/** A fading dotted wake along the path the bird just flew. */
+function wake(g: Draw, side: Side, o: LaneView): void {
+  const t = o.trail
+  const len = t.y.length
+  for (let i = 1; i < t.n; i++) {
+    const j = (t.head - 1 - i + len * 2) % len
+    const x = BIRD_X - 30 - (o.dist - (t.d[j] ?? 0))
+    const k = 1 - i / len
+    g.alpha(0.35 * k, () => g.circle(x, t.y[j] ?? 0, 4 + 10 * k, SIDE[side].light))
+  }
+}
+
+/** Speed streaks past the bird: longer and brighter as the round speeds up. */
+function streaks(g: Draw, o: LaneView): void {
+  const k = Math.max(0, (o.speed - 330) / 170)
+  if (k <= 0.02) return
+  repeatX(o.dist * 1.6, 260, 0, LANE_W, (x, i) => {
+    const y = 160 + ((i * 137) % 9) * 52
+    g.alpha(0.12 + 0.18 * k, () => g.line(x, y, x + 40 + 90 * k, y, '#ffffff', 5))
+  })
 }
 
 /** Round sockets x: a long match packs them toward the lane's right edge (the hud does the packing). */
@@ -175,8 +221,9 @@ const CARD_X = LANE_W / 2 + 110
 
 export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const b = o.bird
-  const scroll = b.dist
+  const scroll = o.dist
   backdrop(g, side, v, scroll)
+  if (o.phase === 'fly') streaks(g, o)
   // Pipes in view.
   const first = Math.max(0, Math.floor((scroll + v.x0 - FIRST - PIPE_W - 20) / SPACING))
   const last = Math.ceil((scroll + v.x1 - FIRST + 20) / SPACING)
@@ -187,23 +234,26 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
     drawPipe(g, x, p.gapY + p.gapH / 2, GROUND + 4, true)
   }
   ground(g, v, scroll)
-  drawBird(g, side, b, o.time, o.phase)
+  wake(g, side, o)
+  drawBird(g, side, b, o.y, o.squash, o.time, o.phase)
 
   const won = o.phase === 'end' && o.roundWinner === side
-  if (won) crown(g, b, o.since)
+  if (won) crown(g, o.y, o.since)
 
   counterPill(g, side, b.pipes, o.bot ? 'Computer' : o.name, LANE_W / 2 - 60, 70, o.time - o.passAt)
   winPips(g, side, o.wins, o.target, PIPS_X, 66, won ? o.since : 9)
 
   const cy = LANE_H * 0.47
   if (o.phase === 'wait') {
-    const label = o.round > 1 ? `Round ${o.round}` : o.bot ? 'Ready…' : 'Tap to flap!'
+    // Online, each phone only coaches its own player: the rival's lane just says Ready.
+    const coach = !o.bot && (g.viewer === null || g.viewer === side)
+    const label = o.round > 1 ? `Round ${o.round}` : coach ? 'Tap to flap!' : 'Ready…'
     laneCard(g, label, CARD_X, cy, {
       t: o.since,
-      sub: o.bot ? '' : o.round > 1 ? `${o.wins} – ${o.rivalWins}` : 'Tap your half',
+      sub: o.round > 1 ? (o.bot ? '' : `${o.wins} – ${o.rivalWins}`) : coach ? 'Tap your half' : '',
       accent: SIDE[side].main,
     })
-    if (!o.bot) g.emoji('👆', BIRD_X, 530 + Math.sin(o.time * 8) * 16, 84)
+    if (coach) g.emoji('👆', BIRD_X, 530 + Math.sin(o.time * 8) * 16, 84)
   } else if (o.phase === 'end') {
     const w = o.roundWinner
     const done = o.matchOver

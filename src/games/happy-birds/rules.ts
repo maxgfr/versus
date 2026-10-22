@@ -16,6 +16,10 @@ export const FIRST = 980
 export const TARGET = 2
 /** A round that lasts this long is called a draw: nobody fell. */
 export const ROUND_CAP = 90
+/** Past this pipe (about a minute of flight) the gaps keep closing, so two good birds cannot fly forever. */
+export const SUDDEN = 60
+/** Narrowest gap: still two bird widths and more. */
+export const GAP_MIN = 180
 
 export interface Bird {
   y: number
@@ -46,8 +50,14 @@ export function speedAt(t: number): number {
   return Math.min(500, 320 + t * 3.2)
 }
 
+/** Gap height of pipe i: it narrows to 215 by pipe 34, then sudden death past SUDDEN narrows it further. */
+export function gapAt(i: number): number {
+  const h = Math.max(215, 300 - i * 2.5)
+  return i <= SUDDEN ? h : Math.max(GAP_MIN, h - (i - SUDDEN) * 1.5)
+}
+
 export function pipe(seed: number, i: number): Pipe {
-  const gapH = Math.max(215, 300 - i * 2.5)
+  const gapH = gapAt(i)
   const lo = 110 + gapH / 2
   const hi = GROUND - 90 - gapH / 2
   const mid = (lo + hi) / 2

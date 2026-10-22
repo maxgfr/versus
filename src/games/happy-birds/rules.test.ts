@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { Difficulty } from '../../core/game.ts'
 import { shouldFlap } from './bot.ts'
 import {
+  BIRD_R,
   crashed,
+  GAP_MIN,
+  gapAt,
   GROUND,
   newBird,
   nextPipe,
@@ -11,6 +14,7 @@ import {
   ROUND_CAP,
   speedAt,
   stepBird,
+  SUDDEN,
 } from './rules.ts'
 
 const DT = 1 / 60
@@ -38,8 +42,17 @@ describe('happy birds course', () => {
       const p = pipe(9, i)
       expect(p.gapY - p.gapH / 2).toBeGreaterThan(80)
       expect(p.gapY + p.gapH / 2).toBeLessThan(GROUND - 60)
-      expect(p.gapH).toBeGreaterThanOrEqual(215)
+      expect(p.gapH).toBeGreaterThanOrEqual(GAP_MIN)
     }
+  })
+
+  it('keeps narrowing past a minute of flight, so two good birds cannot fly forever', () => {
+    expect(gapAt(SUDDEN)).toBe(215)
+    expect(gapAt(SUDDEN + 10)).toBeLessThan(215)
+    expect(gapAt(SUDDEN + 200)).toBe(GAP_MIN)
+    // Never shut: the bird still fits with room on both sides.
+    expect(GAP_MIN).toBeGreaterThan(BIRD_R * 4)
+    for (let i = 1; i < 200; i++) expect(gapAt(i)).toBeLessThanOrEqual(gapAt(i - 1))
   })
 
   it('counts passed pipes and finds the next one', () => {
@@ -67,6 +80,18 @@ describe('happy birds bot', () => {
     const times = [1, 2, 3, 4, 5].map((s) => fly(s, 'hard'))
     const avg = times.reduce((a, b) => a + b) / times.length
     expect(avg).toBeGreaterThan(25)
+  })
+
+  it('two hard bots rarely reach the round cap: sudden death ends the round', () => {
+    const times = [1, 2, 3, 4, 5, 6].map((s) => fly(s, 'hard'))
+    expect(times.filter((t) => t >= ROUND_CAP).length).toBeLessThanOrEqual(1)
+  })
+
+  it('spreads the levels: easy crashes sooner than hard on average', () => {
+    const seeds = [1, 2, 3, 4, 5, 6, 7, 8]
+    const avg = (d: Difficulty) =>
+      seeds.map((s) => fly(s, d)).reduce((a, b) => a + b) / seeds.length
+    expect(avg('easy')).toBeLessThan(avg('hard'))
   })
 
   it('an easy bot eventually crashes, so rounds end', () => {
