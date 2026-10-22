@@ -48,3 +48,37 @@ describe('broken tiles: match length', () => {
     expect(match.unit).toBe('wins')
   })
 })
+
+describe('broken tiles: input and flow', () => {
+  function humanGame() {
+    const players: [PlayerInput, PlayerInput] = [new PlayerInput(0), new PlayerInput(1)]
+    const ctx = botContext()
+    ctx.input = { player: (side: 0 | 1) => players[side] } as unknown as GameContext['input']
+    ctx.bots = [false, true]
+    ctx.mode = '1p'
+    const game = createGame()
+    game.init(ctx)
+    const step = () => {
+      game.update(STEP)
+      for (const p of players) p.endStep()
+    }
+    return { game, players, step }
+  }
+
+  it('a slow drag walks, a fast flick of the finger dashes', () => {
+    const { game, players, step } = humanGame()
+    const s = () => (game.snapshot() as { s: { b: { p: { dash: number; x: number }[] } } }).s
+    players[0].press(1, 500, 1400)
+    step()
+    // Slow drag right: 10 units a step = 600 units/s.
+    for (let i = 1; i <= 12; i++) {
+      players[0].move(1, 500 + i * 10, 1400)
+      step()
+    }
+    expect(s().b.p[0]?.dash).toBe(0)
+    // Flick: 90 units in one step = 5400 units/s.
+    players[0].move(1, 710, 1400)
+    step()
+    expect(s().b.p[0]?.dash).toBeGreaterThan(0.9)
+  })
+})

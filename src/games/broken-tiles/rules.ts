@@ -30,6 +30,14 @@ export const SPEED = 330
 export const REACH = 26
 /** Body radius, for drawing and bots. */
 export const BODY = 30
+/** A full-force dash multiplies walking speed by 1 + DASH_BOOST at its peak. */
+export const DASH_BOOST = 0.9
+/** How fast a dash's boost fades (1/s): about a third of a second of burst. */
+export const DASH_FADE = 6
+/** Seconds between two dashes. */
+export const DASH_CD = 0.9
+/** The weakest dash a flick can give (a harder flick goes up to 1). */
+export const DASH_MIN = 0.35
 
 export const INTACT = 0
 export const CRACK = 1
@@ -59,6 +67,10 @@ export interface Body {
   alive: boolean
   /** Time it fell (s), -1 while alive. */
   fallT: number
+  /** Remaining dash boost 0..1 (decays). */
+  dash: number
+  /** Time of the last dash (s), for the cooldown and its animation. */
+  dashT: number
 }
 
 export interface Board {
@@ -75,6 +87,7 @@ export type Ev =
   | { k: 'drop'; i: number }
   | { k: 'enter'; side: Side; i: number }
   | { k: 'fall'; side: Side; x: number; y: number }
+  | { k: 'dash'; side: Side; x: number; y: number; force: number }
 
 export function tileCentre(i: number): { x: number; y: number } {
   const c = i % COLS
@@ -114,7 +127,18 @@ export function newBoard(now: number): Board {
   const body = (side: Side): Body => {
     const tile = START[side]
     const c = tileCentre(tile)
-    return { x: c.x, y: c.y, vx: 0, vy: 0, tile, since: now, alive: true, fallT: -1 }
+    return {
+      x: c.x,
+      y: c.y,
+      vx: 0,
+      vy: 0,
+      tile,
+      since: now,
+      alive: true,
+      fallT: -1,
+      dash: 0,
+      dashT: -9,
+    }
   }
   return {
     st: Array.from({ length: n }, (_, i) => (HOLES.includes(i) ? GONE : INTACT)),
@@ -145,6 +169,30 @@ export function supported(b: Board, x: number, y: number): boolean {
   })
 }
 
+/** Is live tile `i` holding up a body still standing (any footprint point on it)? */
+function holds(b: Board, i: number): boolean {
+  for (const p of b.p) {
+    if (!p.alive) continue
+    for (const [dx, dy] of REACH_PTS) if (tileAt(p.x + dx, p.y + dy) === i) return true
+  }
+  return false
+}
+
+/**
+ * A flick: burst of speed for `side`, `force` 0..1 (clamped up to DASH_MIN).
+ * Refused (false) while falling or during the cooldown. The boost only scales
+ * the stick, so a dash never carries a body over a hole it could not walk over.
+ */
+export function dash(b: Board, side: Side, force: number, now: number, ev: Ev[]): boolean {
+  const p = b.p[side]
+  if (!p.alive || now - p.dashT < DASH_CD) return false
+  const k = Math.min(1, Math.max(DASH_MIN, force))
+  p.dash = k
+  p.dashT = now
+  ev.push({ k: 'dash', side, x: p.x, y: p.y, force: k })
+  return true
+}
+
 function crack(b: Board, i: number, now: number, stand: boolean, ev: Ev[]): void {
   b.st[i] = CRACK
   b.t[i] = now
@@ -153,9 +201,13 @@ function crack(b: Board, i: number, now: number, stand: boolean, ev: Ev[]): void
 
 /**
  * Advance the board one step. `dirs[side]` is that side's stick vector (at most
- * unit length; zero when idle or when the round is not being played). Events
- * are appended to `ev`. Returns the side still standing once someone falls:
- * 'draw' when both fall in the same step, null while the round goes on.
+ * unit length). Events are appended to `ev`. Returns the side still standing
+ * once someone falls: 'draw' when both fall in the same step, null while the
+ * round goes on.
+ *
+ * `play` false is the pause between rounds: nobody moves, standing still
+ * cracks nothing and the survivors are safe (tiles under them do not drop),
+ * while the rest of the board keeps crumbling.
  */
 export function stepBoard(
   b: Board,
@@ -163,14 +215,28 @@ export function stepBoard(
   dt: number,
   now: number,
   ev: Ev[],
+  play = true,
 ): Side | 'draw' | null {
   const before = [b.p[0].tile, b.p[1].tile]
   for (const side of [0, 1] as const) {
     const p = b.p[side]
-    if (!p.alive) continue
+    p.dash *= Math.exp(-DASH_FADE * dt)
+    if (p.dash < 0.01) p.dash = 0
+    if (!p.alive || !play) {
+      p.vx = p.vy = 0
+      continue
+    }
     const d = dirs[side] ?? [0, 0]
-    p.vx = (d[0] ?? 0) * SPEED
-    p.vy = (d[1] ?? 0) * SPEED
+    let dx = d[0] ?? 0
+    let dy = d[1] ?? 0
+    const m = Math.hypot(dx, dy)
+    if (m > 1) {
+      dx /= m
+      dy /= m
+    }
+    const v = SPEED * (1 + DASH_BOOST * p.dash)
+    p.vx = dx * v
+    p.vy = dy * v
     p.x += p.vx * dt
     p.y += p.vy * dt
     const i = nearestTile(p.x, p.y)
@@ -180,19 +246,21 @@ export function stepBoard(
       if (i >= 0 && b.st[i] === INTACT) ev.push({ k: 'enter', side, i })
     }
   }
-  // Stepping off a tile cracks it, unless the other body still stands on it.
+  // Stepping off a tile cracks it, unless the other body was already on it and
+  // still is (two bodies swapping tiles in one step crack both).
   for (const side of [0, 1] as const) {
     const old = before[side] ?? -1
     const p = b.p[side]
     if (old < 0 || old === p.tile) continue
-    const other = side === 0 ? b.p[1] : b.p[0]
-    if (other.alive && other.tile === old) continue
+    const o = side === 0 ? 1 : 0
+    const other = b.p[o]
+    if (other.alive && other.tile === old && before[o] === old) continue
     if (b.st[old] === INTACT) crack(b, old, now, false, ev)
   }
   // Staying put too long cracks every intact tile holding the body up, so nobody
   // can hover in a gap or camp on a tile.
   for (const p of b.p) {
-    if (!p.alive || now - p.since < STAND) continue
+    if (!p.alive || !play || now - p.since < STAND) continue
     for (const [dx, dy] of REACH_PTS) {
       const i = tileAt(p.x + dx, p.y + dy)
       if (i >= 0 && b.st[i] === INTACT) crack(b, i, now, true, ev)
@@ -200,7 +268,7 @@ export function stepBoard(
   }
   // Cracked tiles drop once their time is up.
   for (let i = 0; i < b.st.length; i++) {
-    if (b.st[i] === CRACK && now - (b.t[i] ?? 0) >= DROP) {
+    if (b.st[i] === CRACK && now - (b.t[i] ?? 0) >= DROP && (play || !holds(b, i))) {
       b.st[i] = GONE
       b.t[i] = now
       ev.push({ k: 'drop', i })
@@ -208,7 +276,7 @@ export function stepBoard(
   }
   for (const side of [0, 1] as const) {
     const p = b.p[side]
-    if (p.alive && !supported(b, p.x, p.y)) {
+    if (p.alive && play && !supported(b, p.x, p.y)) {
       p.alive = false
       p.fallT = now
       ev.push({ k: 'fall', side, x: p.x, y: p.y })

@@ -10,6 +10,7 @@ import {
   type Board,
   COLS,
   CRACK,
+  DASH_CD,
   DROP,
   GONE,
   HOLES,
@@ -29,6 +30,14 @@ export interface StickLook {
   kx: number
   ky: number
   r: number
+}
+
+/** Per-frame cosmetic extras from the game (the online guest passes none). */
+export interface Look {
+  /** Interpolated body centres for this frame. */
+  pos?: readonly { x: number; y: number }[]
+  /** Squash springs (1 = rest; < 1 squashed, > 1 stretched). */
+  squash?: readonly [number, number]
 }
 
 /** Seconds a dropped tile (or a body) takes to tumble out of sight. */
@@ -159,7 +168,11 @@ function tiles(
     const c = tileCentre(i)
     const k = rise(i, since)
     if (k <= 0) continue
-    const sc = 0.4 + 0.6 * outBack(k)
+    // A tile dips under the weight of a body that just landed on it, then springs back.
+    const who0 = owner(i)
+    const land = who0 >= 0 ? now - b.p[who0 as Side].since : 9
+    const dip = land >= 0 && land < 0.4 ? Math.exp(-land * 10) * Math.cos(land * 26) * 0.07 : 0
+    const sc = (0.4 + 0.6 * outBack(k)) * (1 - dip)
     const t0 = b.t[i] ?? -9
     if (st === INTACT) {
       const w = warnOf(b, i, now)
@@ -251,6 +264,8 @@ function blobAt(
     sc?: number
     spin?: number
     colour?: string
+    sx?: number
+    sy?: number
   },
 ): void {
   const col = o.colour ?? SIDE[p.side].main
@@ -271,8 +286,8 @@ function blobAt(
     g.blob(0, 0, R * sc, col, {
       mood: o.mood,
       look,
-      sx: 1 / sq,
-      sy: sq,
+      sx: (o.sx ?? 1) / sq,
+      sy: (o.sy ?? 1) * sq,
       angle: (o.spin ?? 0) + walk * 0.06,
     }),
   )
@@ -296,30 +311,65 @@ function falling(g: Draw, b: Board, side: Side, now: number): void {
   )
 }
 
-function piece(g: Draw, s: State, side: Side, now: number): void {
+function piece(g: Draw, s: State, side: Side, now: number, look: Look): void {
   const b = s.b
   const p = b.p[side]
   if (!p.alive) return
+  const at = look.pos?.[side] ?? p
   const r = s.rounds
   const won = r.phase === 'between' && r.last === side
   const onCrack = p.tile >= 0 && b.st[p.tile] === CRACK
   const warn = p.tile >= 0 ? warnOf(b, p.tile, now) : 0
-  const hop = won ? Math.abs(Math.sin((now - r.at) * 7)) * 34 : 0
-  const mood = won ? 'grin' : onCrack ? 'wow' : warn > 0.5 ? 'angry' : 'happy'
-  g.shadow(p.x, p.y + R * 0.78, R * (1.05 - hop / 140), R * 0.36, 0.42)
-  blobAt(g, { side, x: p.x, y: p.y, vx: p.vx, vy: p.vy }, now, { mood, hop })
+  const speed = Math.hypot(p.vx, p.vy)
+  // Little steps while walking, a victory bounce after a round, breathing at rest.
+  const step = speed > 20 ? Math.abs(Math.sin(now * 15 + side * 1.7)) * 9 : 0
+  const hop = won ? Math.abs(Math.sin((now - r.at) * 7)) * 34 : step
+  const mood = won ? 'grin' : onCrack ? 'wow' : warn > 0.5 || p.dash > 0.3 ? 'angry' : 'happy'
+  // Trembling on a tile about to give way.
+  const shiver = onCrack ? Math.sin(now * 70 + side) * 3 : warn > 0.5 ? Math.sin(now * 55) * 1.5 : 0
+  // Squash: the spring, a landing bob stamped by arrival time, breathing when idle.
+  const land = now - p.since
+  const bob = land >= 0 && land < 0.35 ? -Math.exp(-land * 12) * Math.cos(land * 30) * 0.1 : 0
+  const breathe = speed < 20 ? Math.sin(now * 3 + side) * 0.03 : 0
+  const sq = (look.squash?.[side] ?? 1) + bob + breathe
+  // A dash stretches the body along its run (dominant axis) and leaves ghosts.
+  const d = p.dash
+  const ax = speed > 1 ? Math.abs(p.vx) / speed : 0
+  const stretch = 1 + d * 0.28
+  const sx = (1 / sq) * (1 + (stretch - 1) * ax) * (1 - (stretch - 1) * 0.5 * (1 - ax))
+  const sy = sq * (1 + (stretch - 1) * (1 - ax)) * (1 - (stretch - 1) * 0.5 * ax)
+  if (d > 0.08 && speed > 20) {
+    for (let k = 3; k >= 1; k--) {
+      const lag = k * 0.035
+      g.alpha(d * (0.42 - k * 0.11), () =>
+        g.circle(at.x - p.vx * lag, at.y - p.vy * lag, R * (1 - k * 0.12), SIDE[side].light),
+      )
+    }
+  }
+  g.shadow(at.x + shiver, at.y + R * 0.78, R * (1.05 - hop / 140), R * 0.36, 0.42)
+  blobAt(g, { side, x: at.x + shiver, y: at.y, vx: p.vx, vy: p.vy }, now, {
+    mood,
+    hop,
+    sx,
+    sy,
+  })
   // Red is a circle, blue a square, above the head (never colour alone).
-  g.forSide(side, p.x, p.y - hop, () => {
-    g.sideMark(side, 0, -R * 1.5, 11, C.white)
-    g.sideMark(side, 0, -R * 1.5, 7, SIDE[side].main)
+  g.forSide(side, at.x + shiver, at.y - hop, () => {
+    g.sideMark(side, 0, -R * 1.5 * sy, 11, C.white)
+    g.sideMark(side, 0, -R * 1.5 * sy, 7, SIDE[side].main)
   })
 }
 
-function joystick(g: Draw, k: StickLook): void {
+function joystick(g: Draw, k: StickLook, dashT: number, now: number): void {
   if (!k.on) return
   const col = SIDE[k.side]
+  // The rim fills back up after a dash and glows when the next flick is ready.
+  const ready = clamp((now - dashT) / DASH_CD, 0, 1)
   g.alpha(0.9, () => {
     g.circle(k.bx, k.by, k.r, alpha(col.dark, 0.35), alpha(col.light, 0.5), 5)
+    if (ready < 1)
+      g.arc(k.bx, k.by, k.r + 12, -Math.PI / 2, -Math.PI / 2 + ready * Math.PI * 2, C.yellow, 8)
+    else g.ring(k.bx, k.by, k.r + 12, alpha(C.yellow, 0.25 + 0.15 * Math.sin(now * 6)), 6)
     g.ball(k.kx, k.ky, k.r * 0.45, col.main, 0.6)
   })
 }
@@ -331,6 +381,7 @@ export function renderBroken(
   names: [string, string],
   over: boolean,
   humans: readonly [boolean, boolean],
+  look: Look = {},
 ): void {
   const b = s.b
   const since = s.rounds.phase === 'play' ? now - s.rounds.at : 9
@@ -348,8 +399,8 @@ export function renderBroken(
   tiles(g, b, now, built, owner)
   // The body nearer the bottom of the screen is drawn last (in front).
   const order: Side[] = b.p[0].y >= b.p[1].y ? [1, 0] : [0, 1]
-  for (const side of order) piece(g, s, side, now)
-  for (const k of s.ctl) joystick(g, k)
+  for (const side of order) piece(g, s, side, now, look)
+  for (const k of s.ctl) joystick(g, k, b.p[k.side].dashT, now)
   // A first-round hint for each human, upright in their half.
   if (s.rounds.round === 1 && since < 3.2)
     for (const side of [0, 1] as const) {
@@ -357,10 +408,11 @@ export function renderBroken(
       const y = side === 0 ? MID + 640 : MID - 640
       g.alpha(Math.min(1, (3.2 - since) * 2) * 0.95, () =>
         g.forSide(side, W / 2, y, () => {
-          const tw = g.measure('Drag to move', 44, 700) + 64
-          g.rrect(-tw / 2, -40, tw, 80, 40, alpha(C.ink, 0.82))
-          g.rrect(-tw / 2, -40, tw, 80, 40, undefined, alpha(SIDE[side].main, 0.8), 4)
-          g.text('Drag to move', 0, 2, { size: 44, weight: 700, color: C.white })
+          const tw = g.measure('Drag to move', 44, 700) + 80
+          g.rrect(-tw / 2, -66, tw, 132, 44, alpha(C.ink, 0.82))
+          g.rrect(-tw / 2, -66, tw, 132, 44, undefined, alpha(SIDE[side].main, 0.8), 4)
+          g.text('Drag to move', 0, -22, { size: 44, weight: 700, color: C.white })
+          g.text('Flick to dash', 0, 30, { size: 36, weight: 600, color: C.yellow })
         }),
       )
     }

@@ -7,7 +7,10 @@ import {
   type Board,
   COLS,
   CRACK,
+  DASH_BOOST,
+  DASH_CD,
   DROP,
+  dash,
   type Ev,
   GONE,
   HOLES,
@@ -192,32 +195,202 @@ describe('falling', () => {
   })
 })
 
+describe('fixes', () => {
+  it('two bodies swapping tiles in one step crack both tiles', () => {
+    const b = newBoard(0)
+    const x = b.p[0].tile
+    const y = x - 1
+    place(b, 1, y)
+    b.p[1].tile = y
+    // Swap: each lands on the other's tile in the same step.
+    place(b, 0, y)
+    place(b, 1, x)
+    const ev: Ev[] = []
+    stepBoard(b, NONE, STEP, 0.5, ev)
+    expect(b.st[x]).toBe(CRACK)
+    expect(b.st[y]).toBe(CRACK)
+  })
+
+  it('a body joining a tile the other leaves in the same step does not save it', () => {
+    const b = newBoard(0)
+    const x = b.p[0].tile
+    place(b, 1, x - 1)
+    b.p[1].tile = x - 1
+    // Red steps up, blue steps onto red's old tile: it was red's alone, so it cracks.
+    place(b, 0, x - COLS)
+    place(b, 1, x)
+    stepBoard(b, NONE, STEP, 0.5, [])
+    expect(b.st[x]).toBe(CRACK)
+  })
+
+  it('the survivor never falls in the pause between rounds', () => {
+    const b = newBoard(0)
+    // Blue has fallen: red stands still on a tile that is already cracking.
+    b.p[1].alive = false
+    b.p[1].fallT = 0
+    const tile = b.p[0].tile
+    b.st[tile] = CRACK
+    b.t[tile] = 0
+    const ev: Ev[] = []
+    let t = 0
+    for (let i = 0; i < 60 * 5; i++) {
+      stepBoard(
+        b,
+        [
+          [1, 0],
+          [0, 0],
+        ],
+        STEP,
+        t,
+        ev,
+        false,
+      )
+      t += STEP
+    }
+    expect(b.p[0].alive).toBe(true)
+    expect(b.st[tile]).toBe(CRACK)
+    // Nobody moved, nothing cracked from standing.
+    expect(b.p[0].x).toBe(tileCentre(tile).x)
+    expect(ev.some((e) => e.k === 'crack' && e.stand)).toBe(false)
+  })
+
+  it('other cracked tiles still drop during the pause', () => {
+    const b = newBoard(0)
+    const far = 3
+    b.st[far] = CRACK
+    b.t[far] = 0
+    let t = 0
+    for (let i = 0; i < 60; i++) {
+      stepBoard(b, NONE, STEP, t, [], false)
+      t += STEP
+    }
+    expect(b.st[far]).toBe(GONE)
+  })
+})
+
+describe('dash', () => {
+  it('boosts the walk by up to DASH_BOOST and fades', () => {
+    const b = newBoard(0)
+    const ev: Ev[] = []
+    expect(dash(b, 0, 1, 0, ev)).toBe(true)
+    expect(ev.some((e) => e.k === 'dash' && e.side === 0 && e.force === 1)).toBe(true)
+    const x0 = b.p[0].x
+    stepBoard(
+      b,
+      [
+        [1, 0],
+        [0, 0],
+      ],
+      STEP,
+      0,
+      [],
+    )
+    const v1 = (b.p[0].x - x0) / STEP
+    expect(v1).toBeGreaterThan(330 * (1 + DASH_BOOST * 0.85))
+    expect(v1).toBeLessThanOrEqual(330 * (1 + DASH_BOOST) + 1e-6)
+    run(
+      b,
+      [
+        [0, 0],
+        [0, 0],
+      ],
+      1,
+      STEP,
+    )
+    expect(b.p[0].dash).toBe(0)
+  })
+
+  it('a dash never moves a body with an idle stick', () => {
+    const b = newBoard(0)
+    dash(b, 0, 1, 0, [])
+    const x0 = b.p[0].x
+    stepBoard(b, NONE, STEP, 0, [])
+    expect(b.p[0].x).toBe(x0)
+  })
+
+  it('a soft flick still gives the minimum dash, and the cooldown refuses spam', () => {
+    const b = newBoard(0)
+    expect(dash(b, 0, 0, 1, [])).toBe(true)
+    expect(b.p[0].dash).toBeGreaterThan(0.3)
+    expect(dash(b, 0, 1, 1 + DASH_CD / 2, [])).toBe(false)
+    expect(dash(b, 0, 1, 1 + DASH_CD + 1e-6, [])).toBe(true)
+  })
+
+  it('a fallen body cannot dash', () => {
+    const b = newBoard(0)
+    b.p[0].alive = false
+    expect(dash(b, 0, 1, 0, [])).toBe(false)
+  })
+
+  it('dashing across a hole still falls in it', () => {
+    const b = newBoard(0)
+    const tile = b.p[0].tile
+    const hole = tile + 1
+    b.st[hole] = GONE
+    dash(b, 0, 1, 0, [])
+    const r = run(
+      b,
+      [
+        [1, 0],
+        [0, 0],
+      ],
+      0.6,
+      0,
+    )
+    expect(r.winner).toBe(1)
+    expect(b.p[0].alive).toBe(false)
+  })
+
+  it('a body never moves more than its reach in one step, even dashing (no tunnelling)', () => {
+    expect(330 * (1 + DASH_BOOST) * STEP).toBeLessThan(REACH)
+  })
+})
+
 describe('bots', () => {
   // Plays one round until somebody falls. Bounded, so a bot that never finishes fails.
   function playRound(seed: number, a: Difficulty, b2: Difficulty) {
     const board = newBoard(0)
     const rng = new Rng(seed)
-    const red = TileBot.of(rng.fork(), a)
-    const blue = TileBot.of(rng.fork(), b2)
+    const bots = [TileBot.of(rng.fork(), a), TileBot.of(rng.fork(), b2)]
     let t = 0
     for (let i = 0; i < 60 * 240; i++) {
-      const d0 = red.drive(board, 0, STEP)
-      const d1 = blue.drive(board, 1, STEP)
-      const w = stepBoard(
-        board,
-        [
-          [d0.x, d0.y],
-          [d1.x, d1.y],
-        ],
-        STEP,
-        t,
-        [],
-      )
+      const dirs: [number, number][] = [
+        [0, 0],
+        [0, 0],
+      ]
+      for (const side of [0, 1] as const) {
+        const d = bots[side]?.drive(board, side, t) ?? { x: 0, y: 0, dash: 0 }
+        if (d.dash > 0) dash(board, side, d.dash, t, [])
+        dirs[side] = [d.x, d.y]
+      }
+      const w = stepBoard(board, dirs, STEP, t, [])
       t += STEP
       if (w !== null) return { w, t }
     }
     return { w: null, t }
   }
+
+  /** Rounds won by `strong` over `weak` out of 2 × n, playing each side n times. */
+  function score(strong: Difficulty, weak: Difficulty, n: number): number {
+    let won = 0
+    for (let seed = 1; seed <= n; seed++) {
+      if (playRound(seed, strong, weak).w === 0) won++
+      if (playRound(seed + 100, weak, strong).w === 1) won++
+    }
+    return won
+  }
+
+  it('hard clearly beats easy, from either side', () => {
+    expect(score('hard', 'easy', 10)).toBeGreaterThanOrEqual(16)
+  })
+
+  it('hard clearly beats normal', () => {
+    expect(score('hard', 'normal', 10)).toBeGreaterThanOrEqual(15)
+  })
+
+  it('normal clearly beats easy', () => {
+    expect(score('normal', 'easy', 10)).toBeGreaterThanOrEqual(15)
+  })
 
   it('bots finish a round in bounded time whichever side they play', () => {
     for (let seed = 1; seed <= 6; seed++) {
@@ -235,7 +408,8 @@ describe('bots', () => {
     let idle = 0
     let worst = 0
     for (let i = 0; i < 60 * 20; i++) {
-      const d = bot.drive(b, 0, STEP)
+      const d = bot.drive(b, 0, t)
+      if (d.dash > 0) dash(b, 0, d.dash, t, [])
       const before = b.p[0].tile
       const w = stepBoard(
         b,
@@ -249,9 +423,56 @@ describe('bots', () => {
       )
       t += STEP
       if (w !== null) break
-      idle = b.p[0].tile === before && Math.hypot(d.x, d.y) < 0.01 ? idle + STEP : 0
+      // Standing still is only a fault while a free neighbour is left to walk to.
+      const free = [1, -1, COLS, -COLS].some((o) => {
+        const n = before + o
+        const sameRow =
+          Math.abs(o) === 1 ? Math.floor(n / COLS) === Math.floor(before / COLS) : true
+        return n >= 0 && n < COLS * ROWS && sameRow && b.st[n] === INTACT
+      })
+      idle = b.p[0].tile === before && Math.hypot(d.x, d.y) < 0.01 && free ? idle + STEP : 0
       worst = Math.max(worst, idle)
     }
     expect(worst).toBeLessThan(STAND)
+  })
+
+  it('a boxed-in bot stands its ground instead of walking into the void', () => {
+    const b = newBoard(0)
+    const here = b.p[0].tile
+    for (let i = 0; i < b.st.length; i++) if (i !== here && i !== b.p[1].tile) b.st[i] = GONE
+    const bot = TileBot.of(new Rng(1), 'hard')
+    const d = bot.drive(b, 0, 0.5)
+    expect(Math.hypot(d.x, d.y)).toBeLessThan(0.05)
+  })
+
+  it('once cut off, a smart bot makes each tile last instead of burning its island', () => {
+    const b = newBoard(0)
+    // A trench across the middle row: red's island is the bottom half.
+    const mid = Math.floor(ROWS / 2)
+    for (let c = 0; c < COLS; c++) b.st[mid * COLS + c] = GONE
+    const bot = TileBot.of(new Rng(2), 'hard')
+    let t = 0
+    const ev: Ev[] = []
+    for (let i = 0; i < 60 * 20; i++) {
+      const d = bot.drive(b, 0, t)
+      stepBoard(
+        b,
+        [
+          [d.x, d.y],
+          [0, 0],
+        ],
+        STEP,
+        t,
+        ev,
+      )
+      t += STEP
+    }
+    expect(b.p[0].alive).toBe(true)
+    // 20 s on, it has walked over far fewer tiles than rushing would (~3 a second).
+    const cracked = ev.filter((e) => e.k === 'crack' && !e.stand).length
+    expect(cracked).toBeGreaterThan(8)
+    expect(cracked).toBeLessThan(25)
+    // And standing never cracked a tile under it.
+    expect(ev.some((e) => e.k === 'crack' && e.stand && e.i !== b.p[1].tile)).toBe(false)
   })
 })
