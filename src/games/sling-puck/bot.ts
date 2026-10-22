@@ -7,7 +7,7 @@ import {
   BAND_Y,
   type Cmd,
   DRAG,
-  GAP,
+  gapAt,
   local,
   MAX_PULL,
   owned,
@@ -26,12 +26,49 @@ interface Tuning {
   power: number
   /** Seconds spent dragging the puck back onto the band and stretching it. */
   windup: number
+  /** Shots it weighs before choosing (0 = any puck, any lane, blind). */
+  looks: number
 }
 
 export const TUNING: Record<Difficulty, Tuning> = {
-  easy: { cadence: 2.4, noise: 90, power: 0.2, windup: 0.7 },
-  normal: { cadence: 1.5, noise: 36, power: 0.09, windup: 0.55 },
-  hard: { cadence: 0.9, noise: 12, power: 0.03, windup: 0.4 },
+  easy: { cadence: 2.4, noise: 90, power: 0.2, windup: 0.7, looks: 0 },
+  normal: { cadence: 1.15, noise: 26, power: 0.07, windup: 0.45, looks: 10 },
+  hard: { cadence: 0.7, noise: 8, power: 0.025, windup: 0.32, looks: 40 },
+}
+
+/** Distance from point p to segment a-b. */
+function segDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax
+  const dy = by - ay
+  const l2 = dx * dx + dy * dy || 1
+  const k = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2))
+  return Math.hypot(px - (ax + dx * k), py - (ay + dy * k))
+}
+
+/**
+ * How open the flight from release spot (x, y) through the gap at tx is for
+ * `side` (red frame): 0 when a puck sits in the way, else 1 minus a penalty
+ * for pucks waiting just past the gap that would stop it short.
+ */
+export function laneScore(
+  t: Table,
+  side: Side,
+  idx: number,
+  x: number,
+  y: number,
+  tx: number,
+): number {
+  const ex = tx + ((tx - x) / (y - MID || 1)) * 420
+  const ey = MID - 420
+  let score = 1
+  t.pucks.forEach((p, i) => {
+    if (i === idx || p.held) return
+    const l = local(side, p.x, p.y)
+    const d = segDist(l.x, l.y, x, y, tx, MID)
+    if (d < p.r * 2 - 4) score = 0
+    else if (segDist(l.x, l.y, tx, MID, ex, ey) < p.r * 2 - 4) score -= 0.4
+  })
+  return Math.max(0, score)
 }
 
 /** The bot's plan for the shot it is winding up, in its own (red) frame. */
@@ -96,19 +133,42 @@ export function decide(
     mem.plan = null
     mem.cool -= dt
     if (mem.cool > 0 || owned(t, side) === 0) return {}
-    // Any of its own pucks, at random: a puck parked far away still gets its turn.
     const mine: number[] = []
     t.pucks.forEach((p, i) => {
       if (p.half === side && !p.held) mine.push(i)
     })
-    const idx = rng.pick(mine) ?? -1
-    const p = t.pucks[idx]
-    if (!p) return {}
-    const s = local(side, p.x, p.y)
-    const tx = W / 2 + (rng.next() - 0.5) * 2 * tune.noise + (rng.next() - 0.5) * GAP * 0.3
     // Exponential drag: a shot at speed v covers about v / DRAG. Aim a little past the wall.
     const dist = BAND_Y - MID + 420
     const needed = (dist * DRAG) / SHOT_V
+    const pull = Math.min(1, Math.max(0.35, needed)) * MAX_PULL
+    const half = gapAt(t) / 2 - PUCK_R * 0.8
+    let idx = rng.pick(mine) ?? -1
+    let tx = W / 2 + (rng.next() - 0.5) * half
+    if (tune.looks > 0) {
+      // Weigh shots: an open lane through the gap first, then a short drag to the band.
+      let best = -Infinity
+      for (let i = 0; i < tune.looks; i++) {
+        const j = rng.pick(mine) ?? -1
+        const p = t.pucks[j]
+        if (!p) continue
+        const lx = W / 2 + (rng.next() * 2 - 1) * half
+        const end = planRelease(lx, pull)
+        const s = local(side, p.x, p.y)
+        const v =
+          laneScore(t, side, j, end.x, end.y, lx) * 1000 -
+          Math.hypot(end.x - s.x, end.y - s.y) * 0.3 -
+          Math.abs(lx - W / 2) * 0.4
+        if (v > best) {
+          best = v
+          idx = j
+          tx = lx
+        }
+      }
+    }
+    const p = t.pucks[idx]
+    if (!p) return {}
+    const s = local(side, p.x, p.y)
+    tx += (rng.next() - 0.5) * 2 * tune.noise
     const power = Math.min(1, Math.max(0.35, needed * (1 + (rng.next() - 0.5) * 2 * tune.power)))
     const end = planRelease(tx, power * MAX_PULL)
     mem.plan = { sx: s.x, sy: s.y, ex: end.x, ey: end.y }

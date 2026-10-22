@@ -7,7 +7,7 @@ import {
   BAND_X0,
   BAND_X1,
   BAND_Y,
-  GAP,
+  gapAt,
   local,
   MIN_POWER,
   owned,
@@ -26,6 +26,12 @@ export interface Look {
   hint: [boolean, boolean]
   /** The decided match (stamped in state), for the ending. */
   end: { at: number; winner: Side | 'draw' } | null
+  /** Interpolated puck centres, by index. */
+  at: { x: number; y: number }[]
+  /** Squash spring per puck (1 = round). */
+  squash: number[]
+  /** Puck count pulse per side, 0..1. */
+  pulse: [number, number]
 }
 
 const FRAME = 22
@@ -104,20 +110,20 @@ function drawTable(g: Draw, t: Table): void {
 }
 
 /** The midline wall with its gap: chunky wooden bars, glossy posts, a yellow glow in the gap. */
-function drawWall(g: Draw): void {
-  const gapL = W / 2 - GAP / 2
-  const gapR = W / 2 + GAP / 2
+function drawWall(g: Draw, gap: number): void {
+  const gapL = W / 2 - gap / 2
+  const gapR = W / 2 + gap / 2
   const pulse = 0.5 + 0.5 * Math.sin(g.t * 4)
   // Gap glow: the one place that matters.
   g.alpha(0.55 + pulse * 0.35, () =>
     g.fillView(
-      g.rad(W / 2, MID, 10, GAP * 0.75, [
+      g.rad(W / 2, MID, 10, gap * 0.75, [
         [0, alpha(C.yellow, 0.32)],
         [1, alpha(C.yellow, 0)],
       ]),
     ),
   )
-  g.rrect(gapL + 14, MID - 4, GAP - 28, 8, 4, alpha(C.yellow, 0.35 + pulse * 0.3))
+  g.rrect(gapL + 14, MID - 4, gap - 28, 8, 4, alpha(C.yellow, 0.35 + pulse * 0.3))
   const bar = (x0: number, x1: number) => {
     g.rrect(x0, MID - WALL_T / 2 + 8, x1 - x0, WALL_T, WALL_T / 2, shade(RIM, -0.4))
     g.rrect(
@@ -208,11 +214,26 @@ function drawBand(g: Draw, t: Table, side: Side): void {
   }
 }
 
-function drawPuck(g: Draw, p: Puck, lift = 0): void {
-  const r = p.r * (1 + lift * 0.08)
-  const sx = p.x
-  const sy = p.y - lift * 10
-  g.shadow(p.x + 6 + lift * 8, p.y + 14 + lift * 10, r * 0.95, r * 0.75, 0.4 - lift * 0.1)
+function drawPuck(g: Draw, p: Puck, lift = 0, at: { x: number; y: number } = p, squash = 1): void {
+  // Squash (<1 flattens on impact, >1 springs up), and a short smear along fast motion.
+  const sq = Math.max(0.7, Math.min(1.3, squash))
+  const r = p.r * (1 + lift * 0.08) * (0.5 + 0.5 * sq)
+  const sx = at.x
+  const sy = at.y - lift * 10
+  const sp = Math.hypot(p.vx, p.vy)
+  if (sp > 900) {
+    const k = Math.min(1, (sp - 900) / 1800)
+    for (let i = 1; i <= 3; i++) {
+      const f = i * 0.012
+      g.circle(
+        sx - p.vx * f,
+        sy - p.vy * f,
+        p.r * (1 - i * 0.12),
+        alpha(p.half === 0 ? C.red : C.blue, 0.18 * k * (4 - i)),
+      )
+    }
+  }
+  g.shadow(at.x + 6 + lift * 8, at.y + 14 + lift * 10, r * 0.95, r * 0.75, 0.4 - lift * 0.1)
   if (p.half === 0) {
     // Red pucks are round.
     g.disc(sx, sy, r, C.red)
@@ -248,7 +269,7 @@ function drawPreview(g: Draw, t: Table, side: Side): void {
   }
   const k = (MID - l.y) / (shot.dy || -1e-6)
   const crossX = l.x + shot.dx * k
-  const through = Math.abs(crossX - W / 2) < GAP / 2 - p.r * 0.6
+  const through = Math.abs(crossX - W / 2) < gapAt(t) / 2 - p.r * 0.6
   const col = through ? C.yellow : SIDE[side].light
   const len = 220 + shot.power * 900
   for (let i = 1; i <= 12; i++) {
@@ -263,12 +284,18 @@ function drawPreview(g: Draw, t: Table, side: Side): void {
 
 export function render(g: Draw, t: Table, look: Look): void {
   drawTable(g, t)
-  drawWall(g)
+  drawWall(g, gapAt(t))
   for (const side of [0, 1] as Side[]) drawBand(g, t, side)
   // Pucks: resting ones first, then the held ones lifted on top.
-  for (const p of t.pucks) if (!p.held) drawPuck(g, p)
-  for (const side of [0, 1] as Side[]) drawPreview(g, t, side)
-  for (const p of t.pucks) if (p.held) drawPuck(g, p, 1)
+  t.pucks.forEach((p, i) => {
+    if (!p.held) drawPuck(g, p, 0, look.at[i], look.squash[i])
+  })
+  // Online, the stretch preview is the shooter's control: only their phone shows it.
+  for (const side of [0, 1] as Side[])
+    if (g.viewer === null || g.viewer === side) drawPreview(g, t, side)
+  t.pucks.forEach((p, i) => {
+    if (p.held) drawPuck(g, p, 1, look.at[i], look.squash[i])
+  })
 
   for (const side of [0, 1] as Side[]) {
     const n = owned(t, side)
@@ -277,8 +304,12 @@ export function render(g: Draw, t: Table, look: Look): void {
       active: n === 1 && !look.end,
       text: n === 1 && !look.end ? 'LAST PUCK!' : undefined,
     })
-    bigScore(g, side, n, { x: side === 0 ? 120 : W - 120 })
-    if (look.hint[side] && t.t < 9 && !t.aims[side] && !look.end) {
+    bigScore(g, side, n, {
+      x: side === 0 ? 120 : W - 120,
+      size: 76 * (1 + 0.35 * look.pulse[side]),
+    })
+    const mine = g.viewer === null || g.viewer === side
+    if (look.hint[side] && mine && t.t < 9 && !t.aims[side] && !look.end) {
       const y = side === 0 ? MID + 150 : MID - 150
       g.alpha(0.6 + 0.3 * Math.sin(g.t * 4), () =>
         g.sideText(side, 'DRAG A PUCK BACK ON THE BAND', W / 2, y, {

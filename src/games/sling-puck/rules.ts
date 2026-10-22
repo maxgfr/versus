@@ -23,8 +23,14 @@ import {
  */
 
 export const PUCK_R = 54
-/** Width of the gap in the midline wall. */
+/** Width of the gap in the midline wall at the start. */
 export const GAP = 260
+/** The gap widens as the match drags on, so it never stalls: GAP_WIDE by RAMP_END seconds. */
+export const GAP_WIDE = 350
+export const RAMP_START = 40
+export const RAMP_END = 100
+/** Seconds a half must stay empty to win (a puck bouncing back through the gap keeps the game on). */
+export const HOLD = 0.4
 /** Thickness of the midline wall. */
 export const WALL_T = 26
 /** Exponential table friction: a shot at speed v travels about v / DRAG. */
@@ -67,6 +73,14 @@ export interface Table {
   t: number
   /** Last shot per side (game time and power), for the band's twang animation. */
   shots: [{ at: number; power: number; x: number }, { at: number; power: number; x: number }]
+  /** Game time each side's half became empty (-1 while it has pucks). */
+  empty: [number, number]
+}
+
+/** Width of the midline gap at table time `t`. */
+export function gapAt(t: { t: number }): number {
+  const k = Math.max(0, Math.min(1, (t.t - RAMP_START) / (RAMP_END - RAMP_START)))
+  return GAP + (GAP_WIDE - GAP) * k * k * (3 - 2 * k)
 }
 
 export type Event =
@@ -144,7 +158,7 @@ export function newTable(n: number, rng?: { next(): number }): Table {
     }
   }
   const shot = { at: -10, power: 0, x: W / 2 }
-  return { pucks, aims: [null, null], t: 0, shots: [{ ...shot }, { ...shot }] }
+  return { pucks, aims: [null, null], t: 0, shots: [{ ...shot }, { ...shot }], empty: [-1, -1] }
 }
 
 /** Pucks a side owns: those resting on its half. */
@@ -269,17 +283,17 @@ export function applyCmd(t: Table, side: Side, cmd: Cmd, events: Event[], dt = 0
 }
 
 /** Midline wall: solid except the gap; its two ends are round posts. */
-function collideMidline(p: Puck, events: Event[]): void {
+function collideMidline(p: Puck, gap: number, events: Event[]): void {
   const band = p.r + WALL_T / 2
-  const gapL = W / 2 - GAP / 2
-  const gapR = W / 2 + GAP / 2
+  const gapL = W / 2 - gap / 2
+  const gapR = W / 2 + gap / 2
   for (const px of [gapL, gapR]) {
     const post: Disc = { x: px, y: MID, vx: 0, vy: 0, r: WALL_T / 2 }
     const c = collideKinematic(p, post, 0.8)
     if (c) events.push({ kind: 'post', x: c.x, y: c.y, speed: c.speed })
   }
   // Over the gap only the posts matter, and they were handled above.
-  if (Math.abs(p.x - W / 2) < GAP / 2) return
+  if (Math.abs(p.x - W / 2) < gap / 2) return
   if (Math.abs(p.y - MID) >= band) return
   const sgn = p.y < MID ? -1 : 1
   p.y = MID + sgn * band
@@ -313,6 +327,7 @@ function collideBands(p: Puck, events: Event[]): void {
 export function step(t: Table, dt: number, events: Event[]): void {
   t.t += dt
   const h = dt / SUB
+  const gap = gapAt(t)
   for (let s = 0; s < SUB; s++) {
     for (const p of t.pucks) {
       if (p.held) continue
@@ -326,7 +341,7 @@ export function step(t: Table, dt: number, events: Event[]): void {
       if (p.held) continue
       const c: Contact | null = collideWalls(p, arena, 0.8)
       if (c && c.speed > 60) events.push({ kind: 'wall', x: c.x, y: c.y, speed: c.speed })
-      collideMidline(p, events)
+      collideMidline(p, gap, events)
       collideBands(p, events)
     }
     for (let i = 0; i < t.pucks.length; i++) {
@@ -356,15 +371,23 @@ export function step(t: Table, dt: number, events: Event[]): void {
       events.push({ kind: 'cross', to: half, x: p.x, y: p.y })
     }
   }
+  for (const side of [0, 1] as Side[]) {
+    if (owned(t, side) > 0) t.empty[side] = -1
+    else if (t.empty[side] < 0) t.empty[side] = t.t
+  }
 }
 
-/** The side that has emptied its half, if any. */
+/** The side that has kept its half empty for HOLD seconds (the earlier one if both), if any. */
 export function winner(t: Table): Side | 'draw' | null {
   const red = owned(t, 0)
   const blue = owned(t, 1)
-  if (red === 0 && blue === 0) return 'draw'
-  if (red === 0) return 0
-  if (blue === 0) return 1
+  const done = (side: Side) =>
+    (side === 0 ? red : blue) === 0 && t.empty[side] >= 0 && t.t - t.empty[side] >= HOLD - 1e-9
+  const r = done(0)
+  const b = done(1)
+  if (r && b) return t.empty[0] === t.empty[1] ? 'draw' : t.empty[0] < t.empty[1] ? 0 : 1
+  if (r) return 0
+  if (b) return 1
   if (t.t >= SAFETY_TIME) {
     if (red !== blue) return red < blue ? 0 : 1
     return 'draw'

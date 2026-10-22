@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { STEP, type Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { H, MID, W } from '../../core/stage.ts'
-import { decide, newMemory, planRelease } from './bot.ts'
+import { decide, laneScore, newMemory, planRelease } from './bot.ts'
 import {
   applyCmd,
   type Event,
   fire,
   GAP,
+  GAP_WIDE,
+  gapAt,
   grabIndex,
+  HOLD,
+  RAMP_END,
+  RAMP_START,
   BAND_Y,
   MAX_PULL,
   newTable,
@@ -186,17 +191,58 @@ describe('sling puck rules', () => {
     expect(p.y).toBeLessThanOrEqual(H - p.r + 1e-6)
   })
 
-  it('a side with no pucks wins', () => {
+  /** Park every puck in one half, at rest and clear of each other. */
+  function allIn(t: Table, half: 0 | 1): void {
+    t.pucks.forEach((p, i) => {
+      p.x = 150 + i * 130
+      p.y = half === 0 ? MID + 400 : MID - 400
+      p.vx = p.vy = 0
+    })
+  }
+
+  it('a side whose half stays empty for a moment wins', () => {
     const t = newTable(2)
-    t.pucks.forEach((p) => {
-      p.half = 1
-    })
-    // Red has emptied its half; blue has all of them.
+    allIn(t, 1)
+    step(t, STEP, [])
+    // Red has emptied its half, but the win waits a beat.
+    expect(winner(t)).toBeNull()
+    for (let i = 0; i < Math.ceil(HOLD * 60) + 1; i++) step(t, STEP, [])
     expect(winner(t)).toBe(0)
-    t.pucks.forEach((p) => {
-      p.half = 0
-    })
-    expect(winner(t)).toBe(1)
+    const u = newTable(2)
+    allIn(u, 0)
+    for (let i = 0; i < Math.ceil(HOLD * 60) + 2; i++) step(u, STEP, [])
+    expect(winner(u)).toBe(1)
+  })
+
+  it('a last puck that bounces back through the gap does not win the match', () => {
+    const t = newTable(1)
+    const red = t.pucks[0]!
+    const blue = t.pucks[1]!
+    blue.x = 150
+    blue.y = MID - 500
+    // Red's only puck just went through the gap, but is already heading back.
+    red.x = W / 2
+    red.y = MID - 70
+    red.vx = 0
+    red.vy = 900
+    step(t, STEP, [])
+    let won: ReturnType<typeof winner> = null
+    for (let i = 0; i < 60 && won === null; i++) {
+      step(t, STEP, [])
+      won = winner(t)
+    }
+    expect(red.half).toBe(0)
+    expect(won).toBeNull()
+  })
+
+  it('the gap widens as a long match drags on', () => {
+    const t = newTable(1)
+    expect(gapAt(t)).toBe(GAP)
+    t.t = RAMP_END + 1
+    expect(gapAt(t)).toBeCloseTo(GAP_WIDE, 5)
+    t.t = (RAMP_START + RAMP_END) / 2
+    expect(gapAt(t)).toBeGreaterThan(GAP)
+    expect(gapAt(t)).toBeLessThan(GAP_WIDE)
   })
 
   it('at the safety time the side with fewer pucks wins', () => {
@@ -243,5 +289,31 @@ describe('sling puck bots', () => {
     const grab = decide(t, 1, 'normal', rng, mem, 1 / 60)
     expect(grab.grab).toBeTruthy()
     expect(t.pucks[grab.grab!.idx]!.half).toBe(1)
+  })
+
+  it('hard beats easy most of the time', () => {
+    let hard = 0
+    for (let seed = 1; seed <= 8; seed++) {
+      const hardSide = seed % 2 === 0 ? 0 : 1
+      const { t } = botMatch(
+        hardSide === 0 ? 'hard' : 'easy',
+        hardSide === 0 ? 'easy' : 'hard',
+        40 + seed,
+      )
+      if (winner(t) === hardSide) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(6)
+  })
+
+  it('the bot sees a puck blocking its lane', () => {
+    const t = newTable(1)
+    const blocker = t.pucks[1]!
+    blocker.half = 0
+    blocker.x = W / 2
+    blocker.y = MID + 250
+    const at = planRelease(W / 2, 150)
+    expect(laneScore(t, 0, 0, at.x, at.y, W / 2)).toBe(0)
+    blocker.x = 120
+    expect(laneScore(t, 0, 0, at.x, at.y, W / 2)).toBeGreaterThan(0)
   })
 })
