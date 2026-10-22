@@ -10,7 +10,7 @@ function botContext(target?: number): GameContext {
     stage: {} as GameContext['stage'],
     input: {} as GameContext['input'],
     fx: new Proxy({}, { get: () => noop }) as GameContext['fx'],
-    audio: { play: noop, unlock: noop } as unknown as GameContext['audio'],
+    audio: { play: noop, unlock: noop, buzz: noop } as unknown as GameContext['audio'],
     rng: new Rng(7),
     mode: '1p',
     difficulty: 'normal',
@@ -40,5 +40,27 @@ describe('rat race: match length', () => {
 
   it('defaults to the spec length', () => {
     expect(match.default).toBe(3)
+  })
+})
+
+describe('rat race: the ending', () => {
+  it('the result is fixed when decided: a loser coasting over the line is no draw', () => {
+    const game = createGame() as unknown as {
+      init: (c: GameContext) => void
+      update: (dt: number) => void
+      result: unknown
+      s: { rats: { angle: number; speed: number }[]; won: unknown }
+    }
+    game.init(botContext(1))
+    // Red is about to cross; blue is right behind and still running hard.
+    game.s.rats[0]!.angle = Math.PI * 2 - 0.01
+    game.s.rats[0]!.speed = 3
+    game.s.rats[1]!.angle = Math.PI * 2 - 0.05
+    game.s.rats[1]!.speed = 3
+    game.update(STEP)
+    expect(game.s.won).toBe(0)
+    for (let i = 0; i < 60 && !game.result; i++) game.update(STEP)
+    expect(game.s.rats[1]!.angle).toBeGreaterThan(Math.PI * 2)
+    expect(game.s.won).toBe(0)
   })
 })

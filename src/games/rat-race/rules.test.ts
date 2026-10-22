@@ -120,8 +120,39 @@ describe('rat race: winner', () => {
     expect(winnerOf(at(1, LAPS * TAU))).toBe(1)
   })
 
-  it('both over on the same step is a draw', () => {
+  it('both over on the same step with a dead heat is a draw', () => {
     expect(winnerOf(at(LAPS * TAU, LAPS * TAU))).toBe('draw')
+  })
+
+  it('a photo finish goes to the rat that crossed earlier inside the step', () => {
+    // Same overshoot, but red runs slower: it has been over the line longer.
+    const s = at(LAPS * TAU + 0.02, LAPS * TAU + 0.02)
+    s.rats[0].speed = 1
+    s.rats[1].speed = 2
+    expect(winnerOf(s)).toBe(0)
+    // Further past the line at the same speed: crossed first.
+    const t = at(LAPS * TAU + 0.01, LAPS * TAU + 0.03)
+    t.rats[0].speed = 2
+    t.rats[1].speed = 2
+    expect(winnerOf(t)).toBe(1)
+  })
+})
+
+describe('rat race: timing is force', () => {
+  it('a tap dead on the beat kicks harder than one at the edge of the window', () => {
+    const on = 4 * BEAT
+    const a = ratNew()
+    const b = ratNew()
+    expect(tap(a, on)).toBe('perfect')
+    expect(tap(b, on + PERFECT * 0.95)).toBe('perfect')
+    expect(a.acc).toBeCloseTo(1)
+    expect(b.acc).toBeLessThan(0.1)
+    expect(a.speed).toBeGreaterThan(b.speed)
+    // Even an edge perfect beats an off-beat tap.
+    const c = ratNew()
+    tap(c, on + BEAT / 2)
+    expect(b.speed).toBeGreaterThan(c.speed)
+    expect(c.acc).toBe(0)
   })
 })
 
@@ -161,6 +192,25 @@ describe('rat race: bots', () => {
       expect(r.winner).not.toBeNull()
       expect(r.t).toBeLessThan(60)
       expect(r.stumbles).toBe(0)
+    }
+  })
+
+  it('a pushing bot (behind or on its final lap) fills in sixteenths without tripping', () => {
+    for (const d of ['normal', 'hard'] as const) {
+      const s = worldNew()
+      const bot = new RhythmBot(new Rng(11), d)
+      const calm = new RhythmBot(new Rng(11), d)
+      let t = 0
+      let pushed = 0
+      let plain = 0
+      while (t < 20) {
+        t += STEP
+        const n = bot.step(t, -1, true)
+        pushed += n
+        plain += calm.step(t)
+        for (let k = 0; k < n; k++) expect(tap(s.rats[0], t)).not.toBe('stumble')
+      }
+      expect(pushed).toBeGreaterThan(plain)
     }
   })
 

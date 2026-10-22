@@ -155,14 +155,22 @@ function drum(g: Draw, side: Side, r: Rat, now: number, lap: number, target: num
 }
 
 /** The rat, seen from above, nose along the track. Red frame. */
-function rat(g: Draw, side: Side, r: Rat, now: number, mood: 'play' | 'win' | 'lose'): void {
-  const at = loopAt(r.angle)
-  const t = r.angle + Math.PI / 2
+function rat(
+  g: Draw,
+  side: Side,
+  r: Rat,
+  now: number,
+  mood: 'play' | 'win' | 'lose',
+  angle: number,
+  squash: number,
+): void {
+  const at = loopAt(angle)
+  const t = angle + Math.PI / 2
   const heading = Math.atan2(TRACK.ry * Math.cos(t), -TRACK.rx * Math.sin(t))
   const down = isDown(r, now)
   const col = SIDE[side].main
   const fur = mix(col, '#d8cfe6', 0.12)
-  const run = r.angle * 9
+  const run = angle * 9
   const speed = Math.min(1, r.speed / 2.2)
   const since = now - r.perfectAt
   const glow = since >= 0 && since < 0.35 ? 1 - since / 0.35 : 0
@@ -170,6 +178,9 @@ function rat(g: Draw, side: Side, r: Rat, now: number, mood: 'play' | 'win' | 'l
   g.shadow(at.x + 6, at.y + 14, 70, 34, 0.35)
   const spin = down ? (now - (r.downUntil - 0.9)) * 14 : 0
   const hop = mood === 'win' ? Math.abs(Math.sin(now * 9)) * 0.12 : 0
+  // Stretch along the track with speed, squash on each tap (sx runs nose to tail).
+  const stretch = 1 + speed * 0.12
+  const sq = Math.max(0.6, Math.min(1.4, squash))
   g.at(
     at.x,
     at.y,
@@ -240,7 +251,8 @@ function rat(g: Draw, side: Side, r: Rat, now: number, mood: 'play' | 'win' | 'l
       // A team number on its back, for the not-by-colour read.
       g.sideMark(side, -8, 0, 10, alpha(C.white, 0.85))
     },
-    1 + hop,
+    (1 + hop) * stretch * (2 - sq),
+    (1 + hop) * (1 / stretch) * sq,
   )
   if (down) {
     for (let i = 0; i < 3; i++) {
@@ -254,10 +266,10 @@ function rat(g: Draw, side: Side, r: Rat, now: number, mood: 'play' | 'win' | 'l
 }
 
 /** Laps as a race bar on each half's inner edge, filling toward the flag. Red frame. */
-function raceBar(g: Draw, side: Side, r: Rat, target: number, now: number): void {
+function raceBar(g: Draw, side: Side, r: Rat, target: number, now: number, angle: number): void {
   const w = BAR_X1 - BAR_X0
   const col = SIDE[side]
-  const k = Math.min(1, r.angle / (target * TAU))
+  const k = Math.min(1, angle / (target * TAU))
   g.rrect(BAR_X0 - 8, BAR_Y - 26, w + 16, 52, 26, alpha(C.ink, 0.75))
   for (let i = 1; i < target; i++) {
     const x = BAR_X0 + (w * i) / target
@@ -295,6 +307,10 @@ export interface RaceOpts {
   endAt: number
   winner: Side | 'draw' | null
   bots: [boolean, boolean]
+  /** Interpolated run angles. */
+  angles: [number, number]
+  /** Tap squash springs (1 = rest). */
+  squash: [number, number]
 }
 
 /** Both halves, the HUD (name, laps) and the start prompt. */
@@ -309,8 +325,8 @@ export function renderRace(g: Draw, s: State, now: number, o: RaceOpts): void {
     inFrame(g, side, () => {
       track(g, side, now, boost)
       drum(g, side, r, now, laps(r, o.target), o.target)
-      rat(g, side, r, now, mood)
-      raceBar(g, side, r, o.target, now)
+      rat(g, side, r, now, mood, o.angles[side], o.squash[side])
+      raceBar(g, side, r, o.target, now, o.angles[side])
     })
   }
   for (const side of [0, 1] as Side[]) {

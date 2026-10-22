@@ -22,6 +22,8 @@ export const DRAG = 1.5
 /** Multipliers on KICK: on the beat, and off it. */
 export const PERFECT_MUL = 2.6
 export const OFF_MUL = 0.5
+/** A perfect at the very edge of the window kicks this much less than one dead on the beat. */
+export const PERFECT_FALL = 0.8
 /** Mashing: more than MASH_MAX taps inside MASH_WINDOW seconds trips the rat. */
 export const MASH_WINDOW = 0.5
 export const MASH_MAX = 5
@@ -48,6 +50,8 @@ export interface Rat {
   perfects: number
   /** Taps made, for the record. */
   made: number
+  /** How dead-on the last counted tap was: 1 on the beat, 0 at the window edge or off it. */
+  acc: number
 }
 
 export interface State {
@@ -64,6 +68,7 @@ export const ratNew = (): Rat => ({
   perfectAt: -1,
   perfects: 0,
   made: 0,
+  acc: 0,
 })
 
 export const worldNew = (): State => ({ rats: [ratNew(), ratNew()] })
@@ -100,8 +105,11 @@ export function tap(r: Rat, now: number): Judge {
     r.judgeAt = now
     return 'stumble'
   }
-  const j = judgeTap(now)
-  r.speed += KICK * (j === 'perfect' ? PERFECT_MUL : OFF_MUL)
+  // The closer to the beat, the harder the kick: timing is this game's force.
+  const err = beatError(now)
+  const j: 'perfect' | 'ok' = err <= PERFECT ? 'perfect' : 'ok'
+  r.acc = j === 'perfect' ? 1 - err / PERFECT : 0
+  r.speed += KICK * (j === 'perfect' ? PERFECT_MUL - (1 - r.acc) * PERFECT_FALL : OFF_MUL)
   if (j === 'perfect') {
     r.perfects++
     r.perfectAt = now
@@ -121,14 +129,24 @@ export function stepRat(r: Rat, dt: number, now: number): void {
   r.angle += r.speed * dt
 }
 
-/** Side that finished first; 'draw' when both reached the line on the same step. */
+/**
+ * Side that finished first. When both cross on the same step the photo finish
+ * goes to the rat that crossed earlier inside it (the one further past the
+ * line for its speed); 'draw' only for a dead heat.
+ */
 export function winnerOf(s: State, target = LAPS): Side | 'draw' | null {
-  const a = s.rats[0].angle >= target * TAU
-  const b = s.rats[1].angle >= target * TAU
-  if (a && b) return 'draw'
-  if (a) return 0
-  if (b) return 1
-  return null
+  const line = target * TAU
+  const [r, b] = s.rats
+  const a0 = r.angle >= line
+  const b0 = b.angle >= line
+  if (!a0 && !b0) return null
+  if (a0 && !b0) return 0
+  if (b0 && !a0) return 1
+  // Seconds since each crossed the line, from its overshoot and speed.
+  const ta = r.speed > 0 ? (r.angle - line) / r.speed : 0
+  const tb = b.speed > 0 ? (b.angle - line) / b.speed : 0
+  if (Math.abs(ta - tb) < 1e-9) return 'draw'
+  return ta > tb ? 0 : 1
 }
 
 /** The loop in red's layout: centre and radii of the racing line. */
