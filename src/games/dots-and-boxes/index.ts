@@ -1,24 +1,28 @@
 import { type MatchSpec, other, type Side } from '../../core/game.ts'
 import { banner, hudY, pips } from '../../core/hud.ts'
-import type { Ptr } from '../../core/input.ts'
+import type { PlayerInput, Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import { geom, tableBackdrop, TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
-import { boxCentre, boxCount, midpoint, renderBoard } from './render.ts'
+import { boxCentre, boxCount, dot, midpoint, renderBoard } from './render.ts'
 import {
   type Board,
   BOX_COUNT,
   BOXES,
   countBoxes,
+  completes,
   drawLine,
   drawnSides,
+  DOTS,
   EDGES,
+  hLine,
   emptyBoard,
   legalLines,
   type Owner,
   outcome,
+  vLine,
 } from './rules.ts'
 
 export interface State {
@@ -49,6 +53,8 @@ export interface State {
   round: number
   /** Game time the current round began. */
   roundAt: number
+  /** A line being pulled from a dot by the player to move: the dot and the finger, or null. */
+  pull: { r: number; c: number; x: number; y: number } | null
 }
 
 /**
@@ -92,7 +98,31 @@ function gapAt(x: number, y: number): number | null {
   return best
 }
 
+/** The dot nearest a point, if the point is close enough to it. */
+function dotAt(x: number, y: number, reach: number): { r: number; c: number } | null {
+  const c = Math.round((x - GEO.x) / GEO.cell)
+  const r = Math.round((y - GEO.y) / GEO.cell)
+  if (r < 0 || c < 0 || r >= DOTS || c >= DOTS) return null
+  const d = dot(GEO, r, c)
+  return Math.hypot(d.x - x, d.y - y) <= reach ? { r, c } : null
+}
+
+/** The line from dot (r, c) one step toward (dx, dy) (the main direction of a drag), or null off the board. */
+function lineToward(r: number, c: number, dx: number, dy: number): number | null {
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const c2 = c + Math.sign(dx)
+    if (c2 < 0 || c2 >= DOTS) return null
+    return hLine(r, Math.min(c, c2))
+  }
+  const r2 = r + Math.sign(dy)
+  if (r2 < 0 || r2 >= DOTS) return null
+  return vLine(Math.min(r, r2), c)
+}
+
 class DotsAndBoxes extends TurnGame<State> {
+  /** The finger that went down this turn: a tap on a gap, or a pull from dot to dot. */
+  private hold: { input: PlayerInput; id: number; x0: number; y0: number } | null = null
+
   /** Round wins that decide the match, as chosen on the ready screen. */
   private get target(): number {
     return this.ctx.target || match.default
@@ -115,6 +145,7 @@ class DotsAndBoxes extends TurnGame<State> {
       starter,
       round: 1,
       roundAt: 0,
+      pull: null,
     }
   }
 
@@ -178,15 +209,72 @@ class DotsAndBoxes extends TurnGame<State> {
     this.ctx.audio.play('go')
   }
 
+  /** The inputs that may draw this turn (same routing as `turnTap`). */
+  private turnInputs(): PlayerInput[] {
+    const [a, b] = this.ctx.input.players
+    if (this.ctx.mode === 'online') return [this.ctx.input.player(this.s.turn)]
+    if (this.ctx.mode === '1p') return [a]
+    return [a, b]
+  }
+
+  /**
+   * Tap a gap to draw it, or press on a dot and pull the line out to the next
+   * dot: the line stretches after the finger and snaps in when let go.
+   */
   protected stepTurn(_dt: number, tap: Ptr | undefined): void {
-    if (!tap) return
-    const e = gapAt(tap.x, tap.y)
+    const s = this.s
+    if (tap && !this.hold) {
+      const input = this.turnInputs().find((i) => i.downs.includes(tap))
+      if (input) this.hold = { input, id: tap.id, x0: tap.x, y0: tap.y }
+    }
+    const h = this.hold
+    if (!h) return
+    const held = h.input.held.get(h.id)
+    const p = held ?? h.input.ups.find((u) => u.id === h.id)
+    if (!p) {
+      this.hold = null
+      s.pull = null
+      return
+    }
+    const from = dotAt(h.x0, h.y0, GEO.cell * 0.32)
+    const dx = p.x - h.x0
+    const dy = p.y - h.y0
+    const far = Math.hypot(dx, dy) > GEO.cell * 0.3
+    if (held) {
+      if (from && far) {
+        if (!s.pull) this.ctx.audio.play('tick', 1.2)
+        s.pull = { r: from.r, c: from.c, x: p.x, y: p.y }
+      }
+      return
+    }
+    this.hold = null
+    const pulled = s.pull
+    s.pull = null
+    let e: number | null
+    if (pulled && from) {
+      // Let go short of the next dot: nothing is drawn.
+      if (Math.hypot(dx, dy) < GEO.cell * 0.5) return
+      e = lineToward(from.r, from.c, dx, dy)
+    } else e = gapAt(h.x0, h.y0)
     if (e === null) return
-    if (this.s.lines[e] !== null) {
+    if (s.lines[e] !== null) {
       this.ctx.audio.play('error')
       return
     }
     this.draw(e)
+  }
+
+  /** The computer: a beat to think before a quiet line, quick hands while it takes a chain. */
+  protected override botDelay(): number {
+    const b = this.board()
+    if (legalLines(b).some((e) => completes(b, e))) return 0.22 + this.ctx.rng.range(0, 0.08)
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.6 : d === 'normal' ? 0.45 : 0.4) + this.ctx.rng.range(0, 0.25)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.hold = null
   }
 
   protected botPlay(): void {
@@ -204,8 +292,10 @@ class DotsAndBoxes extends TurnGame<State> {
     s.boxes = res.board.boxes
     s.lineAt[e] = this.time
     s.last = e
+    s.pull = null
     const m = midpoint(GEO, e)
     this.ctx.audio.play('click', side === 0 ? 1 : 1.12)
+    this.ctx.audio.buzz(6)
     this.ctx.fx.sparks(m.x, m.y, SIDE[side].light, 5)
 
     if (res.completed.length) {
@@ -234,8 +324,11 @@ class DotsAndBoxes extends TurnGame<State> {
       this.ctx.audio.play(n > 1 ? 'coin' : 'score', pitch)
       const label = s.streak >= 3 ? `×${s.streak}` : `+${n}`
       this.ctx.fx.float(label, first.x, first.y, SIDE[side].light, 72, side)
-      this.ctx.fx.shake(0.1 + 0.06 * n)
-      this.ctx.fx.stop(n > 1 ? 5 : 3)
+      // A long chain builds: every box hits a little harder.
+      const k = Math.min(1, (s.streak - 1) / 6)
+      this.ctx.fx.shake(0.1 + 0.06 * n + k * 0.12)
+      this.ctx.fx.stop((n > 1 ? 5 : 3) + Math.round(k * 2))
+      this.ctx.audio.buzz(Math.round(12 + 6 * n + k * 12))
     } else {
       s.turn = other(side)
       s.streak = 0
@@ -249,7 +342,8 @@ class DotsAndBoxes extends TurnGame<State> {
   render(g: Draw): void {
     const s = this.s
     const live = s.endedAt < 0
-    const human = live && !this.isBot(s.turn)
+    // Online, the open-gap targets and the boxes on offer guide only the mover's phone.
+    const human = live && !this.isBot(s.turn) && (g.viewer === null || g.viewer === s.turn)
     const b = this.board()
     const targets = human ? legalLines(b) : []
     const offered = human
@@ -257,7 +351,7 @@ class DotsAndBoxes extends TurnGame<State> {
       : []
     const counts = countBoxes(b)
     tableBackdrop(g)
-    renderBoard(g, s, GEO, this.time, targets, offered, s.turn)
+    renderBoard(g, s, GEO, this.time, targets, offered, s.turn, human ? s.pull : null)
     const streak: [string | undefined, string | undefined] = [undefined, undefined]
     if (live && s.streak > 0) streak[s.turn] = 'Again!'
     this.drawTurns(g, streak, live)

@@ -107,6 +107,7 @@ export function renderBoard(
   targets: readonly number[],
   offered: readonly number[],
   mover: Side,
+  pull: { r: number; c: number; x: number; y: number } | null = null,
 ): void {
   slab(g, geo)
   // Boxes one line from done glow softly for whoever can take them.
@@ -150,6 +151,16 @@ export function renderBoard(
     const { x, y } = midpoint(geo, e)
     const p = 0.55 + 0.35 * Math.sin(now * 5 + e * 0.7)
     g.alpha(p, () => g.circle(x, y, geo.cell * 0.07, SIDE[mover].light))
+  }
+  // A line being pulled out of a dot: a stretchy band to the finger, thinner the further it goes.
+  if (pull) {
+    const a = dot(geo, pull.r, pull.c)
+    const len = Math.hypot(pull.x - a.x, pull.y - a.y)
+    const lw = Math.max(8, STICK * (1 - Math.min(0.7, len / (geo.cell * 3))))
+    const col = SIDE[mover]
+    g.line(a.x, a.y + 6, pull.x, pull.y + 6, shade(col.main, -0.5), lw)
+    g.line(a.x, a.y, pull.x, pull.y, col.main, lw)
+    g.circle(pull.x, pull.y, lw * 0.9, col.light)
   }
   // Dots on top: glossy pegs.
   for (let r = 0; r < DOTS; r++) {

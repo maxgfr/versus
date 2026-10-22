@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { other, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './bot.ts'
+import { choose, controlValue } from './bot.ts'
 import {
   type Board,
   BOX_COUNT,
@@ -191,4 +191,62 @@ describe('dots and boxes bot', () => {
       expect(red + blue).toBe(BOX_COUNT)
     }
   })
+})
+
+describe('dots and boxes endgame play', () => {
+  it('never declines the last two boxes of the game (there is nothing left to control)', () => {
+    // Every line drawn but two: box 0's left side and the side it shares with box 1.
+    const open = new Set([vLine(0, 0), vLine(0, 1)])
+    const lines = Array.from({ length: EDGES }, (_, e) => e).filter((e) => !open.has(e))
+    const b = drawAll(emptyBoard(), lines, 0)
+    expect(takeAll(b)).toBe(2)
+    for (const level of ['normal', 'hard'] as const) {
+      for (let seed = 1; seed <= 5; seed++) {
+        expect(choose(b, 1, level, new Rng(seed))).toBe(vLine(0, 1))
+      }
+    }
+  })
+
+  it('values chains the way perfect play does', () => {
+    // One chain of three: the opener hands it all over.
+    expect(controlValue([{ len: 3, cycle: false }])).toBe(-3)
+    // Two chains of three: the receiver keeps control of the first and wins by two.
+    expect(
+      controlValue([
+        { len: 3, cycle: false },
+        { len: 3, cycle: false },
+      ]),
+    ).toBe(-2)
+    // Short chains cannot be declined: they alternate.
+    expect(
+      controlValue([
+        { len: 1, cycle: false },
+        { len: 1, cycle: false },
+      ]),
+    ).toBe(0)
+  })
+
+  const duel = (a: 'easy' | 'normal' | 'hard', bl: 'easy' | 'normal' | 'hard', seed: number) => {
+    const rng = new Rng(seed)
+    let board = emptyBoard()
+    let turn: Side = seed % 2 === 0 ? 0 : 1
+    for (;;) {
+      const o = outcome(board)
+      if (o) return o.winner
+      const r = drawLine(board, choose(board, turn, turn === 0 ? a : bl, rng), turn)
+      board = r.board
+      if (!r.completed.length) turn = other(turn)
+    }
+  }
+
+  it('hard beats normal and normal beats easy most of the time, either side opening', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 1; seed <= 20; seed++) {
+      if (duel('hard', 'normal', seed) === 0) hard++
+      if (duel('normal', 'easy', seed) === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(13)
+    expect(normal).toBeGreaterThanOrEqual(18)
+  }, 60000)
 })
