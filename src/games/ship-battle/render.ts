@@ -370,7 +370,8 @@ export function renderShips(g: Draw, s: State, now: number, v: View, look: Look)
   dock(g, 1)
   dock(g, 0)
   g.vignette(0.3)
-  for (const c of s.ctl) drawControl(g, c)
+  // Online, each phone shows only its own player's stick and button.
+  for (const c of s.ctl) if (g.viewer === null || c.side === g.viewer) drawControl(g, c)
   for (const side of [0, 1] as const) {
     namePill(g, side, v.names[side], { inset: 44, active: champ === side })
     // Above the pill, between stick and fire button (the edge corner sits under the button).
