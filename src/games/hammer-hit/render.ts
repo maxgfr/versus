@@ -1,12 +1,22 @@
 import type { Side } from '../../core/game.ts'
 import { inQuad, lerp, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import { frame, inFrame, textAngle } from '../../core/frame.ts'
-import { banner, namePill, pips } from '../../core/hud.ts'
+import { banner, hudY, namePill, pips } from '../../core/hud.ts'
 import type { Draw, Mood } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { gaugeValue, type Rounds } from '../../engines/reflex/index.ts'
-import { FLY, LEAD, RING_AT, puckHeight, ringsBell, type Swing } from './rules.ts'
+import { gaugeValue, type GaugeState, type Rounds } from '../../engines/reflex/index.ts'
+import {
+  FLY,
+  LEAD,
+  RING_AT,
+  puckHeight,
+  ringsBell,
+  score,
+  timeLeft,
+  COUNTDOWN,
+  type Swing,
+} from './rules.ts'
 import type { State } from './index.ts'
 
 /*
@@ -48,6 +58,25 @@ const BULB_Y1 = 1040
 export const puckY = (h: number): number => COL.rest - h * (COL.rest - PUCK_TOP)
 
 const BRASS = '#f2b630'
+
+/** Run `fn` in `side`'s frame with the tower rocked by `sway` (radians) about its foot. */
+function swayed(g: Draw, side: Side, sway: number, fn: () => void): void {
+  inFrame(g, side, () => {
+    if (Math.abs(sway) < 1e-4) return fn()
+    g.at(COL.x, BOARD.bot, sway, () => g.at(-COL.x, -BOARD.bot, 0, fn))
+  })
+}
+
+/** Reused gauge for the interpolated needle (no allocation per frame). */
+const ghost: GaugeState = { t: 0, speed: 1, stopped: null }
+
+/** Needle value of `sw` at `ahead` s past its last step (while it swings). */
+function needleAt(sw: Swing, ahead: number): number {
+  if (sw.gauge.stopped !== null || ahead === 0) return gaugeValue(sw.gauge)
+  ghost.t = Math.max(0, sw.gauge.t + ahead)
+  ghost.speed = sw.gauge.speed
+  return gaugeValue(ghost)
+}
 
 function field(g: Draw, glow: [number, number]): void {
   const v = g.stage.view
@@ -94,9 +123,9 @@ function stage(g: Draw, side: Side): void {
 }
 
 /** The tower board with its marquee bulbs, lit up to `lit` (0..1). `chase` makes them run. */
-function tower(g: Draw, side: Side, lit: number, chase: number, now: number): void {
+function tower(g: Draw, side: Side, lit: number, chase: number, now: number, sway: number): void {
   const col = SIDE[side]
-  inFrame(g, side, () => {
+  swayed(g, side, sway, () => {
     const { x, w, top, bot } = BOARD
     // Drop shadow and body.
     g.rrect(x + 10, top + 14, w, bot - top, 30, alpha('#000000', 0.35))
@@ -127,7 +156,12 @@ function tower(g: Draw, side: Side, lit: number, chase: number, now: number): vo
       const k = i / (BULBS - 1)
       const y = lerp(BULB_Y0, BULB_Y1, k)
       const on = k <= lit + 0.001
-      const run = chase > 0 ? 0.5 + 0.5 * Math.sin(now * 22 - i * 1.3) : 0
+      const run =
+        chase > 0
+          ? 0.5 + 0.5 * Math.sin(now * 22 - i * 1.3)
+          : i === BULBS - 1
+            ? 0.3 + 0.3 * Math.sin(now * 3)
+            : 0
       for (const bx of [x + 20, x + w - 20]) {
         if (on || run > 0.5) {
           const c = run > 0.5 ? C.yellow : mix(col.light, C.yellow, k * 0.8)
@@ -144,16 +178,20 @@ function tower(g: Draw, side: Side, lit: number, chase: number, now: number): vo
 
 /** The strike pad at the foot of the tower. `press` 0..1 pushes it down. */
 function pad(g: Draw, side: Side, press: number): void {
+  const p = Math.max(-0.4, Math.min(1.3, press))
+  const lit = Math.max(0, Math.min(1, p))
   inFrame(g, side, () => {
-    g.shadow(PAD.x, PAD.y + 30, 120, 24, 0.4)
-    g.tile(PAD.x - 110, PAD.y - 26 + press * 10, 220, 58 - press * 10, 18, C.ink4, 14, press)
-    g.rrect(PAD.x - 54, PAD.y - 22 + press * 10, 108, 14, 7, alpha(C.yellow, 0.5 + press * 0.5))
+    g.shadow(PAD.x, PAD.y + 30, 120 + p * 14, 24, 0.4)
+    // Squashed wide and flat when struck, popping back up a touch after.
+    const w = 220 * (1 + p * 0.1)
+    g.tile(PAD.x - w / 2, PAD.y - 26 + p * 14, w, 58 - p * 14, 18, C.ink4, 14, lit)
+    g.rrect(PAD.x - 54, PAD.y - 22 + p * 14, 108, 14, 7, alpha(C.yellow, 0.5 + lit * 0.5))
   })
 }
 
 /** The brass bell at the top of the tower. It pivots from its crown and rings with a damped wobble. */
-function bell(g: Draw, side: Side, wobble: number, glow: number): void {
-  inFrame(g, side, () => {
+function bell(g: Draw, side: Side, wobble: number, glow: number, sway: number): void {
+  swayed(g, side, sway, () => {
     const cx = COL.x
     const cy = COL.bellY + 52
     if (glow > 0) {
@@ -201,8 +239,17 @@ function bell(g: Draw, side: Side, wobble: number, glow: number): void {
 }
 
 /** The puck in its slot, with a speed streak while it flies. */
-function puck(g: Draw, side: Side, h: number, speed: number, leader: boolean, now: number): void {
-  inFrame(g, side, () => {
+function puck(
+  g: Draw,
+  side: Side,
+  h: number,
+  speed: number,
+  land: number,
+  leader: boolean,
+  now: number,
+  sway: number,
+): void {
+  swayed(g, side, sway, () => {
     const y = puckY(h)
     if (speed > 0.05 && COL.rest - y > 20) {
       const len = Math.min(40 + speed * 260, COL.rest - y)
@@ -222,8 +269,20 @@ function puck(g: Draw, side: Side, h: number, speed: number, leader: boolean, no
       const k = 0.5 + 0.5 * Math.sin(now * 10)
       g.ring(COL.x, y, PUCK_R + 16 + k * 6, C.yellow, 9)
     }
-    g.ball(COL.x, y, PUCK_R, SIDE[side].main)
-    g.ring(COL.x, y, PUCK_R - 2, alpha(shade(SIDE[side].main, -0.5), 0.6), 4)
+    // Stretched along the slot while it flies, squashed for a beat as it stops.
+    const sy = 1 + speed * 0.4 - land * 0.28
+    const sx = 1 - speed * 0.18 + land * 0.22
+    g.at(
+      COL.x,
+      y,
+      0,
+      () => {
+        g.ball(0, 0, PUCK_R, SIDE[side].main)
+        g.ring(0, 0, PUCK_R - 2, alpha(shade(SIDE[side].main, -0.5), 0.6), 4)
+      },
+      sx,
+      sy,
+    )
   })
 }
 
@@ -243,7 +302,7 @@ function readout(g: Draw, side: Side, h: number, age: number): void {
         const col = ring ? C.yellow : SIDE[side].main
         g.rrect(-74, -40, 148, 80, 40, alpha(C.ink, 0.88))
         g.rrect(-66, -32, 132, 64, 32, shade(col, -0.2))
-        g.text(Math.round(h * 100), 0, 3, {
+        g.text(score(h), 0, 3, {
           size: 50,
           weight: 700,
           color: ring ? C.ink : C.white,
@@ -255,17 +314,26 @@ function readout(g: Draw, side: Side, h: number, age: number): void {
 }
 
 /** The mallet angle at round time `rt`. It rises with the gauge, then slams on the stop. */
-function malletAngle(sw: Swing, rt: number): number {
-  const v = gaugeValue(sw.gauge)
-  const wind = rt < LEAD ? A_REST : lerp(A_LOW, A_HIGH, v)
-  if (sw.height < 0) return wind
+function malletAngle(sw: Swing, rt: number, v: number): number {
+  // Lead-in: the mallet lifts off its rest toward the swing (anticipation).
+  const wind =
+    rt < LEAD ? lerp(A_REST, A_LOW, outCubic(prog(rt, LEAD * 0.4, LEAD))) : lerp(A_LOW, A_HIGH, v)
+  if (sw.height < 0 || sw.missed) return wind
   const t = rt - sw.stopT
   const from = lerp(A_LOW, A_HIGH, sw.height)
   if (t < SLAM) return lerp(from, A_STRIKE, inQuad(t / SLAM))
   return lerp(A_STRIKE, A_REST, outCubic(prog(t, 0.45, 0.45 + BACK)))
 }
 
-function strongman(g: Draw, side: Side, mood: Mood, squash: number, angle: number, jump: number) {
+function strongman(
+  g: Draw,
+  side: Side,
+  mood: Mood,
+  squash: number,
+  angle: number,
+  jump: number,
+  breath: number,
+) {
   const col = SIDE[side]
   inFrame(g, side, () => {
     const { x, r } = STRONG
@@ -278,12 +346,13 @@ function strongman(g: Draw, side: Side, mood: Mood, squash: number, angle: numbe
       mood,
       angle: ta,
       look: ta ? [-0.6, 0.5] : [0.6, -0.5],
-      sx: 1 + squash * 0.14,
-      sy: 1 - squash * 0.16,
+      sx: 1 + squash * 0.14 - breath * 0.02,
+      sy: 1 - squash * 0.16 + breath * 0.03,
     })
     // The mallet: wooden handle, a chunky head banded in team colour.
     const px = PIVOT.x
-    const py = PIVOT.y - jump
+    // The hands ride the hop with the body, whichever way the blob faces.
+    const py = PIVOT.y - jump * up + squash * 10
     const hx = px + Math.cos(angle) * HANDLE
     const hy = py + Math.sin(angle) * HANDLE
     g.line(
@@ -320,8 +389,16 @@ function strongman(g: Draw, side: Side, mood: Mood, squash: number, angle: numbe
 }
 
 /** The gauge the player stops: a lit tube with the bell zone at the top and a yellow needle. */
-function gauge(g: Draw, side: Side, sw: Swing, live: boolean, rt: number, now: number): void {
-  const v = gaugeValue(sw.gauge)
+function gauge(
+  g: Draw,
+  side: Side,
+  sw: Swing,
+  live: boolean,
+  rt: number,
+  now: number,
+  v: number,
+  ahead: number,
+): void {
   const stopped = sw.height >= 0
   inFrame(g, side, () => {
     const { x, y, h } = GAUGE
@@ -348,6 +425,14 @@ function gauge(g: Draw, side: Side, sw: Swing, live: boolean, rt: number, now: n
     g.emoji('🔔', x, top - 50, 58, textAngle(g, side) + Math.sin(now * 5) * 0.15)
     // Glass sheen.
     g.rrect(x - w / 2 + 8, top + 10, 12, h - 20, 6, alpha('#ffffff', 0.22))
+    // Motion trail behind a swinging needle: fainter the further back.
+    if (live && !stopped) {
+      for (let i = 3; i >= 1; i--) {
+        const gv = needleAt(sw, ahead - i * 0.03)
+        const gy = top + h - gv * h
+        g.rrect(x - w / 2 - 4, gy - 4, w + 8, 8, 4, alpha(C.yellow, 0.32 - i * 0.08))
+      }
+    }
     // The needle.
     const ny = top + h - v * h
     const settle = stopped ? Math.max(0, 1 - (rt - sw.stopT) / 0.3) : 0
@@ -374,13 +459,20 @@ function gauge(g: Draw, side: Side, sw: Swing, live: boolean, rt: number, now: n
 }
 
 /** "READY" during the lead-in, "TAP!" once the gauge is live. Under the gauge, upright for its player. */
-function hint(g: Draw, side: Side, text: string, now: number, live: boolean): void {
+function hint(
+  g: Draw,
+  side: Side,
+  text: string,
+  now: number,
+  live: boolean,
+  urgent: boolean,
+): void {
   inFrame(g, side, () => {
-    const pulse = live ? 0.5 + 0.5 * Math.sin(now * 10) : 0
+    const pulse = live ? 0.5 + 0.5 * Math.sin(now * (urgent ? 18 : 10)) : 0
     g.text(text, GAUGE.x - 10, GAUGE.y + GAUGE.h / 2 + 76, {
       size: 58 + pulse * 8,
       weight: 700,
-      color: live ? C.yellow : alpha(C.white, 0.75),
+      color: urgent ? mix(C.yellow, C.red, pulse) : live ? C.yellow : alpha(C.white, 0.75),
       stroke: alpha(C.ink, 0.9),
       strokeWidth: 12,
       angle: textAngle(g, side),
@@ -412,10 +504,35 @@ function roundBanner(g: Draw, r: Rounds, now: number, over: boolean): void {
   }
 }
 
+/** Cosmetic, per-frame inputs from the game: interpolated time and spring values. */
+export interface Look {
+  /** Game time for this frame (the last step plus `ahead`). */
+  now: number
+  /** Seconds past the last fixed step (0 during hit-stop). */
+  ahead: number
+  /** Strike pad press, strongman squash, bell wobble (rad), tower sway, pip pulse 0..1. */
+  pad: [number, number]
+  body: [number, number]
+  bell: [number, number]
+  sway: [number, number]
+  pulse: [number, number]
+}
+
+/** A soft flare on the pip just won, in its player's HUD row. */
+function pipPulse(g: Draw, side: Side, wins: number, target: number, k: number): void {
+  if (k <= 0.01 || wins <= 0) return
+  const x = side === 0 ? W - 170 : 170
+  g.forSide(side, x, hudY(g, side), () => {
+    const px = target > 5 ? -40 : -((target - 1) * 46) / 2 + (wins - 1) * 46
+    g.circle(px, 0, 15 + k * 22, alpha(SIDE[side].light, k * 0.45))
+    g.ring(px, 0, 18 + (1 - k) * 30, alpha(C.yellow, k), 5)
+  })
+}
+
 export function renderHammer(
   g: Draw,
   s: State,
-  now: number,
+  look: Look,
   o: {
     names: [string, string]
     over: boolean
@@ -423,6 +540,7 @@ export function renderHammer(
     bots: [boolean, boolean]
   },
 ): void {
+  const now = look.now
   const r = s.rounds
   const between = r.phase === 'between'
   const rt = now - s.roundAt
@@ -445,48 +563,64 @@ export function renderHammer(
   // Between rounds the pucks sink back to the foot of the tower.
   const drop = between && !o.over ? 1 - outCubic(prog(since, 0.9, 1.5)) : 1
   const heights = s.swings.map((sw) => puckHeight(sw, rt) * drop) as [number, number]
-  // Once both pucks have landed, the higher one wears a ring until the round is scored.
-  const settled = s.settleAt >= 0 && heights[0] !== heights[1]
-  const leader: Side | null =
-    settled && (!between || since < 0.9) ? (heights[0] > heights[1] ? 0 : 1) : null
+  // Once both pucks have landed, the higher readout wears a ring until the round is scored.
+  const s0 = score(s.swings[0].height)
+  const s1 = score(s.swings[1].height)
+  const settled = s.settleAt >= 0 && s0 !== s1
+  const leader: Side | null = settled && (!between || since < 0.9) ? (s0 > s1 ? 0 : 1) : null
+  const live = r.phase === 'play' && rt >= LEAD && !o.over
+  const ahead = live ? look.ahead : 0
 
   for (const side of [0, 1] as Side[]) {
     const sw = s.swings[side]
     const st = sw.height >= 0 ? rt - sw.stopT : -1
     const k = st - FLY
     const ringing = sw.height >= 0 && ringsBell(sw.height) && k >= 0
-    const wobble = ringing ? Math.sin(k * 34) * 0.34 * Math.exp(-k * 3) : 0
     const bellGlow = ringing ? Math.max(0, 0.9 - k * 1.2) : 0
-    const flying = st >= 0 && st < FLY
+    const flying = st >= 0 && st < FLY && !sw.missed
     const speed = flying ? (1 - st / FLY) ** 2 * sw.height : 0
+    const land = sw.height > 0 && k >= 0 && k < 0.2 && !between ? 1 - k / 0.2 : 0
     const chase = (ringing && k < 1.4) || (won(side) && (between || o.over)) ? 1 : 0
+    const sway = look.sway[side] * 0.012
+    // Idle life: the bell sways a touch on its bracket, the strongman breathes.
+    const idle = Math.sin(now * 1.4 + side * 2) * 0.03
     stage(g, side)
-    tower(g, side, heights[side], chase, now)
-    pad(g, side, st >= SLAM * 0.6 ? Math.max(0, 1 - (st - SLAM) / 0.25) : 0)
-    puck(g, side, heights[side], speed, leader === side, now)
-    bell(g, side, wobble, bellGlow)
-    if (sw.height >= 0 && !(between && since > 0.9)) readout(g, side, sw.height, k)
-    const squash = st >= 0 ? Math.max(0, 1 - Math.abs(st - SLAM) / 0.2) : 0
+    tower(g, side, heights[side], chase, now, sway)
+    pad(g, side, look.pad[side])
+    puck(g, side, heights[side], speed, land, leader === side, now, sway)
+    bell(g, side, look.bell[side] + idle, bellGlow, sway)
+    if (sw.height >= 0 && !sw.missed && !(between && since > 0.9)) readout(g, side, sw.height, k)
     const w = won(side)
     const jump = w && (between || o.over) ? Math.abs(Math.sin(now * 7)) * 40 : 0
-    strongman(g, side, moodFor(sw, rt, between || o.over, w), squash, malletAngle(sw, rt), jump)
+    const breath = Math.sin(now * 2.6 + side * 1.7)
+    strongman(
+      g,
+      side,
+      moodFor(sw, rt, between || o.over, w),
+      look.body[side],
+      malletAngle(sw, rt, needleAt(sw, ahead)),
+      jump,
+      breath,
+    )
   }
 
   for (const side of [0, 1] as Side[]) {
     const sw = s.swings[side]
-    const live = r.phase === 'play' && rt >= LEAD
-    gauge(g, side, sw, live, rt, now)
+    gauge(g, side, sw, live, rt, now, needleAt(sw, ahead), ahead)
     if (r.phase === 'play' && sw.height < 0 && !o.over && !o.bots[side]) {
-      hint(g, side, live ? 'TAP!' : 'READY', now, live)
+      const left = Math.ceil(timeLeft(sw, rt))
+      const urgent = live && left <= COUNTDOWN
+      hint(g, side, !live ? 'READY' : urgent ? `TAP! ${left}` : 'TAP!', now, live, urgent)
     }
   }
 
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, o.names[side], {
       x: side === 0 ? 360 : W - 360,
-      active: r.phase === 'play' && s.swings[side].height < 0 && rt >= LEAD,
+      active: live && s.swings[side].height < 0,
     })
     pips(g, side, r.wins[side], r.target, { x: side === 0 ? W - 170 : 170 })
+    pipPulse(g, side, r.wins[side], r.target, look.pulse[side])
   }
   roundBanner(g, r, now, o.over)
 }
