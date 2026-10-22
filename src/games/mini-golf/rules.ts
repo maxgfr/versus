@@ -174,12 +174,18 @@ const LAYOUTS: Feature[] = [
   },
 ]
 
+/** Windmills turn this much faster on each later hole (capped): the course gets tense. */
+export const MILL_RAMP = 0.1
+export const MILL_RAMP_MAX = 0.6
+
 /**
  * A procedural hole from the seed: a template, mirrored left-right and/or
  * top-bottom at random, every feature nudged, a windmill spun in a random
- * direction. `prev` avoids repeating the last template back to back.
+ * direction. `prev` avoids repeating the last template back to back; `hole`
+ * (0-based) speeds the windmills up as the match goes on.
  */
-export function makeGeo(rng: Rng, prev = -1): Geo {
+export function makeGeo(rng: Rng, prev = -1, hole = 0): Geo {
+  const ramp = 1 + Math.min(MILL_RAMP_MAX, Math.max(0, hole) * MILL_RAMP)
   let id = rng.int(0, LAYOUTS.length - 1)
   if (id === prev) id = (id + rng.int(1, LAYOUTS.length - 1)) % LAYOUTS.length
   const L = LAYOUTS[id] as Feature
@@ -224,7 +230,8 @@ export function makeGeo(rng: Rng, prev = -1): Geo {
   })
   const mills: Mill[] = L.mills.map(([x, y, half]) => {
     const c = P(x, y)
-    return { x: c.x, y: c.y, half, w: rng.sign() * rng.range(1, 1.5), a: rng.range(0, Math.PI) }
+    const w = rng.sign() * rng.range(1, 1.5) * ramp
+    return { x: c.x, y: c.y, half, w, a: rng.range(0, Math.PI) }
   })
   return {
     id,
@@ -399,6 +406,17 @@ export function frame(t: Table, ev?: Event[], dt = FRAME): void {
       b.vx = 0
       b.vy = 0
     }
+  }
+}
+
+/**
+ * Stop every ball where it is. A roll cut short at `MAX_ROLL` must not leave a
+ * ball drifting into the next putt (it would move again with the rival's shot).
+ */
+export function halt(t: Table): void {
+  for (const b of t.balls) {
+    b.vx = 0
+    b.vy = 0
   }
 }
 

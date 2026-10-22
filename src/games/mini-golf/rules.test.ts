@@ -7,11 +7,13 @@ import {
   COURSE,
   CUP_R,
   frame,
+  halt,
   holeOver,
   holeScore,
   launch,
   makeGeo,
   MAX_STROKES,
+  MILL_RAMP_MAX,
   MAX_ROLL,
   nextTurn,
   settle,
@@ -104,6 +106,31 @@ describe('mini golf course', () => {
   })
 })
 
+describe('mini golf ramp and roll cut', () => {
+  it('windmills turn faster on later holes, up to a cap', () => {
+    // Template 2 is the windmill hole; same seed, so the same draw apart from the ramp.
+    const at = (hole: number) => {
+      for (let seed = 0; seed < 200; seed++) {
+        const g = makeGeo(new Rng(seed), -1, hole)
+        if (g.mills.length) return { seed, w: Math.abs(g.mills[0]?.w ?? 0) }
+      }
+      throw new Error('no windmill hole')
+    }
+    const first = at(0)
+    const w = (hole: number) => Math.abs(makeGeo(new Rng(first.seed), -1, hole).mills[0]?.w ?? 0)
+    expect(w(3)).toBeGreaterThan(w(0))
+    expect(w(50)).toBeCloseTo(w(0) * (1 + MILL_RAMP_MAX), 9)
+  })
+
+  it('a roll cut short stops every ball, so none drifts into the next putt', () => {
+    const t = startTable(makeGeo(new Rng(4), 0))
+    t.balls[0].vx = 300
+    t.balls[1].vy = -200
+    halt(t)
+    expect(atRest(t)).toBe(true)
+  })
+})
+
 describe('mini golf turns', () => {
   it('the ball with fewer strokes putts next', () => {
     const t = startTable(makeGeo(new Rng(5)))
@@ -165,6 +192,18 @@ describe('mini golf match', () => {
       }
     }
   })
+
+  it('hard takes fewer strokes than easy over the same holes', () => {
+    let hard = 0
+    let easy = 0
+    for (const seed of [5, 6, 7, 8]) {
+      const h = playHole(seed, 0, 'hard').strokes
+      const e = playHole(seed, 0, 'easy').strokes
+      hard += h[0] + h[1]
+      easy += e[0] + e[1]
+    }
+    expect(hard).toBeLessThan(easy)
+  }, 60_000)
 
   it('computer vs computer plays six holes to a result in bounded time', () => {
     const card: [number[], number[]] = [[], []]

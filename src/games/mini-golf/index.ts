@@ -1,6 +1,7 @@
 import { DragAim } from '../../core/controls.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { type MatchSpec, type Side } from '../../core/game.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import { banner, bigScore } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -14,6 +15,7 @@ import {
   CUP_R,
   type Event,
   frame,
+  halt,
   holeOver,
   holeScore,
   launch,
@@ -43,6 +45,16 @@ interface State extends TurnState {
   holeAt: number
   /** Game time each bumper of the hole was last struck (its pop). */
   bumpAt: number[]
+  /** The last putt (the putter's follow-through and the ball's kick). */
+  shot: {
+    side: Side
+    x: number
+    y: number
+    dx: number
+    dy: number
+    power: number
+    at: number
+  } | null
 }
 
 /** Holes to play, chosen by the players before the match. */
@@ -63,6 +75,10 @@ class MiniGolf extends TurnGame<State> {
   private aiming: Aim | null = null
   /** Cosmetic: recent positions of each rolling ball. */
   private trails: [Pt[], Pt[]] = [[], []]
+  /** Cosmetic: each ball's position at the previous step, for smooth motion between steps. */
+  private prev: [Pt, Pt] | null = null
+  /** Cosmetic: squash of each ball on impact (1 = round). */
+  private squash: [Spring, Spring] = [new Spring(1, 420, 13), new Spring(1, 420, 13)]
 
   private get holes(): number {
     return this.ctx.target || match.default
@@ -84,7 +100,17 @@ class MiniGolf extends TurnGame<State> {
       rollAt: 0,
       holeAt: 0,
       bumpAt: geo.bumpers.map(() => -9),
+      shot: null,
     }
+  }
+
+  protected override step(dt: number): void {
+    const [a, b] = this.s.table.balls
+    this.prev = [
+      { x: a.x, y: a.y },
+      { x: b.x, y: b.y },
+    ]
+    super.step(dt)
   }
 
   protected override busy(): boolean {
@@ -138,6 +164,8 @@ class MiniGolf extends TurnGame<State> {
     launch(s.table, side, dx, dy, power)
     s.phase = 'roll'
     s.rollAt = this.time
+    const from = s.table.balls[side]
+    s.shot = { side, x: from.x, y: from.y, dx, dy, power, at: this.time }
     this.aiming = null
     for (const a of this.aims) a.cancel()
     const b = s.table.balls[side]
@@ -157,12 +185,21 @@ class MiniGolf extends TurnGame<State> {
       colors: [C.grass, '#9be7a8', C.white],
       kind: 'square',
     })
-    fx.shake(0.04 + power * 0.08)
+    fx.shake(0.04 + power * 0.1)
+    audio.buzz(Math.round(6 + power * 18))
+    // The putter's force shows in the ball: a hard putt squashes it flat.
+    this.squash[side].kick(-4 - power * 8)
+    if (power > 0.9) {
+      fx.stop(2)
+      fx.ring(b.x, b.y, C.white, 90)
+    }
   }
 
   /** The roll is over: score any ball that ran out of strokes and decide who putts next. */
   private endRoll(): void {
     const s = this.s
+    // A roll cut short (a ball trapped by a windmill): nothing keeps drifting into the next putt.
+    if (!atRest(s.table)) halt(s.table)
     const ev: Event[] = []
     settle(s.table, ev)
     for (const e of ev) this.juice(e)
@@ -195,27 +232,38 @@ class MiniGolf extends TurnGame<State> {
       return
     }
     s.hole++
-    const geo = makeGeo(this.ctx.rng, s.lastId)
+    const geo = makeGeo(this.ctx.rng, s.lastId, s.hole)
     s.lastId = geo.id
     s.table = startTable(geo)
     s.turn = nextTurn(s.table) ?? 0
     s.phase = 'aim'
     s.holeAt = this.time
     s.bumpAt = geo.bumpers.map(() => -9)
+    s.shot = null
     this.trails = [[], []]
+    this.prev = null
     this.ctx.audio.play('whoosh', 0.8)
   }
 
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
     const s = this.s
+    // Impact strength (0..1) from the closing speed: it scales every reaction.
+    const k = 'speed' in e ? Math.min(1, e.speed / 1300) : 0
+    if (e.kind === 'wall' || e.kind === 'bump' || e.kind === 'mill' || e.kind === 'ball')
+      this.kickNearest(e.x, e.y, k)
     if (e.kind === 'wall') {
       audio.play('wall', 0.9 + Math.min(0.5, e.speed / 1200))
-      if (e.speed > 420) fx.sparks(e.x, e.y, C.white, 5)
+      if (e.speed > 420) fx.sparks(e.x, e.y, C.white, Math.round(4 + k * 8))
+      if (e.speed > 900) {
+        fx.shake(0.06 + k * 0.12)
+        audio.buzz(8)
+      }
     } else if (e.kind === 'bump') {
       audio.play('boing', 0.9 + Math.min(0.6, e.speed / 1400))
-      fx.sparks(e.x, e.y, C.yellow, 12)
-      fx.shake(0.1)
+      fx.sparks(e.x, e.y, C.yellow, Math.round(8 + k * 10))
+      fx.shake(0.06 + k * 0.12)
+      audio.buzz(Math.round(6 + k * 12))
       // Pop the bumper that was struck.
       let best = 0
       let bd = Infinity
@@ -228,11 +276,19 @@ class MiniGolf extends TurnGame<State> {
       })
       s.bumpAt[best] = this.time
     } else if (e.kind === 'mill') {
-      audio.play('thud', 1.1)
-      fx.sparks(e.x, e.y, C.white, 6)
+      audio.play('thud', 1 + k * 0.3)
+      fx.sparks(e.x, e.y, C.white, Math.round(4 + k * 8))
+      fx.shake(0.05 + k * 0.1)
+      audio.buzz(10)
     } else if (e.kind === 'ball') {
       audio.play('click', 0.9 + Math.min(0.5, e.speed / 900))
       fx.puff(e.x, e.y, 'rgba(255,255,255,0.6)', 5)
+      fx.sparks(e.x, e.y, C.yellow, Math.round(3 + k * 9))
+      if (e.speed > 600) {
+        fx.shake(0.08 + k * 0.12)
+        fx.stop(2)
+        audio.buzz(14)
+      }
     } else if (e.kind === 'holed') {
       const b = s.table.balls[e.side]
       b.holedAt = this.time
@@ -272,14 +328,35 @@ class MiniGolf extends TurnGame<State> {
     }
   }
 
-  render(g: Draw): void {
+  /** Squash the ball nearest an impact, harder for a harder hit. */
+  private kickNearest(x: number, y: number, k: number): void {
+    const [a, b] = this.s.table.balls
+    const i = Math.hypot(a.x - x, a.y - y) <= Math.hypot(b.x - x, b.y - y) ? 0 : 1
+    this.squash[i].kick(-2 - k * 7)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
+    this.aiming = null
+  }
+
+  render(g: Draw, alpha = 1): void {
     const s = this.s
+    // Smooth motion between fixed steps: draw each ball between its last two positions.
+    const pos = s.table.balls.map((b, i): Pt => {
+      const p = this.prev?.[i]
+      return p && b.state === 'play'
+        ? { x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha) }
+        : { x: b.x, y: b.y }
+    }) as [Pt, Pt]
     for (const b of s.table.balls) {
       const tr = this.trails[b.side]
-      if (b.state === 'play' && Math.hypot(b.vx, b.vy) > 300) tr.push({ x: b.x, y: b.y })
+      if (b.state === 'play' && Math.hypot(b.vx, b.vy) > 300) tr.push(pos[b.side])
       else tr.shift()
       while (tr.length > 7) tr.shift()
     }
+    for (const sp of this.squash) sp.update(1 / 60)
     const look = {
       table: s.table,
       card: s.card,
@@ -292,6 +369,9 @@ class MiniGolf extends TurnGame<State> {
       aiming: s.phase === 'aim' ? this.aiming : null,
       bumpAt: s.bumpAt,
       trails: this.trails,
+      pos,
+      squash: [this.squash[0].value, this.squash[1].value] as [number, number],
+      shot: s.shot,
     }
     drawHole(g, look)
     drawCard(g, 0, look)

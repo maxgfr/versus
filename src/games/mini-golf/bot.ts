@@ -12,8 +12,8 @@ export interface Shot {
 /** How far a bot's aim (radians) and power (fraction) wander from the best shot it found. */
 const ERR: Record<Difficulty, { ang: number; pow: number }> = {
   easy: { ang: 0.1, pow: 0.14 },
-  normal: { ang: 0.04, pow: 0.06 },
-  hard: { ang: 0.01, pow: 0.015 },
+  normal: { ang: 0.025, pow: 0.04 },
+  hard: { ang: 0.006, pow: 0.01 },
 }
 
 const COARSE_ANGLES = 48

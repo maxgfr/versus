@@ -41,6 +41,20 @@ export interface Look {
   bumpAt: number[]
   /** Recent positions of each ball, newest last (cosmetic). */
   trails: [Pt[], Pt[]]
+  /** Where each ball is drawn this frame (interpolated between steps). */
+  pos?: [Pt, Pt]
+  /** Squash of each ball (1 = round, below 1 = flattened by an impact). */
+  squash?: [number, number]
+  /** The last putt, for the putter's follow-through. */
+  shot?: {
+    side: Side
+    x: number
+    y: number
+    dx: number
+    dy: number
+    power: number
+    at: number
+  } | null
 }
 
 const GRASS = C.grass
@@ -326,9 +340,17 @@ function drawMill(g: Draw, m: Mill): void {
   g.circle(m.x, m.y, 10, shade(C.pink, -0.4))
 }
 
-function drawBall(g: Draw, b: Ball, cup: Pt, time: number, trail: Pt[]): void {
-  let x = b.x
-  let y = b.y
+function drawBall(
+  g: Draw,
+  b: Ball,
+  cup: Pt,
+  time: number,
+  trail: Pt[],
+  at: Pt = b,
+  squash = 1,
+): void {
+  let x = at.x
+  let y = at.y
   let k = 1
   let size = BALL_R
   const col = SIDE[b.side].main
@@ -349,10 +371,26 @@ function drawBall(g: Draw, b: Ball, cup: Pt, time: number, trail: Pt[]): void {
     const f = (i + 1) / (trail.length + 1)
     g.alpha(f * 0.35, () => g.circle(p.x, p.y, BALL_R * (0.35 + 0.55 * f), SIDE[b.side].light))
   }
+  // Stretched along its path when fast, squashed across it by an impact.
+  const sp = b.state === 'play' ? Math.hypot(b.vx, b.vy) : 0
+  const stretch = 1 + Math.min(0.22, sp / 6000)
+  const sq = Math.max(0.6, Math.min(1.3, squash))
+  const ang = sp > 1 ? Math.atan2(b.vy, b.vx) : 0
   g.alpha(k, () => {
     if (b.state !== 'holed') g.shadow(x + 6, y + 14, size * 0.95, size * 0.6, 0.45)
-    g.ball(x, y, size, col, 1)
-    g.sideMark(b.side, x + size * 0.1, y + size * 0.15, size * 0.3, alpha('#ffffff', 0.92))
+    g.at(
+      x,
+      y,
+      ang,
+      () => {
+        g.ball(0, 0, size, col, 1)
+        g.at(0, 0, -ang, () =>
+          g.sideMark(b.side, size * 0.1, size * 0.15, size * 0.3, alpha('#ffffff', 0.92)),
+        )
+      },
+      stretch * sq,
+      (1 / stretch) * (2 - sq),
+    )
   })
 }
 
@@ -399,6 +437,25 @@ function drawAim(g: Draw, b: Ball, aim: Aim, side: Side): void {
   g.arc(b.x, b.y, BALL_R + 34, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * aim.power, col, 12)
 }
 
+/** The putter's follow-through after a putt: it sweeps through the tee spot and fades, longer for a harder putt. */
+function drawSwing(g: Draw, look: Look): void {
+  const s = look.shot
+  if (!s) return
+  const t = look.time - s.at
+  const dur = 0.22 + s.power * 0.12
+  if (t < 0 || t > dur) return
+  const p = outCubic(t / dur)
+  const ang = Math.atan2(s.dy, s.dx)
+  // From its pulled-back spot, through the ball's old place, and on.
+  const reach = (BALL_R + 26 + s.power * 70) * (1 - p) - s.power * 60 * p
+  g.alpha(1 - t / dur, () =>
+    g.at(s.x - s.dx * reach, s.y - s.dy * reach, ang + Math.PI / 2, () => {
+      g.rrect(-38, -11, 76, 22, 10, shade(C.white, -0.15))
+      g.rrect(-38, -11, 76, 9, 5, '#ffffff')
+    }),
+  )
+}
+
 /** The whole shared course: grass, walls, obstacles, cup, both balls. */
 export function drawHole(g: Draw, look: Look): void {
   const t = look.table
@@ -424,7 +481,17 @@ export function drawHole(g: Draw, look: Look): void {
         geo.bumpers.forEach((p, i) => drawBumper(g, p, look.time, look.bumpAt[i] ?? -9))
         const live = t.balls[look.turn]
         if (look.live && live.state === 'play' && !look.aiming) drawLive(g, live, look.time)
-        for (const b of t.balls) drawBall(g, b, geo.cup, look.time, look.trails[b.side])
+        drawSwing(g, look)
+        for (const b of t.balls)
+          drawBall(
+            g,
+            b,
+            geo.cup,
+            look.time,
+            look.trails[b.side],
+            look.pos?.[b.side],
+            look.squash?.[b.side],
+          )
         if (look.aiming && live.state === 'play') drawAim(g, live, look.aiming, look.turn)
       },
       s,
