@@ -180,7 +180,9 @@ class TicTacToe extends TurnGame<State> {
     const s = this.s
     tableBackdrop(g)
     const live = s.endedAt < 0 && !this.over
-    const hint = live && !this.isBot(s.turn) ? s.turn : null
+    // Online, the glow is a prompt for the player to move: only their own phone shows it.
+    const mine = g.viewer === null || g.viewer === s.turn
+    const hint = live && mine && !this.isBot(s.turn) ? s.turn : null
     renderBoard(g, s, GEO, this.time, hint)
     this.drawTurns(g, undefined, s.endedAt < 0)
     pips(g, 0, s.wins[0], this.target, { inset: 170 })
