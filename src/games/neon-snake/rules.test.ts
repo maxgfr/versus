@@ -9,12 +9,16 @@ import {
   type Ev,
   foodDistance,
   newBoard,
+  passable,
+  RAMP,
   room,
   ROWS,
   roundWinner,
   type Snake,
   TICK,
+  TICK_MIN,
   tick,
+  tickLen,
   want,
 } from './rules.ts'
 
@@ -113,7 +117,23 @@ describe('moving', () => {
 
   it('running into its own body crashes', () => {
     const b = quiet()
-    // A tight loop: the head is about to step onto its own tail.
+    // A tight loop: the head is about to step onto its own body (not the tail).
+    const s = snake(b, 0)
+    s.body = [
+      { x: 5, y: 10 },
+      { x: 6, y: 10 },
+      { x: 6, y: 11 },
+      { x: 5, y: 11 },
+      { x: 4, y: 11 },
+    ]
+    s.dir = 2
+    s.want = 2
+    expect(tick(b, 0, [], new Rng(1))).toBe(1)
+    expect(s.alive).toBe(false)
+  })
+
+  it('a head may follow its own tail into the cell it leaves (it used to crash)', () => {
+    const b = quiet()
     const s = snake(b, 0)
     s.body = [
       { x: 5, y: 10 },
@@ -123,8 +143,95 @@ describe('moving', () => {
     ]
     s.dir = 2
     s.want = 2
+    expect(tick(b, 0, [], new Rng(1))).toBeNull()
+    expect(s.alive).toBe(true)
+    expect(s.body[0]).toEqual({ x: 5, y: 11 })
+    expect(s.body.length).toBe(4)
+  })
+
+  it('a tail that stays put (its snake eats) is still solid', () => {
+    const b = quiet()
+    const s = snake(b, 0)
+    s.body = [
+      { x: 5, y: 10 },
+      { x: 6, y: 10 },
+      { x: 6, y: 11 },
+      { x: 5, y: 11 },
+    ]
+    s.dir = 2
+    s.want = 2
+    // A dot where the head goes: the snake grows, so its tail stays.
+    b.dots = [{ x: 5, y: 11 }]
     expect(tick(b, 0, [], new Rng(1))).toBe(1)
     expect(s.alive).toBe(false)
+  })
+
+  it("a head may enter the rival's tail cell as it moves away", () => {
+    const b = quiet()
+    place(b, 1, 9, 10, 0) // blue heads north: body (9,10),(9,11),(9,12)
+    place(b, 0, 10, 12, 3) // red heads west into (9,12), blue's tail
+    expect(tick(b, 0, [], new Rng(1))).toBeNull()
+    expect(snake(b, 0).alive).toBe(true)
+    expect(snake(b, 0).body[0]).toEqual({ x: 9, y: 12 })
+  })
+
+  it("the rival's tail is solid when the rival crashes on the same tick", () => {
+    const b = quiet()
+    place(b, 1, 9, 0, 0) // blue heads north off the board: body (9,0),(9,1),(9,2)
+    place(b, 0, 10, 2, 3) // red heads west into (9,2), blue's tail
+    expect(tick(b, 0, [], new Rng(1))).toBe('draw')
+  })
+
+  it('a quick double swipe queues a U-turn instead of dropping the second turn', () => {
+    const b = quiet()
+    const s = snake(b, 0)
+    const head = { ...(s.body[0] as { x: number; y: number }) }
+    // Heading north: right, then down, both before the next tick.
+    want(s, 1)
+    want(s, 2)
+    tick(b, 0, [], new Rng(1))
+    expect(s.dir).toBe(1)
+    tick(b, 0.1, [], new Rng(1))
+    expect(s.dir).toBe(2)
+    expect(s.body[0]).toEqual({ x: head.x + 1, y: head.y + 1 })
+  })
+
+  it('a held stick repeating the pending or current direction never undoes the queue', () => {
+    const b = quiet()
+    const s = snake(b, 0)
+    want(s, 1)
+    want(s, 2)
+    want(s, 0) // the current heading: ignored
+    want(s, 1) // the pending turn again: ignored
+    expect(s.want).toBe(1)
+    expect(s.next).toBe(2)
+  })
+
+  it('the opposite of a pending turn replaces it (a change of mind)', () => {
+    const b = quiet()
+    const s = snake(b, 0)
+    want(s, 1)
+    want(s, 3)
+    expect(s.want).toBe(3)
+    expect(s.next).toBe(-1)
+  })
+
+  it('both snakes move before the new dot appears, and one dot replaces each eaten', () => {
+    for (let seed = 1; seed < 30; seed++) {
+      const c = quiet(seed)
+      c.dots = [{ x: 4, y: 19 }]
+      tick(c, 0, [], new Rng(seed))
+      expect(c.dots.length).toBe(1)
+      for (const d of c.dots) expect(passable(c, d.x, d.y)).toBe(true)
+    }
+  })
+
+  it('the ticks speed up over a round, then hold at the top speed', () => {
+    expect(tickLen(0)).toBe(TICK)
+    expect(tickLen(RAMP / 2)).toBeLessThan(TICK)
+    expect(tickLen(RAMP / 2)).toBeGreaterThan(TICK_MIN)
+    expect(tickLen(RAMP)).toBeCloseTo(TICK_MIN)
+    expect(tickLen(RAMP * 3)).toBeCloseTo(TICK_MIN)
   })
 
   it('entering the other snake crashes only the one that entered', () => {
@@ -207,6 +314,39 @@ describe('bots', () => {
     expect(d).not.toBe(1)
   })
 
+  /** One seeded round between two bots at the real (speeding-up) pace. */
+  function duel(a: Difficulty, b: Difficulty, seed: number): 0 | 1 | 'draw' {
+    const rng = new Rng(seed)
+    const board = newBoard(0, rng)
+    const bots = [NeonBot.of(rng.fork(), a), NeonBot.of(rng.fork(), b)]
+    let t = board.go
+    for (let i = 0; i < 4000; i++) {
+      board.len = tickLen(t - board.go)
+      t += board.len
+      for (const side of [0, 1] as const) {
+        const d = bots[side]?.choose(board, side)
+        if (d !== null && d !== undefined) want(snake(board, side), d)
+      }
+      const w = tick(board, t, [], rng)
+      if (w !== null) return w
+    }
+    return 'draw'
+  }
+
+  it('hard beats easy, and normal beats easy, over seeded rounds (sides swapped)', () => {
+    const wins = (strong: Difficulty, weak: Difficulty): number => {
+      let n = 0
+      for (let seed = 1; seed <= 6; seed++) {
+        const flip = seed % 2 === 0
+        const w = flip ? duel(weak, strong, seed) : duel(strong, weak, seed)
+        if (w !== 'draw' && (w === 0) !== flip) n++
+      }
+      return n
+    }
+    expect(wins('hard', 'easy')).toBeGreaterThanOrEqual(5)
+    expect(wins('normal', 'easy')).toBeGreaterThanOrEqual(4)
+  })
+
   for (const d of ['easy', 'normal', 'hard'] as const satisfies readonly Difficulty[]) {
     it(`bots finish a round in bounded time (${d})`, () => {
       for (let seed = 1; seed <= 4; seed++) {
@@ -219,8 +359,9 @@ describe('bots', () => {
           t += STEP
           if (t < COUNT) continue
           b.acc += STEP
-          while (b.acc >= TICK && winner === null) {
-            b.acc -= TICK
+          b.len = tickLen(t - b.go)
+          while (b.acc >= b.len && winner === null) {
+            b.acc -= b.len
             for (const side of [0, 1] as const) {
               const dir = (bots[side] as NeonBot).choose(b, side)
               if (dir !== null) want(snake(b, side), dir)

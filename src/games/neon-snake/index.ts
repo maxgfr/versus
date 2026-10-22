@@ -14,8 +14,10 @@ import {
   dirOf,
   type Ev,
   newBoard,
+  RAMP,
   TICK,
   tick,
+  tickLen,
   want,
 } from './rules.ts'
 
@@ -39,6 +41,8 @@ const STICK_R = 110
 const SWIPE = 56
 /** Stick deflection needed to turn (0..1). */
 const STICK_TURN = 0.4
+/** Speed-up call-outs: a third, two thirds and all of the ramp. */
+const LEVELS = 3
 
 /** Keeps a floating label of half-width `half` inside the stage (x, world units). */
 const keepInside = (x: number, half: number): number => Math.min(W - half, Math.max(half, x))
@@ -50,6 +54,7 @@ class NeonSnake extends BaseGame<State> {
   private ev: Ev[] = []
   private beat = -1
   private went = false
+  private level = 0
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -90,8 +95,11 @@ class NeonSnake extends BaseGame<State> {
     const { ctx } = this
     if (roundsStep(s.rounds, this.time, PAUSE)) {
       s.b = newBoard(this.time, ctx.rng)
+      // At match point the snakes start a third of the way up the speed ramp.
+      if (Math.max(...s.rounds.wins) >= this.target - 1) s.b.boost = RAMP / LEVELS
       s.eatT = [-9, -9]
       this.went = false
+      this.level = 0
       ctx.audio.play('whoosh')
       return
     }
@@ -136,10 +144,18 @@ class NeonSnake extends BaseGame<State> {
     }
     this.ev.length = 0
     if (started) {
+      // The longer the round, the faster the snakes: no round drags on.
+      const into = this.time - s.b.go + (s.b.boost ?? 0)
+      s.b.len = tickLen(into)
+      const level = Math.min(LEVELS, Math.floor((into / RAMP) * LEVELS + 1e-9))
+      if (level > this.level) {
+        this.level = level
+        this.speedUp(level)
+      }
       s.b.acc += dt
       let winner: Side | 'draw' | null = null
-      while (s.b.acc >= TICK && winner === null) {
-        s.b.acc -= TICK
+      while (s.b.acc >= s.b.len && winner === null) {
+        s.b.acc -= s.b.len
         for (const side of [0, 1] as const) {
           const bot = this.bots[side]
           if (!bot) continue
@@ -149,10 +165,23 @@ class NeonSnake extends BaseGame<State> {
         }
         winner = tick(s.b, this.time, this.ev, ctx.rng)
       }
-      for (const e of this.ev) this.feedback(e)
+      for (const e of this.ev) this.juice(e)
       if (winner !== null) this.roundOver(winner)
     }
     s.ctl = this.looks()
+  }
+
+  /** The round just got faster: say so in each player's half. */
+  private speedUp(level: number): void {
+    const { fx, audio } = this.ctx
+    audio.play('powerup', 1 + level * 0.12)
+    const text =
+      level >= LEVELS
+        ? 'Top speed! Growing!'
+        : this.s.b.boost > 0 && level === 1
+          ? 'Match point!'
+          : 'Faster!'
+    for (const side of [0, 1] as Side[]) floatFor(fx, side, text)
   }
 
   private roundOver(w: Side | 'draw'): void {
@@ -161,51 +190,79 @@ class NeonSnake extends BaseGame<State> {
     ctx.audio.play(w === 'draw' ? 'draw' : 'score')
     if (w !== 'draw') {
       const h = s.b.snakes[w].body[0]
+      const col = SIDE[w]
       if (h) {
         const c = cellCentre(h)
-        ctx.fx.ring(c.x, c.y, C.yellow, 150)
+        ctx.fx.ring(c.x, c.y, C.yellow, 220)
+        ctx.fx.ring(c.x, c.y, col.light, 140)
+        ctx.fx.burst(c.x, c.y, col.main, {
+          count: 26,
+          speed: 700,
+          size: 12,
+          life: 0.8,
+          gravity: 0,
+          drag: 2.4,
+          colors: [col.main, col.light, C.yellow, C.white],
+          kind: 'square',
+        })
         // In the winner's own half, clear of the crash it walked away from.
         floatFor(ctx.fx, w, 'Survivor!')
       }
-    } else ctx.fx.flash(C.white, 0.25)
+    } else {
+      ctx.fx.flash(C.white, 0.25)
+      for (const side of [0, 1] as Side[]) floatFor(ctx.fx, side, 'Draw!')
+    }
     if (roundEnd(s.rounds, w, this.time, ctx.names) && w !== 'draw') {
       ctx.fx.confetti(w)
+      ctx.fx.flash(SIDE[w].main, 0.3)
+      ctx.audio.buzz(40)
       this.finish(w, { score: [s.rounds.wins[0], s.rounds.wins[1]], delay: 2.2 })
     }
   }
 
-  private feedback(e: Ev): void {
-    const { fx, audio, rng } = this.ctx
+  /**
+   * Feedback for one rules event. Intensity grows with the snake's length and
+   * the round's speed: pitch, particles, shake, hit-stop and haptics.
+   */
+  private juice(e: Ev): void {
+    const { fx, audio } = this.ctx
     const col = SIDE[e.side]
+    const speed = TICK / this.s.b.len
     switch (e.k) {
-      case 'eat':
+      case 'eat': {
+        const k = Math.min(1, (e.n - 3) / 20)
         this.s.eatT[e.side] = this.time
-        audio.play('chomp', 1 + rng.next() * 0.2)
-        audio.play('coin', 1.1 + Math.min(0.6, this.s.b.snakes[e.side].eaten * 0.04))
-        fx.ring(e.x, e.y, C.yellow, 80)
+        audio.play('chomp', 1 + Math.random() * 0.2)
+        audio.play('coin', 1.05 + k * 0.6)
+        if (k > 0.4) audio.buzz(8)
+        fx.ring(e.x, e.y, C.yellow, 70 + k * 60)
         fx.burst(e.x, e.y, C.yellow, {
-          count: 14,
-          speed: 300,
+          count: Math.round(10 + k * 12 + (speed - 1) * 8),
+          speed: 260 + k * 200,
           size: 9,
           life: 0.45,
           gravity: 200,
           colors: [C.yellow, C.white, col.light],
         })
-        fx.float('+1', e.x, e.y + (e.side === 0 ? -60 : 60), C.yellow, 42, e.side)
+        fx.float('+1', e.x, e.y + (e.side === 0 ? -60 : 60), C.yellow, 42 + k * 16, e.side)
         break
-      case 'crash':
-        audio.play('explode', 0.9 + rng.next() * 0.2)
-        audio.buzz(60)
+      }
+      case 'crash': {
+        // A long snake at full speed makes a bigger wreck.
+        const k = Math.min(1, ((e.n - 3) / 20) * 0.5 + (e.speed - 1) * 0.8)
+        audio.play('explode', 1.05 - k * 0.25 + Math.random() * 0.1)
+        audio.buzz(Math.round(40 + k * 40))
         fx.burst(e.x, e.y, col.main, {
-          count: 30,
-          speed: 520,
+          count: Math.round(24 + k * 24),
+          speed: 460 + k * 360,
           size: 16,
           life: 0.7,
           gravity: 0,
           colors: [col.main, col.light, C.white, C.cyan],
         })
-        fx.ring(e.x, e.y, col.light, 170)
-        fx.flash(col.main, 0.2)
+        fx.sparks(e.x, e.y, C.white, Math.round(8 + k * 12))
+        fx.ring(e.x, e.y, col.light, 150 + k * 90)
+        fx.flash(col.main, 0.18 + k * 0.12)
         fx.float(
           'Crash!',
           keepInside(e.x, 120),
@@ -214,15 +271,17 @@ class NeonSnake extends BaseGame<State> {
           60,
           e.side,
         )
-        fx.shake(0.55)
-        fx.stop(6)
+        fx.shake(0.45 + k * 0.3)
+        // The round is over, so freezing the clock costs nobody anything.
+        fx.stop(Math.round(5 + k * 4))
         break
+      }
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha: number): void {
     const humans: [boolean, boolean] = [!this.ctx.bots[0], !this.ctx.bots[1]]
-    renderNeon(g, this.s, this.time, this.ctx.names, this.over, humans)
+    renderNeon(g, this.s, this.time, this.ctx.names, this.over, humans, alpha)
   }
 }
 
