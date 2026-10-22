@@ -70,6 +70,9 @@ function arrow(g: Draw, s: number, col: string, glow = 0): void {
   g.poly([s * 0.62, -s * 0.12, s * 0.16, -s * 0.52, s * 0.16, -s * 0.36], alpha(C.white, 0.5))
 }
 
+/** Whether this screen shows `side`'s input cues: always, except the rival's online. */
+const isMine = (g: Draw, side: Side): boolean => g.viewer === null || g.viewer === side
+
 /** Brightness pulse from a lane's last tap (0..1). */
 const laneFlash = (at: number, now: number): number =>
   at < 0 ? 0 : Math.max(0, 1 - (now - at) / 0.18)
@@ -203,6 +206,9 @@ function stage(
     g.rrect(x - 54, SPAWN_Y + 40, 108, PAD_Y - SPAWN_Y, 54, alpha(C.ink, 0.55))
     g.rrect(x - 54, SPAWN_Y + 40, 108, PAD_Y - SPAWN_Y, 54, undefined, alpha(col, 0.22), 4)
   }
+  // Online, the rival's pads stay (they are where its arrows land and its hits
+  // flash) but lose the "tap now" cue: that is an input hint for its own phone.
+  const mine = isMine(g, side)
   // Pads (receptors), each flashing on its own lane's taps and breathing with the beat.
   for (let lane = 0; lane < LANES; lane++) {
     const x = LANE_X[lane] as number
@@ -210,7 +216,7 @@ function stage(
     const f = laneFlash(d.laneAt[lane] as number, now)
     // Is an arrow inside the hit window right now?
     let ready = false
-    for (let i = d.cursor; i < d.hits.length; i++) {
+    for (let i = mine ? d.cursor : d.hits.length; i < d.hits.length; i++) {
       const h = d.hits[i]
       if (!h || h.t - now > GOOD) break
       if (h.r === 0 && h.lane === lane && Math.abs(h.t - now) <= GOOD) ready = true
@@ -516,7 +522,7 @@ export function renderDisco(g: Draw, s: State, now: number, o: DiscoOpts): void 
   const hint = 1 - Math.max(0, (now - 2.6) / 0.6)
   if (hint > 0) {
     for (const side of [0, 1] as Side[]) {
-      if (o.bots[side]) continue
+      if (o.bots[side] || !isMine(g, side)) continue
       banner(g, side, 'Tap the pads on the beat!', frame(side, W / 2, 1210).y, {
         size: 44,
         alpha: hint,
