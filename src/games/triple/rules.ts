@@ -33,7 +33,16 @@ export type Tap =
   | { kind: 'ignored' }
   | { kind: 'select' }
   | { kind: 'deselect' }
-  | { kind: 'valid'; slots: number[]; added: number[] }
+  | {
+      kind: 'valid'
+      slots: number[]
+      added: number[]
+      /**
+       * Set when the table closed up instead of being refilled: the old slot of
+       * each card now on the table (new index → old index).
+       */
+      moved: number[] | null
+    }
   | { kind: 'invalid'; slots: number[] }
 
 /** The four trait values of card `id`: count, shape, colour, fill (each 0..2). */
@@ -133,8 +142,18 @@ export function tapSlot(b: Board, side: Side, slot: number, now: number): Tap {
     // Replaced cards take their selections with them.
     b.sel[other] = b.sel[other].filter((s) => !slots.includes(s))
   }
+  // A table grown past twelve (or a deck run dry) closes up instead of being
+  // refilled, so it shrinks back to twelve cards rather than growing forever.
+  const cards = b.table.filter((c) => c !== null).length
+  if (b.deck.length === 0 || cards - 3 >= START_CARDS) {
+    const moved = b.table.map((_, i) => i).filter((i) => !slots.includes(i) && b.table[i] !== null)
+    const at = new Map(moved.map((old, i) => [old, i]))
+    b.table = moved.map((i) => b.table[i] ?? null)
+    for (const other of [0, 1] as Side[]) b.sel[other] = b.sel[other].map((s) => at.get(s) ?? s)
+    return { kind: 'valid', slots, added: topUp(b), moved }
+  }
   for (const s of slots) b.table[s] = draw(b.deck)
-  return { kind: 'valid', slots, added: topUp(b) }
+  return { kind: 'valid', slots, added: topUp(b), moved: null }
 }
 
 /**

@@ -6,7 +6,7 @@ import { Input } from '../../core/input.ts'
 import type { Stage } from '../../core/stage.ts'
 import { Rng } from '../../core/rng.ts'
 import factory, { type State } from './index.ts'
-import { pickTriple, SPOT } from './bot.ts'
+import { botTriple, pickTriple, spotDelay, SPOT } from './bot.ts'
 import { tableGrid } from './render.ts'
 import {
   type Board,
@@ -132,7 +132,7 @@ describe('triple rules', () => {
   })
 
   it('scores a valid triple, deals into the same slots and clears both selections', () => {
-    const b = boardOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    const b = boardOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], [60, 61, 62, 63, 64, 65])
     const [i, j, k] = findSets(b.table)[0] as [number, number, number]
     // Red selects one card that is not part of this triple to test clearing later.
     const stray = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].find((s) => ![i, j, k].includes(s))!
@@ -145,7 +145,44 @@ describe('triple rules', () => {
     expect(b.sel[0]).toEqual([])
     expect(b.sel[1]).toEqual([stray])
     expect(b.table.length).toBeGreaterThanOrEqual(12)
-    if (r.kind === 'valid') expect(r.slots.sort()).toEqual([i, j, k])
+    if (r.kind === 'valid') {
+      expect(r.slots.sort()).toEqual([i, j, k])
+      expect(r.moved).toBeNull()
+      // The new cards came off the top of the deck into the same slots.
+      for (const slot of [i, j, k]) expect(b.table[slot]).toBeGreaterThanOrEqual(60)
+    }
+  })
+
+  it('closes the table back up to twelve instead of refilling a grown table', () => {
+    // Fifteen cards on the table (three were added for want of a triple).
+    const table = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    const b = boardOf(table, [60, 61, 62, 63, 64, 65])
+    const [i, j, k] = findSets(b.table)[0] as [number, number, number]
+    const stray = table.find((x) => ![i, j, k].includes(x) && x > k) ?? 14
+    tapSlot(b, 1, stray, 0)
+    tapSlot(b, 0, i, 0)
+    tapSlot(b, 0, j, 0)
+    const r = tapSlot(b, 0, k, 0)
+    expect(r.kind).toBe('valid')
+    if (r.kind !== 'valid') return
+    expect(b.deck).toHaveLength(6)
+    // No card was dealt unless the closed-up table had no triple.
+    if (r.added.length === 0) expect(b.table).toHaveLength(12)
+    expect(r.moved).not.toBeNull()
+    // Every card kept its identity: new index -> old index.
+    r.moved?.forEach((old, now) => expect(b.table[now]).toBe(table[old]))
+    // Blue's selection followed its card to its new slot.
+    expect(b.sel[1].map((x) => b.table[x])).toEqual([table[stray]])
+  })
+
+  it('never leaves holes when the deck has run dry', () => {
+    const b = boardOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], [])
+    const [i, j, k] = findSets(b.table)[0] as [number, number, number]
+    tapSlot(b, 0, i, 0)
+    tapSlot(b, 0, j, 0)
+    tapSlot(b, 0, k, 0)
+    expect(b.table).toHaveLength(9)
+    expect(b.table.every((c) => c !== null)).toBe(true)
   })
 
   it('clears a rival selection that sat on a replaced card', () => {
@@ -215,6 +252,33 @@ describe('triple rules', () => {
     expect(winner(live)).toBeNull()
   })
 
+  it('the computer is quicker on a table full of triples, and quicker by level', () => {
+    const mean = (d: Difficulty, sets: number) => {
+      const rng = new Rng(5)
+      let t = 0
+      for (let i = 0; i < 400; i++) t += spotDelay(d, rng, sets)
+      return t / 400
+    }
+    expect(mean('hard', 1)).toBeLessThan(mean('normal', 1))
+    expect(mean('normal', 1)).toBeLessThan(mean('easy', 1))
+    expect(mean('normal', 4)).toBeLessThan(mean('normal', 1))
+  })
+
+  it('easy sometimes grabs a near miss, hard never does', () => {
+    const rng = new Rng(9)
+    const b = newBoard(rng.shuffle(Array.from({ length: DECK_SIZE }, (_, i) => i)))
+    const ok = (t: [number, number, number] | null) =>
+      t !== null &&
+      isTriple(b.table[t[0]] as number, b.table[t[1]] as number, b.table[t[2]] as number)
+    let easyWrong = 0
+    for (let i = 0; i < 300; i++) {
+      expect(ok(botTriple(b.table, 'hard', rng))).toBe(true)
+      if (!ok(botTriple(b.table, 'easy', rng))) easyWrong++
+    }
+    expect(easyWrong).toBeGreaterThan(10)
+    expect(easyWrong).toBeLessThan(80)
+  })
+
   it('the computer can always find a triple on a table that has one', () => {
     const rng = new Rng(3)
     const b = newBoard(rng.shuffle(Array.from({ length: DECK_SIZE }, (_, i) => i)))
@@ -229,7 +293,7 @@ describe('triple rules', () => {
 // ---------- game level ----------
 
 function ctxFor(bots: [boolean, boolean], difficulty: Difficulty, seed: number): GameContext {
-  const audio = { play: () => {}, unlock: () => {} } as unknown as Audio
+  const audio = { play: () => {}, unlock: () => {}, buzz: () => {} } as unknown as Audio
   return {
     stage: { edge: (side: Side) => (side === 0 ? 1800 : 0) } as unknown as Stage,
     input: new Input({} as Stage, '2p', 0),

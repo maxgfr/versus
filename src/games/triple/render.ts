@@ -346,7 +346,10 @@ export function renderTriple(
   target: number,
 ): void {
   g.alpha(0.5, () => g.midline())
-  for (const f of [0, 1] as Side[]) renderHalf(g, s, now, f)
+  // Online, each phone shows only its own copy of the table to tap: the rival's
+  // picks still show on it (their marks), and their triples fly across the midline.
+  for (const f of [0, 1] as Side[])
+    if (g.viewer === null || g.viewer === f) renderHalf(g, s, now, f)
   renderEnd(g, s, now)
   for (const side of [0, 1] as Side[]) {
     const locked = s.lockUntil[side] > now

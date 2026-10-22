@@ -4,9 +4,9 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { tableBackdrop } from '../../engines/board/index.ts'
 import { type CardRect, cardAt } from '../../engines/cards/index.ts'
-import { pickTriple, spotDelay } from './bot.ts'
+import { botTriple, spotDelay, TAP_GAP } from './bot.ts'
 import { renderTriple, tableGrid } from './render.ts'
-import { type Board, DECK_SIZE, newBoard, TARGET, tapSlot, winner } from './rules.ts'
+import { type Board, DECK_SIZE, findSets, newBoard, TARGET, tapSlot, winner } from './rules.ts'
 
 /** Match length: first to N points. */
 export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 15 }
@@ -100,6 +100,7 @@ class Triple extends BaseGame<State> {
         return
       case 'select':
         this.ctx.audio.play('pop', 1 + s.sel[side].length * 0.12)
+        this.ctx.audio.buzz(5)
         return
       case 'deselect':
         this.ctx.audio.play('tap', 0.85)
@@ -114,7 +115,9 @@ class Triple extends BaseGame<State> {
         fx.float('-1', c.x, c.y + (side === 0 ? -170 : 170), C.redLight, 90, side)
         fx.shake(0.35)
         fx.flash(C.red, 0.15)
+        fx.stop(3)
         this.ctx.audio.play('buzz')
+        this.ctx.audio.buzz(40)
         return
       }
       case 'valid': {
@@ -136,10 +139,20 @@ class Triple extends BaseGame<State> {
         fx.stop(4)
         fx.shake(0.18)
         fx.flash(SIDE[side].light, 0.12)
-        this.ctx.audio.play('coin')
+        // A point closer to the target lands harder: the last points ring out.
+        const k = Math.min(1, s.score[side] / this.target)
+        this.ctx.audio.play('coin', 0.9 + k * 0.3)
         this.ctx.audio.play('whoosh', 1.2)
-        // The replacements flip in once the old cards have left.
-        for (const i of r.slots) s.placedAt[i] = this.time + 0.4
+        this.ctx.audio.buzz(Math.round(15 + k * 20))
+        if (r.moved) {
+          // The table closed up: cards that changed slot flip back in at their new place.
+          const was = s.placedAt
+          s.placedAt = r.moved.map((old, i) => (old === i ? (was[old] ?? 0) : this.time + 0.35))
+        } else {
+          // The replacements flip in once the old cards have left.
+          for (const i of r.slots) s.placedAt[i] = this.time + 0.4
+        }
+        s.placedAt.length = Math.min(s.placedAt.length, s.table.length)
         while (s.placedAt.length < s.table.length) s.placedAt.push(this.time + 0.6)
         if (r.added.length) {
           for (const i of r.added) s.placedAt[i] = this.time + 0.7 + (i % 3) * 0.08
@@ -169,13 +182,14 @@ class Triple extends BaseGame<State> {
   /** The computer searches for a triple after a difficulty delay, then taps its three cards one by one. */
   private botStep(side: Side, dt: number): void {
     const s = this.s
-    if (this.clock[side] < 0) this.clock[side] = spotDelay(this.ctx.difficulty, this.ctx.rng)
+    if (this.clock[side] < 0)
+      this.clock[side] = spotDelay(this.ctx.difficulty, this.ctx.rng, findSets(s.table).length)
     this.clock[side] -= dt
     if (this.clock[side] > 0) return
     const plan = this.plan[side]
     if (plan.length === 0) {
       if (this.time < s.lockUntil[side]) return
-      const t = pickTriple(s.table, this.ctx.rng)
+      const t = botTriple(s.table, this.ctx.difficulty, this.ctx.rng)
       if (!t) {
         this.clock[side] = 0.5
         return
@@ -197,7 +211,8 @@ class Triple extends BaseGame<State> {
     plan.shift()
     this.ids[side].shift()
     this.tap(side, slot)
-    this.clock[side] = plan.length ? 0.45 + this.ctx.rng.range(0, 0.25) : -1
+    const [lo, hi] = TAP_GAP[this.ctx.difficulty]
+    this.clock[side] = plan.length ? this.ctx.rng.range(lo, hi) : -1
   }
 
   /** Pill text: locked countdown, how many picked, or the outcome. */
