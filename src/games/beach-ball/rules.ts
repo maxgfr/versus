@@ -34,6 +34,9 @@ const SPIKE_FLAT = 0.35
 /** Each bump of a rally adds this much pace, up to `ESCALATE_MAX`, so long rallies open up. */
 const ESCALATE = 0.035
 const ESCALATE_MAX = 0.6
+/** ...and flies this much lower (shorter), up to `LOWER_MAX`. */
+const LOWER = 0.015
+const LOWER_MAX = 0.3
 /**
  * Safety net: a rally longer than this (s) is let drop where the ball is. The
  * escalating pace ends rallies long before; this only guards against a stalemate.
@@ -306,7 +309,9 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
     const pace = (1 + Math.min(ESCALATE_MAX, w.hits * ESCALATE)) * (1 + power * SPIKE_PACE)
     b.vx = dx * STEER + bl.vx * 0.45
     b.vy = fwd(bl.side) * BUMP_VY * pace * (0.96 + 0.08 * rng.next())
-    b.vz = BUMP_VZ * (1 - power * SPIKE_FLAT) * (0.97 + 0.06 * rng.next())
+    // Long rallies also fly lower: less time to get under the next ball.
+    const low = 1 - Math.min(LOWER_MAX, w.hits * LOWER)
+    b.vz = BUMP_VZ * low * (1 - power * SPIKE_FLAT) * (0.97 + 0.06 * rng.next())
     bl.cool = COOL
     const speed = Math.hypot(b.vx, b.vy)
     ev.push({ kind: 'bump', side: bl.side, x: b.x, y: b.y, speed, count: w.count, power })
