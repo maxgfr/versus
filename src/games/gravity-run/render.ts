@@ -1,5 +1,5 @@
 import type { Side } from '../../core/game.ts'
-import { outCubic, prog } from '../../core/fx/ease.ts'
+import { outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { LANE_H, LANE_W, repeatX } from '../../engines/runner/index.ts'
@@ -21,6 +21,9 @@ import {
 
 export interface LaneView {
   runner: Runner
+  /** Interpolated height and distance for this frame. */
+  y: number
+  dist: number
   seed: number
   time: number
   phase: 'wait' | 'fly' | 'end'
@@ -252,8 +255,17 @@ function runner(g: Draw, owner: Side, r: Runner, o: LaneView): void {
   const col = SIDE[owner]
   const time = o.time
   const grounded = r.alive && r.grounded
-  const landed = Math.max(0, 1 - (time - r.landAt) / 0.2)
-  const squash = grounded ? 0.22 * Math.sin(landed * Math.PI) : 0
+  const ry = o.y
+  const rd = o.dist
+  // Landing squash, deeper after a long fall, with a small rebound wobble.
+  const sl = time - r.landAt
+  const lk = 0.12 + 0.2 * Math.min(1, r.landV / 1700)
+  const squash =
+    grounded && sl < 0.34
+      ? sl < 0.12
+        ? Math.sin((sl / 0.12) * Math.PI * 0.5) * lk
+        : Math.cos(((sl - 0.12) / 0.22) * Math.PI) * lk * 0.5 * (1 - (sl - 0.12) / 0.22)
+      : 0
   const stretch = r.alive && !r.grounded ? Math.min(0.16, Math.abs(r.vy) / 6000) : 0
   const angle = r.alive
     ? runnerAngle(r, time)
@@ -263,15 +275,15 @@ function runner(g: Draw, owner: Side, r: Runner, o: LaneView): void {
   // Ghost trail while flipping: where it was a few frames ago.
   if (r.alive && !r.grounded) {
     for (let k = 4; k >= 1; k--) {
-      const y = r.y - r.vy * k * 0.022
+      const y = ry - r.vy * k * 0.022
       g.alpha(0.32 - k * 0.06, () => g.circle(RUN_X - k * 20, y, RUN_R * (1 - k * 0.1), col.main))
     }
   }
   // Speed streaks while running.
   if (running) {
     for (let k = 0; k < 3; k++) {
-      const len = 50 + ((r.dist * 0.7 + k * 37) % 60)
-      const y = r.y + (k - 1) * 18
+      const len = 50 + ((rd * 0.7 + k * 37) % 60)
+      const y = ry + (k - 1) * 18
       g.line(RUN_X - 52 - len, y, RUN_X - 52, y, alpha(col.light, 0.32), 5)
     }
   }
@@ -282,12 +294,14 @@ function runner(g: Draw, owner: Side, r: Runner, o: LaneView): void {
   // A shock ring on each flip.
   const sf = time - r.flipAt
   if (r.alive && sf < 0.35) {
-    g.alpha(1 - sf / 0.35, () => g.ring(RUN_X, r.y, RUN_R + 10 + sf * 160, col.light, 6))
+    g.alpha(1 - sf / 0.35, () => g.ring(RUN_X, ry, RUN_R + 10 + sf * 160, col.light, 6))
   }
-  const bob = running ? Math.abs(Math.sin(r.dist * 0.05)) * 6 : 0
-  const step = running ? Math.sin(r.dist * 0.05) : 0
+  const bob = running ? Math.abs(Math.sin(rd * 0.05)) * 6 : 0
+  const step = running ? Math.sin(rd * 0.05) : 0
+  // Waiting to start: a little idle breathing.
+  const idle = o.phase === 'wait' && r.alive ? Math.sin(time * 5) * 0.04 : 0
   const mood = !r.alive ? 'dizzy' : !r.grounded ? 'wow' : o.roundWinner === owner ? 'grin' : 'happy'
-  g.at(RUN_X, r.y, angle, () => {
+  g.at(RUN_X, ry, angle, () => {
     g.at(0, -bob, 0, () => {
       // Two chunky boots, stepping.
       for (const k of [-1, 1]) {
@@ -298,8 +312,8 @@ function runner(g: Draw, owner: Side, r: Runner, o: LaneView): void {
       g.blob(0, 0, RUN_R, col.main, {
         mood,
         look: [0.85, 0.1],
-        sx: 1 + squash - stretch * 0.5,
-        sy: 1 - squash + stretch,
+        sx: 1 + squash - stretch * 0.5 - idle,
+        sy: 1 - squash + stretch + idle,
         eyes: 1.05,
         outline: true,
       })
@@ -314,10 +328,10 @@ function runner(g: Draw, owner: Side, r: Runner, o: LaneView): void {
 }
 
 /** A crown floats over the round's winner. */
-function crown(g: Draw, r: Runner, t: number): void {
+function crown(g: Draw, r: Runner, ry: number, t: number): void {
   const up = r.g > 0 ? -1 : 1
-  const s = outCubic(prog(t, 0, 0.35))
-  const y = r.y + up * (RUN_R + 74 + Math.sin(t * 5) * 8)
+  const s = outBack(prog(t, 0, 0.35))
+  const y = ry + up * (RUN_R + 74 + Math.sin(t * 5) * 8)
   g.emoji('👑', RUN_X, y, 62 * s, r.g > 0 ? 0 : Math.PI)
 }
 
@@ -350,18 +364,19 @@ function flipHint(g: Draw, t: number): void {
 
 export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const r = o.runner
-  background(g, side, v, r.dist, o.time)
-  const lo = r.dist + v.x0 - 40
-  const hi = r.dist + v.x1 + 40
+  const dist = o.dist
+  background(g, side, v, dist, o.time)
+  const lo = dist + v.x0 - 40
+  const hi = dist + v.x1 + 40
   const floor = hazardsOn(o.seed, 0, lo, hi)
   const ceil = hazardsOn(o.seed, 1, lo, hi)
-  surface(g, side, v, r.dist, 0, floor)
-  surface(g, side, v, r.dist, 1, ceil)
-  spikes(g, r.dist, [...floor, ...ceil])
+  surface(g, side, v, dist, 0, floor)
+  surface(g, side, v, dist, 1, ceil)
+  spikes(g, dist, [...floor, ...ceil])
   runner(g, side, r, o)
 
   const won = o.phase === 'end' && o.roundWinner === side
-  if (won) crown(g, r, o.since)
+  if (won) crown(g, r, o.y, o.since)
 
   counterPill(g, side, r.seen, o.bot ? 'Computer' : o.name, LANE_W / 2 - 60, 70, o.time - r.scoreAt)
   winPips(g, side, o.wins, o.target, LANE_W - 200, 66, won ? o.since : 9)
@@ -369,14 +384,23 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const cx = LANE_W / 2 + 90
   const cy = LANE_H * 0.5
   if (o.phase === 'wait') {
-    if (!o.bot && o.round === 1) flipHint(g, o.time)
-    const label = o.round > 1 ? `Round ${o.round}` : o.bot ? 'Ready…' : 'Tap to flip!'
+    // Online, each phone only coaches its own player: the rival's lane just says Ready.
+    const coach = !o.bot && (g.viewer === null || g.viewer === side)
+    if (coach && o.round === 1) flipHint(g, o.time)
+    const label = o.round > 1 ? `Round ${o.round}` : coach ? 'Tap to flip!' : 'Ready…'
     laneCard(g, label, cx, cy, {
       t: o.since,
-      sub: o.bot ? '' : o.round > 1 ? `${o.wins} – ${o.rivalWins}` : 'Gravity switches sides',
+      sub:
+        o.round > 1
+          ? o.bot
+            ? ''
+            : `${o.wins} – ${o.rivalWins}`
+          : coach
+            ? 'Land, then tap to switch'
+            : '',
       accent: SIDE[side].main,
     })
-    if (!o.bot) g.emoji('👆', RUN_X + 120, LAND_HI - 30 + Math.sin(o.time * 8) * 14, 84)
+    if (coach) g.emoji('👆', RUN_X + 120, LAND_HI - 30 + Math.sin(o.time * 8) * 14, 84)
   } else if (o.phase === 'end') {
     const w = o.roundWinner
     const done = o.matchOver

@@ -1,8 +1,9 @@
-import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { type GameContext, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { clamp, lerp } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
-import { RunnerGame, toWorld } from '../../engines/runner/index.ts'
-import { shouldFlip } from './bot.ts'
+import { mirrorFx, RunnerGame, toWorld } from '../../engines/runner/index.ts'
+import { newPlan, type Plan, shouldFlip } from './bot.ts'
 import { drawLane, type LaneView } from './render.ts'
 import {
   judge,
@@ -40,6 +41,42 @@ const FINAL = 2.4
 export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 9 }
 
 class GravityRun extends RunnerGame<State> {
+  /** The computer's plans (host only, never in the state). */
+  private plans: [Plan, Plan] = [newPlan(), newPlan()]
+  /** Cosmetic: each runner's height and distance at the previous step, for interpolation. */
+  private prev: [{ y: number; d: number }, { y: number; d: number }] = [
+    { y: 0, d: 0 },
+    { y: 0, d: 0 },
+  ]
+  private stepped = false
+  private alpha = 1
+
+  override init(ctx: GameContext): void {
+    super.init(ctx)
+    // Effects land where each lane is drawn, also when a half is shown turned (online).
+    mirrorFx(ctx, this.frames)
+  }
+
+  protected override step(dt: number): void {
+    for (const side of [0, 1] as Side[]) {
+      const r = this.s.runners[side]
+      this.prev[side].y = r.y
+      this.prev[side].d = r.dist
+    }
+    this.stepped = true
+    super.step(dt)
+  }
+
+  override render(g: Draw, alpha = 1): void {
+    // Hit-stop freezes the world: no blending between two steps that are not moving.
+    this.alpha = this.stepped && this.ctx.fx.hitstop === 0 ? alpha : 1
+    super.render(g)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.stepped = false
+  }
   /** Round wins to take the match. */
   private get target(): number {
     return this.ctx.target || match.default
@@ -89,16 +126,17 @@ class GravityRun extends RunnerGame<State> {
     const speed = speedAt(s.flyT)
     if (
       this.isBot(side) &&
-      shouldFlip(s.seed, r, speed, this.ctx.difficulty, this.time, side * 0x9e3779b1)
+      shouldFlip(s.seed, r, speed, this.ctx.difficulty, this.plans[side], side * 0x9e3779b1)
     )
       this.botTap(side)
     const flip = this.taps(side) > 0
-    this.react(side, stepRunner(s.seed, r, dt, speed, flip, this.time))
+    const vy = r.vy
+    this.react(side, stepRunner(s.seed, r, dt, speed, flip, this.time), vy, speed)
     // Decide the round once both lanes have stepped (both may fall on the same step).
     if (side === 1) this.judgeRound()
   }
 
-  private react(side: Side, events: RunEvent[]): void {
+  private react(side: Side, events: RunEvent[], vy: number, speed: number): void {
     const r = this.s.runners[side]
     const f = this.frames[side]
     const at = toWorld(f, RUN_X, r.y)
@@ -107,13 +145,22 @@ class GravityRun extends RunnerGame<State> {
     for (const e of events) {
       if (e === 'flip') {
         this.ctx.audio.play('flip', 1 + (r.mul - 0.8) * 0.4)
-        fx.sparks(at.x, at.y, col.light, 8)
-        fx.puff(at.x, at.y, alpha(C.white, 0.5), 4)
+        // The push-off: a jet of sparks off the surface it leaves.
+        const foot = toWorld(f, RUN_X, r.y - r.g * RUN_R)
+        fx.sparks(foot.x, foot.y, col.light, 8)
+        fx.puff(foot.x, foot.y, alpha(C.white, 0.5), 4)
       } else if (e === 'land') {
-        this.ctx.audio.play('click', 0.7)
+        // Slamming into the far surface: harder after a long fall.
+        const k = clamp(Math.abs(vy) / 1700, 0, 1)
+        this.ctx.audio.play('click', 0.6 + k * 0.3)
+        this.ctx.audio.play('thud', 1.6 - k * 0.5)
         const foot = toWorld(f, RUN_X, r.y + r.g * RUN_R)
-        fx.puff(foot.x, foot.y, alpha(col.light, 0.6), 5)
-        fx.sparks(foot.x, foot.y, col.light, 5)
+        fx.puff(foot.x, foot.y, alpha(col.light, 0.6), Math.round(3 + k * 5))
+        fx.sparks(foot.x, foot.y, col.light, Math.round(3 + k * 8))
+        if (k > 0.6) {
+          fx.shake(0.06 + k * 0.1)
+          this.ctx.audio.buzz(8)
+        }
       } else if (e === 'pass') {
         // Every hazard ticks the counter; every tenth gets a shout.
         const big = r.seen % 10 === 0
@@ -125,10 +172,16 @@ class GravityRun extends RunnerGame<State> {
         }
       } else if (e === 'die') {
         const spiked = spikeHit(this.s.seed, r.dist + RUN_X, r.y)
-        this.ctx.audio.play(spiked ? 'hit' : 'whoosh', spiked ? 1 : 0.6)
+        // Faster runs end harder.
+        const k = clamp(Math.hypot(speed, vy) / 1400, 0.35, 1)
+        this.ctx.audio.play(spiked ? 'hit' : 'whoosh', spiked ? 1.15 - k * 0.3 : 0.6)
         this.ctx.audio.play('thud')
-        this.ctx.audio.buzz(40)
-        fx.burst(at.x, at.y, col.main, { count: 22, speed: 560, size: 14 })
+        this.ctx.audio.buzz(Math.round(25 + k * 30))
+        fx.burst(at.x, at.y, col.main, {
+          count: Math.round(12 + k * 14),
+          speed: 380 + k * 260,
+          size: 14,
+        })
         fx.burst(at.x, at.y, C.white, { count: 10, speed: 420, size: 8, kind: 'spark' })
         if (spiked) {
           fx.burst(at.x, at.y, C.white, {
@@ -141,9 +194,9 @@ class GravityRun extends RunnerGame<State> {
             life: 0.5,
           })
         }
-        fx.ring(at.x, at.y, col.light, 170)
-        fx.shake(0.5)
-        fx.stop(6)
+        fx.ring(at.x, at.y, col.light, 120 + k * 80)
+        fx.shake(0.25 + k * 0.3)
+        fx.stop(Math.round(3 + k * 4))
       }
     }
   }
@@ -182,6 +235,7 @@ class GravityRun extends RunnerGame<State> {
     s.round++
     s.seed = this.courseSeed()
     s.runners = [newRunner(), newRunner()]
+    this.plans = [newPlan(), newPlan()]
     s.phase = 'wait'
     s.phaseAt = this.time
     s.flyT = 0
@@ -195,8 +249,14 @@ class GravityRun extends RunnerGame<State> {
     view: { x0: number; y0: number; x1: number; y1: number },
   ): void {
     const s = this.s
+    const r = s.runners[side]
+    const p = this.prev[side]
+    // Blend toward the latest step, unless the runner just jumped back (a new round).
+    const a = Math.abs(r.dist - p.d) > 200 ? 1 : this.alpha
     const o: LaneView = {
-      runner: s.runners[side],
+      runner: r,
+      y: lerp(p.y, r.y, a),
+      dist: lerp(p.d, r.dist, a),
       seed: s.seed,
       time: this.time,
       phase: s.phase,

@@ -58,9 +58,13 @@ export interface Runner {
   /** Hazards already passed. */
   seen: number
   flipAt: number
+  /** Time left in which a tap made in the air still flips on landing. */
+  buf: number
   /** Sprite angle when the last flip started. */
   a0: number
   landAt: number
+  /** Speed (units/s) of the last touch-down: the landing squash scales with it. */
+  landV: number
   deadAt: number
   /** When the last hazard was passed (the counter bumps). */
   scoreAt: number
@@ -79,8 +83,10 @@ export function newRunner(): Runner {
     mul: 1,
     seen: 0,
     flipAt: -10,
+    buf: 0,
     a0: 0,
     landAt: -10,
+    landV: 0,
     deadAt: -1,
     scoreAt: -10,
   }
@@ -90,11 +96,18 @@ export function newRunner(): Runner {
 export const MUL_FLIP = 0.07
 export const MUL_MIN = 0.8
 export const MUL_RECOVER = 0.35
+/** A tap this close to landing still flips the moment the runner touches down. */
+export const BUFFER = 0.12
 
 /** Scroll speed (units/s) after `t` seconds of a round: gently faster. */
 export function speedAt(t: number): number {
-  return Math.min(480, 300 + t * 3)
+  // Sudden death: past a minute the corridor keeps speeding up, so a round
+  // between two runners who never slip still ends before the cap.
+  return Math.min(480, 300 + t * 3) + Math.max(0, t - SUDDEN) * 10
 }
+
+/** Seconds of running after which the speed climbs again. */
+export const SUDDEN = 60
 
 export function hazardAt(seed: number, i: number): Hazard {
   const x = FIRST + i * PERIOD + (hash01(seed, i, 1) * 2 - 1) * JITTER
@@ -189,6 +202,16 @@ export function runnerAngle(r: Runner, now: number): number {
   return r.a0 + (target - r.a0) * e
 }
 
+function doFlip(r: Runner, now: number, ev: RunEvent[]): void {
+  r.a0 = runnerAngle(r, now)
+  r.g = r.g > 0 ? -1 : 1
+  r.grounded = false
+  r.flipAt = now
+  r.buf = 0
+  r.mul = Math.max(MUL_MIN, r.mul - MUL_FLIP)
+  ev.push('flip')
+}
+
 function die(r: Runner, now: number, ev: RunEvent[]): void {
   r.alive = false
   r.deadAt = now
@@ -221,14 +244,11 @@ export function stepRunner(
     return ev
   }
   r.mul = Math.min(1, r.mul + dt * MUL_RECOVER)
-  if (flip) {
-    r.a0 = runnerAngle(r, now)
-    r.g = r.g > 0 ? -1 : 1
-    r.grounded = false
-    r.flipAt = now
-    r.mul = Math.max(MUL_MIN, r.mul - MUL_FLIP)
-    ev.push('flip')
-  }
+  // Gravity only switches with the feet on a surface: no hovering mid-corridor
+  // by tapping away. A tap just before touching down is kept for the landing.
+  if (flip) r.buf = BUFFER
+  if (r.buf > 0 && r.grounded) doFlip(r, now, ev)
+  r.buf = Math.max(0, r.buf - dt)
   r.dist += speed * r.mul * dt
   const cx = r.dist + RUN_X
   if (!r.grounded) {
@@ -246,10 +266,16 @@ export function stepRunner(
     if (!r.grounded) {
       r.grounded = true
       r.landAt = now
+      r.landV = Math.abs(r.vy)
       ev.push('land')
     }
     r.y = landY
     r.vy = 0
+    // A tap buffered on the way down flips straight back.
+    if (r.buf > 0) {
+      doFlip(r, now, ev)
+      r.buf = 0
+    }
   }
   if (spikeHit(seed, cx, r.y)) {
     die(r, now, ev)

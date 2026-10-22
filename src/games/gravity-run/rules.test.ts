@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Difficulty, Side } from '../../core/game.ts'
-import { shouldFlip } from './bot.ts'
+import { newPlan, type Plan, shouldFlip } from './bot.ts'
 import {
+  BUFFER,
   fallDead,
   hazardAt,
   hazardsOn,
@@ -149,8 +150,43 @@ describe('gravity run runner', () => {
     for (let t = 0.2; t < 3; t += DT) stepRunner(seed, r, DT, 300, false, t)
     expect(r.mul).toBe(1)
     // Flipping over and over never drops the speed below the floor.
-    for (let k = 0; k < 40; k++) stepRunner(seed, r, DT, 300, true, 4 + k * 0.01)
+    for (let k = 0; k < 400; k++) stepRunner(seed, r, DT, 300, true, 4 + k * DT)
     expect(r.mul).toBeGreaterThanOrEqual(MUL_MIN)
+  })
+
+  it('cannot flip again in mid-air: tapping away does not hover in the corridor', () => {
+    const r = newRunner()
+    let flips = 0
+    let t = 0.1
+    for (const e of stepRunner(3, r, DT, 300, true, t)) if (e === 'flip') flips++
+    // Tap every few steps while crossing: gravity keeps pulling to the ceiling.
+    for (let k = 0; k < 12; k++) {
+      t += DT
+      for (const e of stepRunner(3, r, DT, 300, k % 3 === 0 && k < 6, t)) if (e === 'flip') flips++
+      if (r.grounded) break
+    }
+    expect(flips).toBe(1)
+    expect(r.g).toBe(-1)
+  })
+
+  it('a tap just before landing flips straight back on touch-down', () => {
+    const r = newRunner()
+    let t = 0.1
+    stepRunner(3, r, DT, 300, true, t)
+    // Coast until a few steps from the ceiling, then tap.
+    while (r.y - 248 > 110) {
+      t += DT
+      stepRunner(3, r, DT, 300, false, t)
+    }
+    expect(r.grounded).toBe(false)
+    stepRunner(3, r, DT, 300, true, (t += DT))
+    expect(r.buf).toBeGreaterThan(0)
+    expect(r.buf).toBeLessThanOrEqual(BUFFER)
+    const ev: RunEvent[] = []
+    for (let k = 0; k < 20 && r.g < 0; k++) ev.push(...stepRunner(3, r, DT, 300, false, (t += DT)))
+    expect(ev).toContain('land')
+    expect(ev).toContain('flip')
+    expect(r.g).toBe(1)
   })
 
   it('turns its sprite over as it flips', () => {
@@ -183,15 +219,21 @@ describe('gravity run judging', () => {
 })
 
 /** One round: both bots play until the round is judged. Returns the winner and step count. */
-function playRound(seed: number, d: Difficulty): { winner: Side | 'draw' | null; steps: number } {
+function playRound(
+  seed: number,
+  d: Difficulty,
+  d1: Difficulty = d,
+): { winner: Side | 'draw' | null; steps: number } {
   const rs: [Runner, Runner] = [newRunner(), newRunner()]
+  const plans: [Plan, Plan] = [newPlan(), newPlan()]
   let t = 0
   for (let n = 1; n <= ROUND_CAP * 60 + 60; n++) {
     t += DT
     const speed = speedAt(t)
     for (const side of [0, 1] as Side[]) {
       const r = rs[side]
-      const flip = r.alive && shouldFlip(seed, r, speed, d, t, side * 0x9e3779b1)
+      const lvl = side === 0 ? d : d1
+      const flip = r.alive && shouldFlip(seed, r, speed, lvl, plans[side], side * 0x9e3779b1)
       stepRunner(seed, r, DT, speed, flip, t)
     }
     const w = judge(rs[0], rs[1], t)
@@ -200,7 +242,35 @@ function playRound(seed: number, d: Difficulty): { winner: Side | 'draw' | null;
   return { winner: null, steps: Infinity }
 }
 
+/** Seconds one bot survives alone (capped at the round cap). */
+function survive(seed: number, d: Difficulty): number {
+  const r = newRunner()
+  const p = newPlan()
+  let t = 0
+  while (r.alive && t < ROUND_CAP) {
+    t += DT
+    const speed = speedAt(t)
+    stepRunner(seed, r, DT, speed, shouldFlip(seed, r, speed, d, p), t)
+  }
+  return t
+}
+
 describe('gravity run bot', () => {
+  it('plans flips with the real rules: hard runs far, easy falls much sooner', () => {
+    const seeds = [5, 36, 67, 98, 129, 160]
+    const avg = (d: Difficulty) =>
+      seeds.map((s) => survive(s, d)).reduce((a, b) => a + b) / seeds.length
+    const hard = avg('hard')
+    expect(hard).toBeGreaterThan(40)
+    expect(avg('easy')).toBeLessThan(hard * 0.6)
+  })
+
+  it('hard beats easy most rounds', () => {
+    let hard = 0
+    for (let k = 0; k < 8; k++) if (playRound(400 + k * 7, 'easy', 'hard').winner === 1) hard++
+    expect(hard).toBeGreaterThanOrEqual(6)
+  })
+
   it('a normal bot survives a while, then loses to the course or the cap', () => {
     for (const seed of [11, 222, 3333]) {
       const r = playRound(seed, 'normal')
