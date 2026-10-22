@@ -21,15 +21,15 @@ export const SPOT: [{ x: number; y: number }, { x: number; y: number }] = [
   { x: W / 2, y: 590 },
 ]
 export const KEEPER_HOME = W / 2
-export const REACH_STAND = 96
-export const REACH_DIVE = 120
+export const REACH_STAND = 90
+export const REACH_DIVE = 100
 const KEEPER_SPEED = 900
 const KEEPER_LIE = 0.55
-const DIVE_SPEED = 900
+const DIVE_SPEED = 750
 export const DIVE_T = 0.24
 const SPEED_MIN = 900
-const SPEED_MAX = 2200
-const CURL = 520
+const SPEED_MAX = 2600
+const CURL = 700
 const SUBSTEPS = 4
 export const INTRO_T = 1.1
 export const RESULT_T = 1.5

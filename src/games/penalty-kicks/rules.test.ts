@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { type Difficulty, type Side, STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { decideKeeper, decideShot, type KeeperMemory, newKeeperMemory, TUNING } from './bot.ts'
+import {
+  aimAt,
+  decideKeeper,
+  decideShot,
+  type KeeperMemory,
+  newKeeperMemory,
+  TUNING,
+} from './bot.ts'
 import {
   type Cmd,
   crossX,
@@ -186,6 +193,32 @@ describe('penalty bots', () => {
     const shot = decideShot(w, 'hard', rng)
     expect(shot.dy).toBeGreaterThan(0)
     expect(Math.hypot(shot.dx, shot.dy)).toBeCloseTo(1, 6)
+  })
+
+  it('aims exactly where it means to, curl included', () => {
+    for (const curl of [-0.8, 0, 0.8]) {
+      const shot = aimAt(0, 690, 0.95, curl)
+      const x = crossX(shot, 0, LINE[1])
+      expect(Math.abs((x as number) - 690)).toBeLessThan(3)
+    }
+  })
+
+  it('a full-power kick into the corner beats even a sharp keeper, a soft one does not', () => {
+    const fire = (power: number): string | null => {
+      const w = newWorld()
+      w.phase = 'aim' as World['phase']
+      const mem = newKeeperMemory()
+      let shot: Cmd['shot'] = aimAt(0, GOAL.x1 - 34, power, 0)
+      const rng = new Rng(5)
+      for (let i = 0; i < 240 && w.phase !== 'result'; i++) {
+        const kd = decideKeeper(w, 1, 'hard', rng, mem, STEP)
+        step(w, STEP, { keepX: [null, kd.x], dive: [0, kd.dive], shot }, 5)
+        shot = null
+      }
+      return w.outcome
+    }
+    expect(fire(1)).toBe('goal')
+    expect(fire(0.4)).toBe('save')
   })
 
   it('the harder shooter usually scores more', () => {

@@ -33,6 +33,8 @@ export interface Look {
   log: [Outcome[], Outcome[]]
   /** Preview of the aimed flight, when someone is swiping. */
   trail: { x: number; y: number }[] | null
+  /** Recent positions of the ball in flight, oldest first. */
+  flight: { x: number; y: number }[]
   /** Seconds since the kick, or -1 before it. */
   kicked: number
   /** Seconds since the shootout was decided, or -1. */
@@ -483,8 +485,10 @@ export function render(g: Draw, w: World, look: Look): void {
     const ripple = side === keeper && w.outcome === 'goal' ? { x: look.ball.x, e: resultE } : null
     drawGoal(g, side, ripple, side === keeper)
   }
+  // Online, each phone shows only its own player's controls and prompts.
+  const own = (side: Side): boolean => g.viewer === null || g.viewer === side
   // Flight preview while the shooter swipes.
-  if (look.trail) {
+  if (look.trail && own(w.shooter)) {
     look.trail.forEach((p, i) => {
       const k = (i + 1) / (look.trail?.length ?? 1)
       g.alpha(0.3 + k * 0.5, () => g.circle(p.x, p.y, 6 + k * 6, C.yellow))
@@ -506,6 +510,18 @@ export function render(g: Draw, w: World, look: Look): void {
     })
   // A ball already in the net sits under the keeper; otherwise it flies over everything.
   const inNet = w.outcome === 'goal'
+  // A streak behind the ball in flight, hotter for a harder kick.
+  if (w.phase === 'shot') {
+    const hot = Math.hypot(look.ball.vx, look.ball.vy) > 2200
+    for (let i = 0; i < look.flight.length; i++) {
+      const p = look.flight[i]
+      if (!p) continue
+      const k = (i + 1) / (look.flight.length + 1)
+      g.alpha(k * 0.35, () =>
+        g.circle(p.x, p.y, BALL_R * (0.45 + 0.5 * k), hot ? C.yellow : C.white),
+      )
+    }
+  }
   if (inNet) drawBall()
   drawShooter(
     g,
@@ -534,11 +550,11 @@ export function render(g: Draw, w: World, look: Look): void {
     })
   } else if (w.phase === 'aim') {
     const s = w.shooter
-    if (humanShooter) {
+    if (humanShooter && own(s)) {
       if (!look.trail) swipeHint(g, s, look.ball)
       banner(g, s, 'Swipe at the goal', SPOT[s].y + out(s) * 290, { size: 46 })
     }
-    if (!look.bots[keeper])
+    if (!look.bots[keeper] && own(keeper))
       banner(g, keeper, 'Drag to move · flick to dive', MID + out(keeper) * 160, { size: 38 })
   } else if (w.phase === 'result' && w.outcome) {
     const e = resultE

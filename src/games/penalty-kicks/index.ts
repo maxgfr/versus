@@ -69,6 +69,8 @@ class Penalties extends BaseGame<State> {
   private prev: Ball | null = null
   private squash: [Spring, Spring] = [new Spring(1, 340, 12), new Spring(1, 340, 12)]
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
+  /** Recent ball positions while it flies (cosmetic). */
+  private trail: { x: number; y: number }[] = []
 
   private get rounds(): number {
     return this.ctx.target || match.default
@@ -172,25 +174,33 @@ class Penalties extends BaseGame<State> {
     if (e.kind === 'intro') {
       audio.play('go', 1.1)
     } else if (e.kind === 'kick') {
+      // The swipe's speed is the kick's power: sound, turf, ring, shake and hit-stop follow it.
       s.kickAt = this.time
-      audio.play('shoot', 0.9 + e.power * 0.3)
-      audio.play('thud', 0.9)
-      fx.puff(e.x, e.y, 'rgba(255,255,255,0.7)', 8)
+      const p = e.power
+      audio.play('shoot', 0.85 + p * 0.4)
+      audio.play('thud', 0.8 + p * 0.25)
+      fx.puff(e.x, e.y, 'rgba(255,255,255,0.7)', 5 + Math.round(p * 6))
       fx.burst(e.x, e.y, 'rgba(120,200,110,0.9)', {
-        count: 10,
-        speed: 420,
+        count: Math.round(6 + p * 12),
+        speed: 300 + p * 400,
         size: 9,
         life: 0.5,
         gravity: 0,
         drag: 3,
       })
-      fx.shake(0.1 + e.power * 0.12)
-      if (e.power > 0.85) fx.stop(3)
-      this.squash[e.side].kick(-3)
+      fx.ring(e.x, e.y, p > 0.9 ? C.yellow : 'rgba(255,255,255,0.8)', 70 + p * 90)
+      fx.shake(0.06 + p * 0.16)
+      if (p > 0.85) {
+        fx.stop(2 + Math.round((p - 0.85) * 20))
+        audio.buzz(14)
+      }
+      this.squash[e.side].kick(-2 - p * 3)
+      this.trail.length = 0
     } else if (e.kind === 'dive') {
       audio.play('whoosh', 1.1)
       fx.puff(e.x, e.y, 'rgba(255,255,255,0.6)', 8)
-      this.squash[e.side].kick(-2)
+      // Stretch along the dive.
+      this.squash[e.side].kick(5)
     } else if (e.kind === 'goal') {
       const col = SIDE[e.side]
       s.log[e.side].push('goal')
@@ -259,8 +269,12 @@ class Penalties extends BaseGame<State> {
     const dt = 1 / 60
     for (const s of this.squash) s.update(dt)
     for (const p of this.pulse) p.update(dt)
+    if (w.phase === 'shot') this.trail.push({ x: ball.x, y: ball.y })
+    else this.trail.shift()
+    while (this.trail.length > 8) this.trail.shift()
     render(g, w, {
       ball,
+      flight: this.trail,
       squash: this.squash.map((s) => s.value),
       pulse: [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)],
       names: this.ctx.names,
