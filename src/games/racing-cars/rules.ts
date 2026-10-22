@@ -49,6 +49,14 @@ export const DRIFT = 0.45
 /** Above this sideways speed the car leaves skid marks (units / s). */
 export const SKID = 150
 
+/** Seconds of sliding before a drift pays out a boost, and the longest boost (s). */
+export const CHARGE_MIN = 0.35
+export const BOOST_MAX = 1.3
+/** Top speed and acceleration gain while boosting. */
+export const BOOST_GAIN = 0.3
+/** Largest believable progress in one step (units): a bigger jump is a cut across the grass. */
+const MAX_STEP = 60
+
 /** Seconds of countdown before the cars can move. */
 export const COUNT = 3
 
@@ -89,6 +97,12 @@ export interface Car {
   /** Time it crossed the finish, -1 until then. */
   finishT: number
   onTrack: boolean
+  /** Seconds spent sliding in the current drift (pays out as a boost when it ends). */
+  charge: number
+  /** Boost seconds left. */
+  boost: number
+  /** Most laps completed so far (a lap is only cheered once). */
+  laps: number
   /** Recent skid marks, oldest first. */
   marks: { x: number; y: number; t: number }[]
 }
@@ -97,7 +111,8 @@ export type Ev =
   | { k: 'drift'; side: Side; x: number; y: number }
   | { k: 'grass'; side: Side; x: number; y: number }
   | { k: 'lap'; side: Side; x: number; y: number; lap: number }
-  | { k: 'bump'; x: number; y: number }
+  | { k: 'bump'; x: number; y: number; speed: number }
+  | { k: 'boost'; side: Side; x: number; y: number; power: number }
 
 /**
  * Control points of a loop around the table, drawn from the seed. Angles and
@@ -220,6 +235,9 @@ export function gridCar(tr: Track, side: Side, lane: number): Car {
     dist: back,
     finishT: -1,
     onTrack: true,
+    charge: 0,
+    boost: 0,
+    laps: 0,
     marks: [],
   }
 }
@@ -247,16 +265,20 @@ export function stepRace(
     if (wasOn && !c.onTrack) ev.push({ k: 'grass', side: c.side, x: c.x, y: c.y })
     if (racing && c.finishT < 0) driveCar(c, d, near.d, dt, now, ev)
     else if (c.finishT >= 0) coast(c, dt)
-    // Progress along the track, counting wrap-arounds as small steps.
+    // Progress along the track, counting wrap-arounds as small steps. A jump
+    // no car can make in one step is a cut across the infield: it earns nothing.
     const arcNow = tr.cum[near.i] ?? 0
     let step = arcNow - c.arc
     if (step < -tr.len / 2) step += tr.len
     if (step > tr.len / 2) step -= tr.len
-    const before = Math.floor(c.dist / tr.len)
+    if (Math.abs(step) > MAX_STEP) step = 0
     c.dist += step
     c.arc = arcNow
     const after = Math.floor(c.dist / tr.len)
-    if (after > before && after > 0) ev.push({ k: 'lap', side: c.side, x: c.x, y: c.y, lap: after })
+    if (after > c.laps) {
+      c.laps = after
+      ev.push({ k: 'lap', side: c.side, x: c.x, y: c.y, lap: after })
+    }
     if (c.finishT < 0 && c.dist >= goal) c.finishT = now
   }
   // Cars bump each other: they are pushed apart, and only the part of their
@@ -283,7 +305,8 @@ export function stepRace(
         b.vx += nx * j
         b.vy += ny * j
         // Only a real knock gets the sparks, not two cars resting side by side.
-        if (closing < -40) ev.push({ k: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+        if (closing < -40)
+          ev.push({ k: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, speed: -closing })
       }
     }
   }
@@ -305,12 +328,23 @@ function driveCar(c: Car, d: Drive, off: number, dt: number, now: number, ev: Ev
   let lat = c.vx * nx + c.vy * ny
   // Cruising speed: full on the track, slower on the grass, and easing off when the stick turns hard.
   const onTrack = off <= TRACK_W / 2
-  const base = (onTrack ? 1 : GRASS) * TOP * d.mul
+  const boosting = c.boost > 0
+  const base = (onTrack ? 1 : GRASS) * TOP * d.mul * (boosting ? 1 + BOOST_GAIN : 1)
   const scrub = steer ? Math.abs(diff) / Math.PI : 0
   const target = base * (1 - 0.3 * scrub)
-  if (fwd < target) fwd = Math.min(target, fwd + ACCEL * dt)
+  if (fwd < target) fwd = Math.min(target, fwd + ACCEL * (boosting ? 2.5 : 1) * dt)
   else fwd = Math.max(target, fwd - BRAKE * dt)
+  if (boosting) c.boost = Math.max(0, c.boost - dt)
   const sliding = steer && Math.abs(diff) > 0.45 && speed > 0.55 * TOP
+  // A drift held long enough pays out a boost when the car straightens up.
+  if (sliding && onTrack) c.charge += dt
+  else if (c.charge > 0) {
+    if (c.charge >= CHARGE_MIN && onTrack) {
+      c.boost = Math.min(BOOST_MAX, 0.4 + c.charge)
+      ev.push({ k: 'boost', side: c.side, x: c.x, y: c.y, power: Math.min(1, c.charge / 1.2) })
+    }
+    c.charge = 0
+  }
   const grip = (onTrack ? GRIP : GRIP_GRASS) * (sliding ? DRIFT : 1)
   lat *= Math.exp(-grip * dt)
   c.vx = fx * fwd + nx * lat

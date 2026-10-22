@@ -11,6 +11,7 @@ import {
   type Ev,
   gridCar,
   GRASS,
+  CHARGE_MIN,
   lapOf,
   nearest,
   type Pt,
@@ -265,5 +266,100 @@ describe('bots', () => {
       hard += h?.t ?? 999
     }
     expect(hard).toBeLessThanOrEqual(easy)
+  })
+})
+
+describe('fair progress and drift boost', () => {
+  /** A car parked on the centre line `arc` units from the start, heading along the road. */
+  function onLine(tr: Track, arc: number): Car {
+    const c = gridCar(tr, 0, 0)
+    const i = sampleAt(tr, arc)
+    const p = tr.pts[i] as Pt
+    c.x = p.x
+    c.y = p.y
+    c.h = tr.hd[i] ?? 0
+    c.arc = tr.cum[i] ?? 0
+    c.dist = c.arc
+    return c
+  }
+
+  it('cutting across the infield earns no progress', () => {
+    const tr = trackFor(5)
+    const c = onLine(tr, tr.len * 0.2)
+    const before = c.dist
+    // Jump to the far side of the loop in one step, as a cut across the grass would.
+    const far = tr.pts[sampleAt(tr, tr.len * 0.45)] as Pt
+    c.x = far.x
+    c.y = far.y
+    stepRace([c], tr, [NO_DRIVE, NO_DRIVE], STEP, 0, 1e9, 1e9, [])
+    expect(Math.abs(c.dist - before)).toBeLessThan(1)
+  })
+
+  it('a lap is cheered once, even when the car backs over the line and crosses again', () => {
+    const tr = trackFor(5)
+    const c = onLine(tr, tr.len - 20)
+    c.dist = tr.len - 20
+    const ev: Ev[] = []
+    const move = (arc: number) => {
+      const p = tr.pts[sampleAt(tr, arc)] as Pt
+      c.x = p.x
+      c.y = p.y
+      stepRace([c], tr, [NO_DRIVE, NO_DRIVE], STEP, 0, 1e9, 1e9, ev)
+    }
+    for (const a of [tr.len - 5, 10, 30, 10, tr.len - 10, 10, 30]) move(a)
+    expect(ev.filter((e) => e.k === 'lap')).toHaveLength(1)
+    expect(c.laps).toBe(1)
+  })
+
+  it('a slide charges a drift; straightening up pays out a boost past the top speed', () => {
+    const tr = trackFor(2)
+    const c = onLine(tr, 300)
+    c.vx = Math.cos(c.h) * TOP
+    c.vy = Math.sin(c.h) * TOP
+    // Steer hard across the nose for a few frames: the car slides and charges.
+    const across = c.h + Math.PI / 2
+    for (let i = 0; i < 4; i++)
+      stepRace(
+        [c],
+        tr,
+        [{ jx: Math.cos(across), jy: Math.sin(across), m: 1, mul: 1 }, NO_DRIVE],
+        STEP,
+        i * STEP,
+        0,
+        1e9,
+        [],
+      )
+    expect(c.charge).toBeGreaterThan(0)
+    // Pretend the drift lasted long enough, then let go of the stick.
+    c.charge = CHARGE_MIN + 0.5
+    const ev: Ev[] = []
+    stepRace([c], tr, [NO_DRIVE, NO_DRIVE], STEP, 1, 0, 1e9, ev)
+    expect(ev.some((e) => e.k === 'boost')).toBe(true)
+    expect(c.boost).toBeGreaterThan(0)
+    let top = 0
+    for (let i = 0; i < 40; i++) {
+      stepRace([c], tr, [NO_DRIVE, NO_DRIVE], STEP, 1 + i * STEP, 0, 1e9, [])
+      top = Math.max(top, Math.hypot(c.vx, c.vy))
+    }
+    expect(top).toBeGreaterThan(TOP)
+  })
+
+  it('a short wiggle pays nothing', () => {
+    const tr = trackFor(2)
+    const c = onLine(tr, 300)
+    c.charge = CHARGE_MIN / 2
+    const ev: Ev[] = []
+    stepRace([c], tr, [NO_DRIVE, NO_DRIVE], STEP, 1, 0, 1e9, ev)
+    expect(c.boost).toBe(0)
+    expect(c.charge).toBe(0)
+  })
+
+  it('hard beats easy head to head', () => {
+    let hard = 0
+    for (let seed = 1; seed <= 4; seed++) {
+      const r = race(seed, seed % 2 ? 'hard' : 'easy', seed % 2 ? 'easy' : 'hard', 2)
+      if (r && r.side === (seed % 2 ? 0 : 1)) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(3)
   })
 })

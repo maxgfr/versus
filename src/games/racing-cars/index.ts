@@ -2,13 +2,16 @@ import { Joystick } from '../../core/controls.ts'
 import { BaseGame, type MatchSpec } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { floatFor } from '../../core/fx/fx.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
 import { RaceBot } from './bot.ts'
 import { renderRace, type StickLook } from './render.ts'
 import {
+  angleDiff,
   buildTrack,
   type Car,
+  CHARGE_MIN,
   controlPoints,
   type Drive,
   type Ev,
@@ -51,6 +54,11 @@ class RacingCars extends BaseGame<State> {
   private ev: Ev[] = []
   private trk: Track | null = null
   private went = false
+  // Cosmetic only (not synced): last step's poses for interpolation, squash, HUD pulses.
+  private prev: { x: number; y: number; h: number }[] | null = null
+  private squash: [Spring, Spring] = [new Spring(1, 420, 13), new Spring(1, 420, 13)]
+  private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
+  private charged: [boolean, boolean] = [false, false]
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -102,6 +110,7 @@ class RacingCars extends BaseGame<State> {
   override restore(snap: unknown): void {
     super.restore(snap)
     this.trk = null
+    this.prev = null
   }
 
   protected step(dt: number): void {
@@ -158,8 +167,18 @@ class RacingCars extends BaseGame<State> {
       return { jx: stick.x, jy: stick.y, m: stick.mag, mul: 1 }
     })
     this.ev.length = 0
+    this.prev = s.cars.map((c) => ({ x: c.x, y: c.y, h: c.h }))
     stepRace(s.cars, tr, drives, dt, this.time, s.go, s.laps * tr.len, this.ev)
     for (const e of this.ev) this.feedback(e)
+    // A drift that has charged enough to pay out clicks once, so the driver knows.
+    for (const c of s.cars) {
+      const ready = c.charge >= CHARGE_MIN
+      if (ready && !this.charged[c.side]) {
+        ctx.audio.play('zap', 1.6)
+        ctx.audio.buzz(6)
+      }
+      this.charged[c.side] = ready
+    }
     s.ctl = this.looks()
     // Exhaust puffs and grass dust, a few times a second.
     if (Math.floor(this.time * 12) !== Math.floor((this.time - dt) * 12))
@@ -198,6 +217,40 @@ class RacingCars extends BaseGame<State> {
         )
         fx.ring(e.x, e.y, SIDE[e.side].light, 130)
         fx.burst(e.x, e.y, C.yellow, { count: 12, speed: 260, size: 9, life: 0.5, gravity: 200 })
+        this.pulse[e.side].kick(14)
+        break
+      }
+      case 'boost': {
+        // Bigger drifts, bigger kick: pitch, flame burst, shake and buzz all follow the charge.
+        const k = e.power
+        const car = this.s.cars[e.side]
+        audio.play('whoosh', 0.9 + k * 0.6)
+        audio.play('powerup', 1.2 + k * 0.4)
+        audio.buzz(Math.round(8 + k * 18))
+        fx.burst(e.x - Math.cos(car.h) * 50, e.y - Math.sin(car.h) * 50, C.orange, {
+          count: Math.round(10 + k * 16),
+          speed: 380 + k * 300,
+          size: 12,
+          life: 0.45,
+          gravity: 0,
+          drag: 3,
+          spread: 0.9,
+          dir: car.h + Math.PI,
+          colors: [C.yellow, C.orange, C.white],
+        })
+        fx.ring(e.x, e.y, C.orange, 90 + k * 80)
+        if (k > 0.6) {
+          fx.shake(0.12 + k * 0.12)
+          fx.float(
+            'Boost!',
+            keepInside(e.x, 120),
+            e.y + (e.side === 0 ? -90 : 90),
+            C.orange,
+            48,
+            e.side,
+          )
+        }
+        this.squash[e.side].kick(3 + k * 4)
         break
       }
       case 'grass':
@@ -217,21 +270,43 @@ class RacingCars extends BaseGame<State> {
         audio.play('slide', 1 + rng.next() * 0.2)
         fx.puff(e.x, e.y, 'rgba(235,235,245,0.4)', 2)
         break
-      case 'bump':
-        audio.play('hit', 1.2)
-        audio.buzz(30)
-        fx.sparks(e.x, e.y, C.yellow, 14)
-        fx.ring(e.x, e.y, C.white, 90)
-        fx.shake(0.25)
-        fx.stop(2)
+      case 'bump': {
+        // k: a brush is 0, a head-on ram at full speed is 1.
+        const k = Math.min(1, e.speed / 700)
+        audio.play('hit', 0.9 + k * 0.6)
+        audio.buzz(Math.round(10 + k * 30))
+        fx.sparks(e.x, e.y, C.yellow, Math.round(6 + k * 16))
+        fx.ring(e.x, e.y, C.white, 60 + k * 80)
+        fx.shake(0.1 + k * 0.3)
+        if (k > 0.4) fx.stop(Math.round(1 + k * 3))
+        for (const sp of this.squash) sp.kick(-2 - k * 5)
         break
+      }
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha: number): void {
     const s = this.s
     const humans: [boolean, boolean] = [!this.ctx.bots[0], !this.ctx.bots[1]]
-    renderRace(g, s, this.track, this.time, this.ctx.names, this.over, humans)
+    const dt = 1 / 60
+    for (const sp of this.squash) sp.update(dt)
+    for (const sp of this.pulse) sp.update(dt)
+    const prev = this.prev
+    const cars = s.cars.map((c, i): Car => {
+      const p = prev?.[i]
+      if (!p) return c
+      return {
+        ...c,
+        x: lerp(p.x, c.x, alpha),
+        y: lerp(p.y, c.y, alpha),
+        h: p.h + angleDiff(p.h, c.h) * alpha,
+      }
+    })
+    renderRace(g, s, this.track, this.time, this.ctx.names, this.over, humans, {
+      cars,
+      squash: [this.squash[0].value, this.squash[1].value],
+      pulse: [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)],
+    })
   }
 }
 

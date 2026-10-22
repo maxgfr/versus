@@ -4,7 +4,14 @@ import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
 import type { State } from './index.ts'
-import { type Car, lapOf, nearest, type Pt, TRACK_W, type Track } from './rules.ts'
+import { type Car, CHARGE_MIN, lapOf, nearest, type Pt, TRACK_W, type Track } from './rules.ts'
+
+/** Cosmetic extras from the game: interpolated cars, squash springs, HUD pulses. */
+export interface RaceLook {
+  cars: Car[]
+  squash: [number, number]
+  pulse: [number, number]
+}
 
 /** A joystick's visuals, copied into the state so the online guest can draw it. */
 export interface StickLook {
@@ -169,48 +176,80 @@ function skids(g: Draw, c: Car, now: number): void {
 }
 
 /** A chunky toy racer, nose along its heading, with its side's mark on the deck. */
-function car(g: Draw, c: Car, leader: boolean, now: number): void {
+function car(g: Draw, c: Car, leader: boolean, now: number, squash: number): void {
   const col = SIDE[c.side].main
   g.shadow(c.x + 7, c.y + 14, 46, 28, 0.38)
   const speed = Math.hypot(c.vx, c.vy)
   const buzz = speed > 60 ? Math.sin(now * 70 + c.side) * 0.8 : 0
-  g.at(c.x, c.y + buzz, c.h, () => {
-    // Wheels.
-    for (const wx of [-30, 20])
-      for (const wy of [-33, 21]) {
-        g.rrect(wx, wy, 22, 12, 4, C.ink)
-        g.rrect(wx + 3, wy + 2, 16, 3, 2, alpha('#ffffff', 0.18))
+  // Boost: a flickering exhaust flame and speed streaks off the tail.
+  if (c.boost > 0) {
+    const f = 0.75 + 0.25 * Math.sin(now * 50 + c.side * 2)
+    const len = (40 + Math.min(1, c.boost) * 50) * f
+    g.at(c.x, c.y, c.h, () => {
+      g.ellipse(-50 - len * 0.5, 0, len * 0.6, 15, alpha(C.orange, 0.75))
+      g.ellipse(-50 - len * 0.3, 0, len * 0.35, 8, alpha(C.yellow, 0.95))
+      for (const sy of [-30, 0, 30])
+        g.line(-70 - len, sy, -150 - len * 1.4, sy, alpha(C.white, 0.25), 4)
+    })
+  }
+  // A charging drift spits sparks from the rear tyres: white, then orange once it will pay.
+  if (c.charge > 0.12) {
+    const ready = c.charge >= CHARGE_MIN
+    const sc = ready ? (Math.floor(now * 20) % 2 ? C.orange : C.yellow) : C.white
+    g.at(c.x, c.y, c.h, () => {
+      for (const sy of [-30, 30]) {
+        const j = Math.sin(now * 90 + sy) * 6
+        g.circle(-38 + j, sy, ready ? 9 : 6, alpha(sc, 0.9))
+        g.circle(-52 + j, sy + j * 0.6, ready ? 6 : 4, alpha(sc, 0.6))
       }
-    // Body: lip, then a glossy top that narrows to the nose.
-    const body = (dy: number, fill: string | CanvasGradient) =>
-      g.path((q) => {
-        q.moveTo(-42, -24 + dy)
-        q.lineTo(22, -22 + dy)
-        q.quadraticCurveTo(46, -16 + dy, 48, dy)
-        q.quadraticCurveTo(46, 16 + dy, 22, 22 + dy)
-        q.lineTo(-42, 24 + dy)
-        q.quadraticCurveTo(-48, 0 + dy, -42, -24 + dy)
-      }, fill)
-    body(4, shade(col, -0.45))
-    body(
-      0,
-      g.lin(0, -24, 0, 24, [
-        [0, shade(col, 0.35)],
-        [0.5, col],
-        [1, shade(col, -0.15)],
-      ]),
-    )
-    // Racing stripe, rear wing, cockpit with a helmet.
-    g.rrect(-42, -5, 88, 10, 4, alpha(C.white, 0.75))
-    g.rrect(-50, -27, 12, 54, 5, shade(col, -0.55))
-    g.rrect(-49, -26, 10, 52, 4, shade(col, -0.25))
-    g.ellipse(4, 0, 17, 14, '#1d1b2c')
-    g.ball(2, 0, 10, leader ? C.yellow : C.white, 0.8)
-    g.alpha(0.5, () => g.ellipse(-14, -14, 14, 5, '#fff', 0))
-    // Headlights.
-    g.circle(42, -11, 4.5, C.yellow)
-    g.circle(42, 11, 4.5, C.yellow)
-  })
+    })
+  }
+  // Squash and stretch along the car: >1 lunges forward, <1 crumples on a knock.
+  const sq = Math.max(0.75, Math.min(1.3, squash))
+  g.at(
+    c.x,
+    c.y + buzz,
+    c.h,
+    () => {
+      // Wheels.
+      for (const wx of [-30, 20])
+        for (const wy of [-33, 21]) {
+          g.rrect(wx, wy, 22, 12, 4, C.ink)
+          g.rrect(wx + 3, wy + 2, 16, 3, 2, alpha('#ffffff', 0.18))
+        }
+      // Body: lip, then a glossy top that narrows to the nose.
+      const body = (dy: number, fill: string | CanvasGradient) =>
+        g.path((q) => {
+          q.moveTo(-42, -24 + dy)
+          q.lineTo(22, -22 + dy)
+          q.quadraticCurveTo(46, -16 + dy, 48, dy)
+          q.quadraticCurveTo(46, 16 + dy, 22, 22 + dy)
+          q.lineTo(-42, 24 + dy)
+          q.quadraticCurveTo(-48, 0 + dy, -42, -24 + dy)
+        }, fill)
+      body(4, shade(col, -0.45))
+      body(
+        0,
+        g.lin(0, -24, 0, 24, [
+          [0, shade(col, 0.35)],
+          [0.5, col],
+          [1, shade(col, -0.15)],
+        ]),
+      )
+      // Racing stripe, rear wing, cockpit with a helmet.
+      g.rrect(-42, -5, 88, 10, 4, alpha(C.white, 0.75))
+      g.rrect(-50, -27, 12, 54, 5, shade(col, -0.55))
+      g.rrect(-49, -26, 10, 52, 4, shade(col, -0.25))
+      g.ellipse(4, 0, 17, 14, '#1d1b2c')
+      g.ball(2, 0, 10, leader ? C.yellow : C.white, 0.8)
+      g.alpha(0.5, () => g.ellipse(-14, -14, 14, 5, '#fff', 0))
+      // Headlights.
+      g.circle(42, -11, 4.5, C.yellow)
+      g.circle(42, 11, 4.5, C.yellow)
+    },
+    sq,
+    1 / Math.sqrt(sq),
+  )
   // Red is a circle, blue a square: a badge on the rear deck, upright for its player.
   const bx = c.x - Math.cos(c.h) * 30
   const by = c.y - Math.sin(c.h) * 30
@@ -232,7 +271,7 @@ function sticks(g: Draw, looks: StickLook[]): void {
 }
 
 /** A side's race HUD: lap on their left, position on their right, upright for them. */
-function hud(g: Draw, s: State, tr: Track, side: Side, place: 1 | 2): void {
+function hud(g: Draw, s: State, tr: Track, side: Side, place: 1 | 2, pulse: number): void {
   const c = s.cars[side]
   const col = SIDE[side]
   const y = hudY(g, side)
@@ -242,7 +281,7 @@ function hud(g: Draw, s: State, tr: Track, side: Side, place: 1 | 2): void {
   g.forSide(side, left, y, () => {
     g.text('LAP', 0, -40, { size: 34, weight: 700, color: alpha(C.white, 0.75) })
     g.text(done ? '🏁' : `${lapOf(c, tr, s.laps)}/${s.laps}`, 0, 12, {
-      size: 50,
+      size: 50 * (1 + 0.35 * Math.min(1, pulse)),
       weight: 700,
       color: col.light,
       drop: alpha('#000000', 0.4),
@@ -266,6 +305,7 @@ export function renderRace(
   names: [string, string],
   over: boolean,
   humans: readonly [boolean, boolean],
+  look: RaceLook,
 ): void {
   grass(g)
   decor(g, tr)
@@ -281,10 +321,12 @@ export function renderRace(
           ? 0
           : 1
   // The car further down the screen is drawn last (in front).
-  const order = a.y >= b.y ? [b, a] : [a, b]
-  for (const c of order) car(g, c, c.side === lead, now)
+  const ca = look.cars[0] ?? a
+  const cb = look.cars[1] ?? b
+  const order = ca.y >= cb.y ? [cb, ca] : [ca, cb]
+  for (const c of order) car(g, c, c.side === lead, now, look.squash[c.side])
   sticks(g, s.ctl)
-  for (const side of [0, 1] as const) hud(g, s, tr, side, side === lead ? 1 : 2)
+  for (const side of [0, 1] as const) hud(g, s, tr, side, side === lead ? 1 : 2, look.pulse[side])
   namePill(g, 0, names[0], { active: lead === 0 })
   namePill(g, 1, names[1], { active: lead === 1 })
   if (over) return
