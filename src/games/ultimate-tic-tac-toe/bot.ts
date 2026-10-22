@@ -36,22 +36,25 @@ function quick(p: Position, m: number): number {
 /**
  * Search depth for `hard`: deeper when the move is forced into one small board
  * (few replies), shallower on a free move across the whole big board, so the
- * think stays within a frame or two.
+ * think stays short (it runs in a worker).
  */
 export function hardDepth(p: Position): number {
   const n = legalMoves(p).length
   return n <= 9 ? 6 : n <= 24 ? 5 : 4
 }
 
+/** Normal looks three plies ahead: a real challenge, quick enough for the main thread. */
+const NORMAL_DEPTH = 3
+
 /**
  * The move the computer plays. `easy` is mostly random but grabs an obvious
- * small board now and then, `normal` one-ply, `hard` a negamax whose depth
- * follows the branching.
+ * small board now and then (one-ply), `normal` a fixed 3-ply negamax, `hard`
+ * a negamax whose depth follows the branching.
  */
 export function choose(p: Position, difficulty: Difficulty, rng: Rng): number {
   const legal = legalMoves(p)
-  if (difficulty === 'easy' && rng.chance(0.6)) return rng.pick(legal)
-  if (difficulty !== 'hard') {
+  if (difficulty === 'easy') {
+    if (rng.chance(0.6)) return rng.pick(legal)
     let best = rng.pick(legal)
     let bestV = -Infinity
     for (const m of legal) {
@@ -63,5 +66,6 @@ export function choose(p: Position, difficulty: Difficulty, rng: Rng): number {
     }
     return best
   }
-  return bestMove(spec, p, hardDepth(p), (n) => rng.int(0, n - 1)) ?? rng.pick(legal)
+  const depth = difficulty === 'hard' ? hardDepth(p) : NORMAL_DEPTH
+  return bestMove(spec, p, depth, (n) => rng.int(0, n - 1)) ?? rng.pick(legal)
 }

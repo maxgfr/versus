@@ -174,6 +174,18 @@ describe('ultimate tic tac toe bot', () => {
     }
   }, 30_000)
 
+  it('normal beats easy most of the time over seeded games', () => {
+    let wins = 0
+    for (let seed = 1; seed <= 8; seed++) {
+      const normalSide = (seed % 2) as Side
+      const rng = new Rng(seed * 31)
+      let p = emptyPosition(0)
+      while (!verdict(p)) p = play(p, choose(p, p.turn === normalSide ? 'normal' : 'easy', rng))
+      if (verdict(p)?.winner === normalSide) wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(7)
+  })
+
   it('always returns a legal move', () => {
     const rng = new Rng(11)
     let p = emptyPosition(0)
