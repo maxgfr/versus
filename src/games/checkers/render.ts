@@ -266,8 +266,11 @@ export function renderCheckers(
   routes: readonly Route[],
   forced: readonly number[],
   over: boolean,
+  showSel = true,
 ): void {
   const live = !over && s.endedAt < 0
+  // Online, the selection and its routes are the mover's own guide: not drawn on the rival's phone.
+  const sel = showSel ? s.sel : null
   renderBoard(g, geo, s.turn, now, live)
   const u = geo.cell
   const r0 = u * 0.36
@@ -306,10 +309,10 @@ export function renderCheckers(
 
   // The piece being played: its square, the routes it may take and their landings.
   const victims = new Set<number>()
-  if (s.sel !== null && live) {
-    const c = at(s.sel)
+  if (sel !== null && live) {
+    const c = at(sel)
     g.rrect(c.x - u / 2 + 4, c.y - u / 2 + 4, u - 8, u - 8, 10, alpha(C.yellow, 0.28), C.yellow, 7)
-    const prefix = [s.sel, ...s.via].map(at)
+    const prefix = [sel, ...s.via].map(at)
     for (let i = 0; i < prefix.length - 1; i++) {
       const p = prefix[i]
       const q = prefix[i + 1]
@@ -344,8 +347,8 @@ export function renderCheckers(
     if (!cell) return
     if (sliding && sq === landing) return
     const c = at(sq)
-    const picked = sq === s.sel && live
-    if (live && forced.includes(sq) && s.sel === null) {
+    const picked = sq === sel && live
+    if (live && forced.includes(sq) && sel === null) {
       g.circle(
         c.x,
         c.y,

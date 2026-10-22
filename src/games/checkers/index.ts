@@ -305,6 +305,7 @@ class Checkers extends TurnGame<State> {
           }
           // Each jump in a chain hits a little harder and higher.
           audio.play('hit', 1 + i * 0.14)
+          audio.buzz(14 + i * 8)
           fx.shake(0.18 + i * 0.08)
           fx.stop(2 + i)
           if (i >= 1) {
@@ -313,6 +314,8 @@ class Checkers extends TurnGame<State> {
           }
         } else {
           audio.play('place', pitch)
+          audio.buzz(6)
+          fx.puff(p.x, p.y + GEO.cell * 0.3, 'rgba(255,255,255,0.35)', 3)
         }
         fx.ring(p.x, p.y, 'rgba(255,255,255,0.45)', 70)
       })
@@ -321,6 +324,8 @@ class Checkers extends TurnGame<State> {
       this.later((m.path.length - 1) * HOP + 0.1, () => {
         const p = centre(end)
         audio.play('powerup')
+        audio.buzz(20)
+        fx.stop(3)
         fx.sparks(p.x, p.y, C.yellow, 24)
         fx.ring(p.x, p.y, SIDE[side].light, 150)
         fx.float('King!', p.x, p.y + (side === 0 ? -110 : 110), C.white, 62, side)
@@ -350,8 +355,10 @@ class Checkers extends TurnGame<State> {
       s.wins[win]++
       this.later(arrive + 0.1, () => {
         audio.play('score')
+        audio.buzz(30)
         fx.flash(SIDE[win].main, 0.3)
         fx.shake(0.35)
+        fx.stop(5)
         fx.confetti(win)
       })
     }
@@ -378,14 +385,38 @@ class Checkers extends TurnGame<State> {
     })
   }
 
+  /** The computer replies briskly; the search itself runs off-thread. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.55 : d === 'normal' ? 0.4 : 0.3) + this.ctx.rng.range(0, 0.25)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.queue = []
+    this.routeMemo = null
+    this.forcedMemo = null
+  }
+
   render(g: Draw): void {
     const s = this.s
     tableBackdrop(g)
-    renderCheckers(g, s, GEO, this.time, this.routes(), this.forced(), this.over)
+    // Online, only the mover's phone shows the selection, the routes and the must-jump glow.
+    const mine = g.viewer === null || g.viewer === s.turn
+    renderCheckers(
+      g,
+      s,
+      GEO,
+      this.time,
+      mine ? this.routes() : [],
+      mine ? this.forced() : [],
+      this.over,
+      mine,
+    )
     const live = s.endedAt < 0
     let label: [string | undefined, string | undefined] | undefined
     // Tell the player to move why only some pieces answer: a jump is compulsory.
-    if (live && !this.isBot(s.turn) && this.forced().length) {
+    if (live && mine && !this.isBot(s.turn) && this.forced().length) {
       label = s.turn === 0 ? ['You must jump!', undefined] : [undefined, 'You must jump!']
     }
     this.drawTurns(g, label, live)

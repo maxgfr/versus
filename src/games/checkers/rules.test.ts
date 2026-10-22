@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './bot.ts'
+import { choose, searchMoves } from './bot.ts'
 import {
   apply,
   type Cell,
@@ -202,4 +202,44 @@ describe('checkers bot', () => {
     expect(result.note).toBeDefined()
     expect(ply).toBeLessThanOrEqual(MAX_PLIES)
   }, 60_000)
+})
+
+describe('checkers search', () => {
+  it('generates exactly the legal moves, through whole random games', () => {
+    const rng = new Rng(21)
+    for (let game = 0; game < 6; game++) {
+      let b = start()
+      let turn: 0 | 1 = game % 2 === 0 ? 0 : 1
+      for (let ply = 0; ply < MAX_PLIES && !outcome(b, turn, ply); ply++) {
+        const key = (m: Move) => `${m.path.join('>')}x${[...m.captured].sort().join(',')}`
+        const want = legalMoves(b, turn).map(key).sort()
+        expect(searchMoves(b, turn).map(key).sort()).toEqual(want)
+        b = apply(b, rng.pick(legalMoves(b, turn))).board
+        turn = turn === 0 ? 1 : 0
+      }
+    }
+  })
+
+  const duel = (a: 'easy' | 'normal' | 'hard', bl: 'easy' | 'normal' | 'hard', seed: number) => {
+    const rng = new Rng(seed)
+    let b = start()
+    let turn: 0 | 1 = seed % 2 === 0 ? 0 : 1
+    for (let ply = 0; ; ply++) {
+      const o = outcome(b, turn, ply)
+      if (o) return o.winner
+      b = apply(b, choose({ board: b, turn, ply }, turn === 0 ? a : bl, rng)).board
+      turn = turn === 0 ? 1 : 0
+    }
+  }
+
+  it('hard beats easy and normal beats easy, either side opening', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 1; seed <= 2; seed++) {
+      if (duel('hard', 'easy', seed) === 0) hard++
+      if (duel('normal', 'easy', seed) === 0) normal++
+    }
+    expect(hard).toBe(2)
+    expect(normal).toBe(2)
+  }, 120_000)
 })
