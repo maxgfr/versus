@@ -37,6 +37,21 @@ const KNOCK_BASE = 200
 const KNOCK_SPEED = 0.42
 /** Seconds a top reels (cannot steer) after a clash. */
 const RECOIL = 0.32
+/** Dash: a flick of the stick hurls the top; cooldown, launch speed range, spin it costs. */
+export const DASH_CD = 1
+export const DASH_V0 = 650
+export const DASH_V1 = 1500
+const DASH_SPIN = 0.04
+/** The bowl's rim closes in as a round drags on: from BOWL.r to SHRINK of it between these times. */
+export const SHRINK = 0.74
+export const SHRINK_START = 18
+export const SHRINK_END = 42
+
+/** Radius of the bowl's live area at round time `t` (tops beyond it fall out). */
+export function rimAt(t: number): number {
+  const k = Math.max(0, Math.min(1, (t - SHRINK_START) / (SHRINK_END - SHRINK_START)))
+  return BOWL.r * (1 - (1 - SHRINK) * k * k * (3 - 2 * k))
+}
 
 export interface Top extends Disc {
   side: Side
@@ -50,6 +65,8 @@ export interface Top extends Disc {
   ang: number
   /** Seconds left reeling from a clash: no steering, so the tops fly apart. */
   recoil: number
+  /** Seconds before this top can dash again. */
+  dash: number
 }
 
 export interface World {
@@ -71,9 +88,13 @@ export type Event =
   | { kind: 'hit'; x: number; y: number; speed: number }
   | { kind: 'out'; side: Side; x: number; y: number; reason: 'bowl' | 'stopped' }
   | { kind: 'round'; winner: Side | 'draw' }
+  | { kind: 'dash'; side: Side; x: number; y: number; power: number }
 
-/** Where each top is steered this step (world), or null to coast. Indices match `w.tops`. */
-export type Targets = ({ x: number; y: number } | null)[]
+/**
+ * Where each top is steered this step (world), or null to coast. Indices match
+ * `w.tops`. `dash` (0..1) asks for a dash toward the target, as hard as given.
+ */
+export type Targets = ({ x: number; y: number; dash?: number } | null)[]
 
 function startTops(teams: boolean, rng: Rng): Top[] {
   const xs = teams ? [W * 0.33, W * 0.67] : [W / 2]
@@ -93,6 +114,7 @@ function startTops(teams: boolean, rng: Rng): Top[] {
         out: false,
         ang: 0,
         recoil: 0,
+        dash: 0,
       })
     })
   }
@@ -143,6 +165,24 @@ export function step(w: World, dt: number, targets: Targets, rng: Rng): Event[] 
     return events
   }
   w.t += dt
+  // Dashes: a flick hurls a ready top toward its target, at a little spin.
+  w.tops.forEach((t, i) => {
+    t.dash = Math.max(0, (t.dash ?? 0) - dt)
+    const g = targets[i]
+    const p = g?.dash ?? 0
+    if (t.out || !g || p <= 0 || t.dash > 0 || t.recoil > 0) return
+    const dx = g.x - t.x
+    const dy = g.y - t.y
+    const d = Math.hypot(dx, dy)
+    if (d < 1) return
+    const power = Math.min(1, p)
+    const v = DASH_V0 + (DASH_V1 - DASH_V0) * power
+    t.vx = (dx / d) * v
+    t.vy = (dy / d) * v
+    t.spin = Math.max(0.01, t.spin - DASH_SPIN * power)
+    t.dash = DASH_CD
+    events.push({ kind: 'dash', side: t.side, x: t.x, y: t.y, power })
+  })
   const h = dt / SUB
   for (let s = 0; s < SUB; s++) {
     w.tops.forEach((t, i) => {
@@ -184,7 +224,7 @@ export function step(w: World, dt: number, targets: Targets, rng: Rng): Event[] 
     if (t.out) continue
     t.recoil = Math.max(0, t.recoil - dt)
     t.spin = Math.max(0, t.spin - SPIN_DECAY * dt)
-    if (Math.hypot(t.x - BOWL.x, t.y - BOWL.y) > BOWL.r + TOP_R * 0.5) {
+    if (Math.hypot(t.x - BOWL.x, t.y - BOWL.y) > rimAt(w.t) + TOP_R * 0.5) {
       t.out = true
       events.push({ kind: 'out', side: t.side, x: t.x, y: t.y, reason: 'bowl' })
     } else if (t.spin <= 0) {

@@ -1,6 +1,6 @@
 import { Joystick } from '../../core/controls.ts'
 import { floatFor } from '../../core/fx/fx.ts'
-import { Spring } from '../../core/fx/ease.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -12,6 +12,7 @@ import {
   matchWinner,
   type Event,
   newWorld,
+  SHRINK_START,
   step,
   STEER_REACH,
   type Targets,
@@ -44,6 +45,9 @@ class SpinWar extends BaseGame<State> {
   // Cosmetic only (not synced): a flash per top when it takes a hit.
   private flash: Spring[] = []
   private lastHit = -1
+  private prev: { x: number; y: number }[] | null = null
+  /** Each human stick's knob last step, to read a flick (input only, host side). */
+  private knob: { x: number; y: number; on: boolean }[] = []
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -77,10 +81,22 @@ class SpinWar extends BaseGame<State> {
 
   protected step(dt: number): void {
     const w = this.s.w
+    this.prev = w.tops.map((t) => ({ x: t.x, y: t.y }))
     const targets = this.aims(w, dt)
     const round = w.round
+    const t0 = w.t
     const events = step(w, dt, targets, this.ctx.rng)
-    if (w.round !== round) this.ctx.audio.play('go', 1)
+    if (w.round !== round) {
+      this.ctx.audio.play('go', 1)
+      this.prev = null
+    }
+    // The rim starts closing in: say so, once per round.
+    if (w.phase === 'play' && t0 < SHRINK_START && w.t >= SHRINK_START) {
+      this.ctx.audio.play('zap', 0.6)
+      this.ctx.audio.buzz(20)
+      this.ctx.fx.ring(BOWL.x, BOWL.y, C.orange, BOWL.r)
+      for (const side of [0, 1] as Side[]) floatFor(this.ctx.fx, side, 'THE RIM CLOSES IN!')
+    }
     for (const e of events) this.juice(e)
     const won = matchWinner(w)
     if (won !== null && !this.s.end) {
@@ -129,7 +145,16 @@ class SpinWar extends BaseGame<State> {
         st.update(input)
         this.s.sticks[i] =
           st.active && !t.out ? { bx: st.baseX, by: st.baseY, kx: st.knobX, ky: st.knobY } : null
-        out[i] = st.active ? inBowl(t.x + st.x * STEER_REACH, t.y + st.y * STEER_REACH) : null
+        // A flick of the stick (the knob whipped out fast) is a dash, as hard as the flick.
+        const was = this.knob[i]
+        let dash = 0
+        if (st.active && was?.on && st.mag > 0.7) {
+          const v = Math.hypot(st.knobX - was.x, st.knobY - was.y) / dt
+          if (v > 2200) dash = Math.max(0.15, Math.min(1, (v - 2200) / 3500))
+        }
+        this.knob[i] = { x: st.knobX, y: st.knobY, on: st.active }
+        const aim = st.active ? inBowl(t.x + st.x * STEER_REACH, t.y + st.y * STEER_REACH) : null
+        out[i] = aim && dash > 0 ? { ...aim, dash } : aim
       })
     }
     return out
@@ -190,6 +215,25 @@ class SpinWar extends BaseGame<State> {
         floatFor(fx, e.side, e.reason === 'bowl' ? 'RING OUT!' : 'STOPPED', e.x, e.y)
         break
       }
+      case 'dash': {
+        const k = e.power
+        const col = SIDE[e.side]
+        audio.play('whoosh', 0.8 + k * 0.6)
+        audio.play('zap', 1.5 + k * 0.3)
+        audio.buzz(Math.round(6 + k * 14))
+        fx.burst(e.x, e.y, col.light, {
+          count: Math.round(8 + k * 12),
+          speed: 300 + k * 400,
+          size: 9,
+          life: 0.35,
+          gravity: 0,
+          drag: 3,
+          colors: [col.light, C.white],
+          kind: 'spark',
+        })
+        fx.ring(e.x, e.y, col.light, 70 + k * 60)
+        break
+      }
       case 'round': {
         if (e.winner === 'draw') {
           audio.play('draw')
@@ -214,9 +258,14 @@ class SpinWar extends BaseGame<State> {
     return s
   }
 
-  render(g: Draw, _alpha: number): void {
+  render(g: Draw, alpha: number): void {
     const w = this.s.w
     for (let i = 0; i < w.tops.length; i++) this.flashFor(i).update(1 / 60)
+    const prev = this.prev
+    const at = w.tops.map((t, i) => {
+      const p = prev?.[i]
+      return p ? { x: lerp(p.x, t.x, alpha), y: lerp(p.y, t.y, alpha) } : { x: t.x, y: t.y }
+    })
     const look: Look = {
       names: this.ctx.names,
       target: this.target,
@@ -225,8 +274,14 @@ class SpinWar extends BaseGame<State> {
       time: this.time,
       flash: w.tops.map((_, i) => Math.max(0, Math.min(1, this.flashFor(i).value / 8))),
       human: [!this.isBot(0), !this.isBot(1)],
+      at,
     }
     render(g, w, look)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
   }
 }
 

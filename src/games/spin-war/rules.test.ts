@@ -5,7 +5,12 @@ import { MID, W } from '../../core/stage.ts'
 import { decide, newMemory } from './bot.ts'
 import {
   BOWL,
+  DASH_CD,
+  DASH_V1,
   matchWinner,
+  rimAt,
+  SHRINK,
+  SHRINK_END,
   newWorld,
   ROUND_LIMIT,
   type Targets,
@@ -139,6 +144,11 @@ describe('spin war rules', () => {
   it('at the round limit the side with more spin left wins', () => {
     const w = newWorld(false, 2, R)
     w.t = ROUND_LIMIT - STEP / 2
+    // Both well inside the rim, which has closed in by now.
+    w.tops.forEach((t, i) => {
+      t.x = BOWL.x - 100 + i * 200
+      t.y = BOWL.y
+    })
     w.tops.find((t) => t.side === 0)!.spin = 0.5
     w.tops.find((t) => t.side === 1)!.spin = 0.9
     step(w, STEP, NO_STEER(w), R)
@@ -212,10 +222,30 @@ describe('spin war bots', () => {
     expect(matchWinner(w)).not.toBeNull()
   })
 
-  it('the harder bot usually wins the match', () => {
+  it('the harder bot wins most matches, from either side', () => {
     let hard = 0
-    for (let s = 1; s <= 4; s++) if (matchWinner(botMatch('hard', 'easy', s).w) === 0) hard++
-    expect(hard).toBeGreaterThanOrEqual(2)
+    for (let s = 1; s <= 8; s++) {
+      const hs = s % 2 === 0 ? 0 : 1
+      const { w } = botMatch(hs === 0 ? 'hard' : 'easy', hs === 0 ? 'easy' : 'hard', s, false, 3)
+      if (matchWinner(w) === hs) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(6)
+  })
+
+  it('hard edges normal over seeded matches', () => {
+    let hard = 0
+    for (let s = 1; s <= 8; s++) {
+      const hs = s % 2 === 0 ? 0 : 1
+      const { w } = botMatch(
+        hs === 0 ? 'hard' : 'normal',
+        hs === 0 ? 'normal' : 'hard',
+        50 + s,
+        false,
+        3,
+      )
+      if (matchWinner(w) === hs) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(4)
   })
 
   it('the bot steers its top (blue as well as red)', () => {
@@ -224,5 +254,55 @@ describe('spin war bots', () => {
     const blueTargets = decide(w, 1, 'normal', rng, newMemory(), STEP)
     const i = w.tops.findIndex((t) => t.side === 1)
     expect(blueTargets[i]).not.toBeNull()
+  })
+
+  it('a flick dashes the top toward the stick, then it must wait to dash again', () => {
+    const w = newWorld(false, 2, R)
+    const red = w.tops.find((t) => t.side === 0)!
+    red.x = BOWL.x
+    red.y = BOWL.y + 200
+    const i = w.tops.indexOf(red)
+    const go = (dash: number): Targets =>
+      w.tops.map((_, k) => (k === i ? { x: BOWL.x, y: BOWL.y, dash } : null))
+    const ev = step(w, STEP, go(1), R)
+    expect(ev.some((e) => e.kind === 'dash')).toBe(true)
+    expect(red.vy).toBeLessThan(-DASH_V1 * 0.8)
+    expect(step(w, STEP, go(1), R).some((e) => e.kind === 'dash')).toBe(false)
+    for (let k = 0; k < 60 * DASH_CD + 2; k++) {
+      // Hold it still in the middle while the cooldown runs out.
+      red.x = BOWL.x
+      red.y = BOWL.y + 200
+      red.vx = red.vy = 0
+      step(w, STEP, NO_STEER(w), R)
+    }
+    expect(step(w, STEP, go(0.2), R).some((e) => e.kind === 'dash')).toBe(true)
+  })
+
+  it('a soft flick dashes slower than a hard one', () => {
+    const a = newWorld(false, 2, new Rng(1))
+    const b = newWorld(false, 2, new Rng(1))
+    const at = (w: World, dash: number): Targets =>
+      w.tops.map((t) => (t.side === 0 ? { x: BOWL.x, y: BOWL.y, dash } : null))
+    step(a, STEP, at(a, 0.1), R)
+    step(b, STEP, at(b, 1), R)
+    const va = Math.hypot(a.tops[0]!.vx, a.tops[0]!.vy)
+    const vb = Math.hypot(b.tops[0]!.vx, b.tops[0]!.vy)
+    expect(vb).toBeGreaterThan(va + 400)
+  })
+
+  it('the rim closes in as the round drags on, and a top left outside it is out', () => {
+    expect(rimAt(0)).toBe(BOWL.r)
+    expect(rimAt(SHRINK_END + 1)).toBeCloseTo(BOWL.r * SHRINK, 5)
+    const w = newWorld(false, 2, R)
+    const blue = w.tops.find((t) => t.side === 1)!
+    const red = w.tops.find((t) => t.side === 0)!
+    red.x = BOWL.x
+    red.y = BOWL.y + 50
+    blue.x = BOWL.x
+    blue.y = BOWL.y - BOWL.r * 0.9
+    w.t = SHRINK_END
+    step(w, STEP, NO_STEER(w), R)
+    expect(blue.out).toBe(true)
+    expect(w.result).toBe(0)
   })
 })

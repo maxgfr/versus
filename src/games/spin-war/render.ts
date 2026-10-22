@@ -3,7 +3,7 @@ import { banner, namePill, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
-import { BOWL, TOP_R, type Top, type World } from './rules.ts'
+import { BOWL, rimAt, TOP_R, type Top, type World } from './rules.ts'
 
 export interface Stick {
   bx: number
@@ -24,13 +24,15 @@ export interface Look {
   flash: number[]
   /** Which sides are people (they get the first-round coaching). */
   human?: [boolean, boolean]
+  /** Interpolated top centres, by index. */
+  at?: { x: number; y: number }[]
 }
 
 const RIM = 46
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 
 /** The bowl: a concave steel dish in a chunky rim, each half tinted for its owner. */
-function drawBowl(g: Draw): void {
+function drawBowl(g: Draw, rim: number): void {
   g.fillView(
     g.lin(0, 0, 0, H, [
       [0, shade(C.blue, -0.8)],
@@ -117,8 +119,16 @@ function drawBowl(g: Draw): void {
   })
   // Machined grooves.
   for (let rr = 80; rr < r; rr += 72) g.ring(x, y, rr, alpha('#ffffff', 0.05), 3)
+  // The rim closing in: everything past the live edge is a glowing drop.
+  if (rim < r - 1) {
+    const k = (r - rim) / r
+    const pulse = 0.5 + 0.5 * Math.sin(g.t * 6)
+    g.ring(x, y, (r + rim) / 2, alpha('#000000', 0.55), r - rim)
+    g.ring(x, y, (r + rim) / 2, alpha(C.orange, 0.08 + 0.12 * pulse * Math.min(1, k * 5)), r - rim)
+    g.ring(x, y, rim + 3, alpha(C.orange, 0.55 + 0.35 * pulse), 6)
+  }
   // The danger band near the edge.
-  g.ring(x, y, r - 8, alpha(C.orange, 0.22), 6)
+  g.ring(x, y, rim - 8, alpha(C.orange, 0.22), 6)
   g.circle(x, y, 10, alpha('#ffffff', 0.25))
 }
 
@@ -221,16 +231,36 @@ function drawStick(g: Draw, side: Side, s: Stick | null): void {
 }
 
 export function render(g: Draw, w: World, look: Look): void {
-  drawBowl(g)
+  drawBowl(g, w.phase === 'play' ? rimAt(w.t) : BOWL.r)
   w.tops.forEach((t, i) => {
-    if (t.side === 0 || t.side === 1) drawStick(g, t.side, look.sticks[i] ?? null)
+    // Online, each phone shows only its own player's stick.
+    if (g.viewer !== null && t.side !== g.viewer) return
+    drawStick(g, t.side, look.sticks[i] ?? null)
   })
+  const at = (t: Top, i: number): Top => {
+    const p = look.at?.[i]
+    return p ? { ...t, x: p.x, y: p.y } : t
+  }
   // Knocked-out tops under the live ones.
   w.tops.forEach((t, i) => {
-    if (t.out) drawTop(g, t, look.flash[i] ?? 0, look.time)
+    if (t.out) drawTop(g, at(t, i), look.flash[i] ?? 0, look.time)
   })
   w.tops.forEach((t, i) => {
-    if (!t.out) drawTop(g, t, look.flash[i] ?? 0, look.time)
+    if (t.out) return
+    const p = at(t, i)
+    // A dashing top leaves after-images along its path.
+    const sp = Math.hypot(t.vx, t.vy)
+    if (sp > 950) {
+      const k = Math.min(1, (sp - 950) / 600)
+      for (let j = 1; j <= 3; j++)
+        g.circle(
+          p.x - t.vx * j * 0.018,
+          p.y - t.vy * j * 0.018,
+          TOP_R * (1 - j * 0.15),
+          alpha(SIDE[t.side].light, (0.2 * k * (4 - j)) / 3),
+        )
+    }
+    drawTop(g, p, look.flash[i] ?? 0, look.time)
   })
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, look.names[side], {
@@ -243,7 +273,7 @@ export function render(g: Draw, w: World, look: Look): void {
   if (look.human && w.round === 1 && w.phase === 'play' && w.t < 5) {
     const a = clamp01((5 - w.t) / 0.5)
     for (const side of [0, 1] as Side[]) {
-      if (!look.human[side]) continue
+      if (!look.human[side] || (g.viewer !== null && side !== g.viewer)) continue
       g.alpha(a, () =>
         g.forSide(
           side,
@@ -256,7 +286,7 @@ export function render(g: Draw, w: World, look: Look): void {
               color: C.white,
               drop: alpha('#000000', 0.45),
             })
-            g.text('Knock the other top out!', 0, 30, {
+            g.text('Flick to dash, knock it out!', 0, 30, {
               size: 34,
               weight: 600,
               color: alpha(C.white, 0.75),
