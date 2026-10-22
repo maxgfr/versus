@@ -1,21 +1,26 @@
+import { lerp } from '../../core/fx/ease.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { type MatchSpec, type Side, other } from '../../core/game.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
-import { type ShotParams } from '../../engines/aim/index.ts'
+import type { Shell } from '../../engines/aim/index.ts'
 import { TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
 import { drawTray, hint, render } from './render.ts'
 import {
   advance,
   CUPS,
+  ARC_DRIVE,
+  ARC_LOB,
   type Event,
   fire,
+  type Flick,
   newState,
   originOf,
   type State,
   shotFromFlick,
+  standingWinner,
   sunkBy,
 } from './rules.ts'
 
@@ -26,7 +31,13 @@ type Game = State & { endAt: number }
 
 class CupPong extends TurnGame<Game> {
   /** The computer's flick for its turn, chosen as its turn starts and shown while it thinks. */
-  private botShot: ShotParams | null = null
+  private botShot: Flick | null = null
+  /** Recent speed of the flicking finger (world units/s), a peak that decays: the flick's snap. */
+  private snap = 0
+  // Cosmetic only (not synced): the ball's previous step, for interpolation.
+  private prevShell: Shell | null = null
+  /** Match time each cup's rim was last clipped (index-aligned with the cups): it wobbles. */
+  private wobble: number[] = []
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -43,12 +54,16 @@ class CupPong extends TurnGame<Game> {
   }
 
   protected override animate(dt: number): void {
+    const sh = this.s.ball?.shell
+    this.prevShell = sh ? { ...sh } : null
     const { events, winner } = advance(this.s, dt)
     for (const e of events) this.juice(e)
     if (winner !== null) {
       const score: [number, number] = [sunkBy(this.s, 0), sunkBy(this.s, 1)]
       this.s.endAt = this.s.t
       this.ctx.fx.confetti(winner)
+      this.ctx.fx.flash(SIDE[winner].light, 0.35)
+      this.ctx.fx.shake(0.4)
       this.ctx.audio.play('powerup', 1.2)
       const note =
         this.target === CUPS
@@ -68,22 +83,28 @@ class CupPong extends TurnGame<Game> {
     for (const c of this.s.cups) if (!c.alive) c.fall += dt
   }
 
-  protected stepTurn(): void {
+  protected stepTurn(dt: number): void {
     const side = this.s.turn
     const pi = this.ctx.input.player(side)
-    let held: ShotParams | null = null
-    for (const p of pi.held.values()) {
-      held = flickOf(side, p)
+    // The finger's speed this step; the snap keeps its recent peak so a flick
+    // that stops a beat before letting go still counts as snappy.
+    const p = pi.held.values().next().value ?? pi.ups[0]
+    const inst = p ? Math.hypot(p.x - p.px, p.y - p.py) / dt : 0
+    this.snap = Math.max(inst, this.snap * Math.exp(-dt / 0.09))
+    let held: Flick | null = null
+    for (const q of pi.held.values()) {
+      held = flickOf(side, q, this.snap)
       break
     }
     this.s.aiming = held
-    for (const p of pi.ups) {
-      const shot = flickOf(side, p)
+    for (const q of pi.ups) {
+      const shot = flickOf(side, q, this.snap)
       if (shot) {
         this.shoot(shot)
         return
       }
     }
+    if (!p) this.snap = 0
   }
 
   protected botPlay(): void {
@@ -92,37 +113,67 @@ class CupPong extends TurnGame<Game> {
     this.shoot(shot)
   }
 
-  private shoot(shot: ShotParams): void {
+  private shoot(shot: Flick): void {
     const side = this.s.turn
     fire(this.s, side, shot)
+    this.snap = 0
     const o = originOf(side)
-    this.ctx.audio.play('flip', 1.1 + shot.power * 0.3)
-    this.ctx.audio.play('tap', 1.4)
-    this.ctx.fx.puff(o.x, o.y, 'rgba(255,255,255,0.6)', 6)
-    this.ctx.fx.ring(o.x, o.y, SIDE[side].light, 90)
-    this.ctx.fx.shake(0.08)
+    // A snappy drive cracks off the tee; a lob pops gently.
+    const drive = Math.min(1, Math.max(0, ((shot.arc ?? 1) - ARC_LOB) / (ARC_DRIVE - ARC_LOB)))
+    const { fx, audio } = this.ctx
+    audio.play('flip', 1 + shot.power * 0.2 + drive * 0.4)
+    audio.play('tap', 1.2 + drive * 0.5)
+    audio.buzz(Math.round(5 + 15 * drive))
+    fx.puff(o.x, o.y, 'rgba(255,255,255,0.6)', Math.round(4 + 6 * drive))
+    fx.ring(o.x, o.y, SIDE[side].light, 70 + 70 * drive)
+    if (drive > 0.4)
+      fx.burst(o.x, o.y, C.white, {
+        count: Math.round(4 + 8 * drive),
+        speed: 400 + 400 * drive,
+        size: 5,
+        life: 0.25,
+        gravity: 0,
+        drag: 4,
+        spread: 0.7,
+        dir: Math.atan2(shot.dy, shot.dx) + Math.PI,
+        kind: 'spark',
+      })
+    fx.shake(0.04 + 0.12 * drive)
   }
 
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
     switch (e.kind) {
-      case 'bounce':
-        audio.play('bounce', 1.3)
+      case 'bounce': {
+        const k = Math.min(1, e.speed / 1100)
+        audio.play('bounce', 1.1 + 0.4 * k)
         audio.play('tap', 1.6)
-        fx.puff(e.x, e.y, 'rgba(255,255,255,0.5)', 6)
-        fx.ring(e.x, e.y, C.white, 80)
-        fx.shake(0.06)
+        fx.puff(e.x, e.y, 'rgba(255,255,255,0.5)', Math.round(3 + 6 * k))
+        fx.ring(e.x, e.y, C.white, 50 + 60 * k)
+        fx.shake(0.03 + 0.08 * k)
         return
+      }
+      case 'rim': {
+        const k = Math.min(1, e.speed / 1400)
+        audio.play('hit', 1.5 + 0.3 * k)
+        audio.play('wall', 1.3)
+        audio.buzz(Math.round(6 + 10 * k))
+        fx.sparks(e.x, e.y - 16, C.white, Math.round(4 + 8 * k))
+        fx.shake(0.05 + 0.1 * k)
+        this.wobble[e.cup] = this.s.t
+        return
+      }
       case 'cup': {
         const thrower = e.side
         const col = SIDE[other(thrower)].main
-        audio.play('splash', 1)
+        const k = Math.min(1, e.speed / 1600)
+        audio.play('splash', 1.15 - 0.3 * k)
         audio.play('score', 1)
-        audio.buzz(30)
+        audio.buzz(Math.round(20 + 25 * k))
         // Water jumps out of the cup, then bits of the cup's colour.
         fx.burst(e.x - 8, e.y - 14, '#7fd8ff', {
-          count: 26,
-          speed: 520,
+          count: Math.round(18 + 18 * k),
+          speed: 380 + 300 * k,
           size: 11,
           life: 0.6,
           gravity: 0,
@@ -141,15 +192,19 @@ class CupPong extends TurnGame<Game> {
         })
         fx.ring(e.x, e.y, SIDE[thrower].light, 200)
         fx.flash(SIDE[thrower].main, e.left === 0 ? 0.35 : 0.2)
-        fx.shake(e.left === 0 ? 0.55 : 0.35)
-        fx.stop(e.left === 0 ? 8 : 5)
-        floatFor(
-          fx,
-          thrower,
-          e.left === 0 ? 'Clear!' : e.left === 1 ? 'One left!' : 'Cup!',
-          e.x,
-          e.y,
-        )
+        fx.shake((e.left === 0 ? 0.45 : 0.22) + 0.15 * k)
+        fx.stop((e.left === 0 ? 7 : 3) + Math.round(3 * k))
+        const label =
+          e.left === 0
+            ? 'Clear!'
+            : e.rims > 0
+              ? 'Rolled in!'
+              : e.bounced
+                ? 'Bounce cup!'
+                : e.left === 1
+                  ? 'One left!'
+                  : 'Cup!'
+        floatFor(fx, thrower, label, e.x, e.y)
         return
       }
       case 'miss':
@@ -167,17 +222,35 @@ class CupPong extends TurnGame<Game> {
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, frac: number): void {
     const s = this.s
-    const preview = s.phase === 'aim' && !this.over ? this.previewOf() : null
+    // Online, the flick preview is the thrower's own control: the rival's phone does not show it.
+    const own = g.viewer === null || g.viewer === s.turn
+    const preview = s.phase === 'aim' && !this.over && own ? this.previewOf() : null
     const end = s.endAt >= 0 ? s.t - s.endAt : -1
+    const p = this.prevShell
+    const sh = s.ball?.shell
+    const ball =
+      s.ball && sh && p && !this.over
+        ? {
+            ...s.ball,
+            shell: {
+              ...sh,
+              x: lerp(p.x, sh.x, frac),
+              y: lerp(p.y, sh.y, frac),
+              z: lerp(p.z, sh.z, frac),
+            },
+          }
+        : s.ball
     render(
       g,
-      s,
+      { ...s, ball },
       {
         preview,
         end,
-        winner: end >= 0 ? (s.cups.some((c) => c.side === 0 && c.alive) ? 0 : 1) : null,
+        // The side that sank its goal: on a short match both still have cups standing.
+        winner: end >= 0 ? standingWinner(s) : null,
+        wobble: this.wobble,
       },
       this.time,
     )
@@ -185,7 +258,8 @@ class CupPong extends TurnGame<Game> {
       (this.time < 10 || s.t - s.turnAt > 4) &&
       s.phase === 'aim' &&
       !this.isBot(s.turn) &&
-      !this.over
+      !this.over &&
+      own
     )
       hint(g, s, this.time)
     this.drawTurns(g, undefined, s.phase === 'aim')
@@ -193,15 +267,21 @@ class CupPong extends TurnGame<Game> {
   }
 
   /** What the flick preview shows: the human's live flick, or the bot's planned one while it thinks. */
-  private previewOf(): ShotParams | null {
+  private previewOf(): Flick | null {
     if (this.isBot(this.s.turn)) return this.botShot
     return this.s.aiming
   }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prevShell = null
+    this.snap = 0
+  }
 }
 
-/** A held or released pointer as a flick for `side`. */
-function flickOf(side: Side, p: Ptr): ShotParams | null {
-  return shotFromFlick(side, p.x - p.x0, p.y - p.y0)
+/** A held or released pointer as a flick for `side`, its arc set by the finger's snap. */
+function flickOf(side: Side, p: Ptr, snap: number): Flick | null {
+  return shotFromFlick(side, p.x - p.x0, p.y - p.y0, snap)
 }
 
 export default () => new CupPong()

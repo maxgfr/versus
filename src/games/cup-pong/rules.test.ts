@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { type Difficulty, other, type Side, STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { H, W } from '../../core/stage.ts'
-import { choose } from './bot.ts'
+import { choose, outcome } from './bot.ts'
 import {
   advance,
+  arcOf,
   BALL,
+  ballistics,
   cupAt,
+  CUP_H,
+  CUP_R,
   cupsOf,
   fire,
   FULL_FLICK,
@@ -24,7 +28,7 @@ import {
 import type { Event } from './rules.ts'
 import { launch, type ShotParams, stepShell } from '../../engines/aim/index.ts'
 
-/** A shot from `side` aimed straight at a world point, with the power that lands it there. */
+/** A shot from `side` aimed straight at a world point, with the power that brings it down through rim height there. */
 function shotAt(side: Side, x: number, y: number): ShotParams {
   const o = originOf(side)
   const dx = x - o.x
@@ -35,7 +39,7 @@ function shotAt(side: Side, x: number, y: number): ShotParams {
   let hi = 1
   for (let i = 0; i < 40; i++) {
     const p = (lo + hi) / 2
-    const land = landingOf(side, { dx: dx / len, dy: dy / len, power: p })
+    const land = landingOf(side, { dx: dx / len, dy: dy / len, power: p }, CUP_H)
     if (Math.hypot(land.x - x, land.y - y) < 1) return { dx: dx / len, dy: dy / len, power: p }
     const reach = Math.hypot(land.x - o.x, land.y - o.y)
     if (reach < len) lo = p
@@ -54,6 +58,7 @@ function setBall(
     side,
     shell: { x: p.x, y: p.y, z: p.z, vx: p.vx ?? 0, vy: p.vy ?? 0, vz: p.vz ?? 0, t: 0 },
     bounces: 0,
+    rims: 0,
   }
   s.phase = 'fly'
 }
@@ -146,8 +151,8 @@ describe('cup pong flick', () => {
     const s = newState(0)
     const target = s.cups.find((c) => c.side === 1)
     if (!target) throw new Error('no cup')
-    // First touch just outside the rim; the bounce carries it back into the cup.
-    setBall(s, 0, { x: target.x - 60, y: target.y, z: 0.5, vx: 200, vz: -300 })
+    // First touch well short of the cup; the bounce lifts it over the rim and in.
+    setBall(s, 0, { x: target.x - 160, y: target.y, z: 0.5, vx: 394, vz: -850 })
     const ev = play(s)
     expect(ev.some((e) => e.kind === 'bounce')).toBe(true)
     expect(ev.some((e) => e.kind === 'cup')).toBe(true)
@@ -217,21 +222,12 @@ describe('cup pong rules', () => {
     expect(s.turn).toBe(1)
   })
 
-  it('the bot’s flick lands near a cup it chose (hard, direct)', () => {
+  it('the hard bot sinks most of its flicks at a full rack', () => {
     const s = newState(0)
     const rng = new Rng(11)
-    let close = 0
-    for (let i = 0; i < 8; i++) {
-      const shot = choose(s, 0, 'hard', rng)
-      const land = landingOf(0, shot)
-      const best = Math.min(
-        ...s.cups
-          .filter((c) => c.side === 1 && c.alive)
-          .map((c) => Math.hypot(land.x - c.x, land.y - c.y)),
-      )
-      if (best < IN_R + 10) close++
-    }
-    expect(close).toBeGreaterThanOrEqual(6)
+    let sunk = 0
+    for (let i = 0; i < 8; i++) if (outcome(s, 0, choose(s, 0, 'hard', rng)) >= 0) sunk++
+    expect(sunk).toBeGreaterThanOrEqual(5)
   })
 
   it('the same seed plays the same way', () => {
@@ -289,5 +285,81 @@ describe('cup pong bot', () => {
       if (standingWinner(r.s) === 0) wins++
     }
     expect(wins).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('cup pong: cups stand tall', () => {
+  it('a low ball runs into a cup wall and bounces off it, never through', () => {
+    const s = newState(0)
+    const target = s.cups.find((c) => c.side === 1)
+    if (!target) throw new Error('no cup')
+    setBall(s, 0, { x: target.x - 200, y: target.y, z: 30, vx: 900, vz: 0 })
+    const ev = play(s)
+    expect(ev.some((e) => e.kind === 'rim')).toBe(true)
+    expect(target.alive).toBe(true)
+  })
+
+  it('a ball coming down on the rim pops back up instead of counting', () => {
+    const s = newState(0)
+    const target = s.cups.find((c) => c.side === 1)
+    if (!target) throw new Error('no cup')
+    setBall(s, 0, { x: target.x - CUP_R + 2, y: target.y, z: CUP_H + 4, vz: -400 })
+    const ev = advance(s, STEP).events
+    expect(ev.some((e) => e.kind === 'rim')).toBe(true)
+    expect(s.ball?.shell.vz).toBeGreaterThan(0)
+    expect(target.alive).toBe(true)
+  })
+
+  it('a ball that drops into the thrower’s own cup is a miss and the cup stays', () => {
+    const s = newState(0)
+    const mine = s.cups.find((c) => c.side === 0)
+    if (!mine) throw new Error('no cup')
+    setBall(s, 0, { x: mine.x, y: mine.y, z: CUP_H - 2, vz: -100 })
+    const ev = play(s)
+    expect(ev.some((e) => e.kind === 'miss')).toBe(true)
+    expect(mine.alive).toBe(true)
+  })
+
+  it('a slow flick lobs and a snappy one drives: same spot, the drive gets there sooner', () => {
+    const lob = shotFromFlick(0, 0, -440, 300)
+    const drive = shotFromFlick(0, 0, -440, 4000)
+    if (!lob || !drive) throw new Error('no shot')
+    expect(lob.arc).toBeGreaterThan(1)
+    expect(drive.arc).toBeLessThan(1)
+    const a = landingOf(0, lob)
+    const b = landingOf(0, drive)
+    expect(Math.abs(a.y - b.y)).toBeLessThan(80)
+    const time = (arc: number | undefined) => {
+      const bl = ballistics(arc)
+      const sh = launch(originOf(0).x, originOf(0).y, lob, bl)
+      let t = 0
+      while (sh.z > 0 && t < 5) {
+        stepShell(sh, 1 / 120, 0, bl)
+        t += 1 / 120
+      }
+      return t
+    }
+    expect(time(drive.arc)).toBeLessThan(time(lob.arc) * 0.8)
+    expect(arcOf(0)).toBeGreaterThan(arcOf(1e6))
+  })
+
+  it('a hard bot needs fewer flicks than an easy one to clear the rack', () => {
+    const shots = (d: Difficulty) => {
+      let n = 0
+      for (let seed = 1; seed <= 4; seed++) {
+        const rng = new Rng(seed)
+        const s = newState(0)
+        while (standing(s, 1) > 0 && n < 400) {
+          s.turn = 0
+          s.phase = 'aim'
+          fire(s, 0, choose(s, 0, d, rng))
+          n++
+          play(s)
+        }
+      }
+      return n
+    }
+    expect(shots('hard')).toBeLessThan(shots('normal'))
+    expect(shots('normal')).toBeLessThan(shots('easy'))
   })
 })

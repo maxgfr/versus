@@ -3,8 +3,8 @@ import { banner, hudY } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
-import { drawTrajectory, type Shell, type ShotParams, trace } from '../../engines/aim/index.ts'
-import { BALL, type Cup, CUP_R, originOf, type State } from './rules.ts'
+import { drawTrajectory, type Shell, trace } from '../../engines/aim/index.ts'
+import { BALL, ballistics, type Cup, CUP_R, type Flick, originOf, type State } from './rules.ts'
 
 /** Where a cup's rim sits relative to its foot: up toward the light, so the wall shows below it. */
 const LX = -6
@@ -135,15 +135,17 @@ export function drawBall(g: Draw, sh: Shell, side: Side): void {
   g.ball(sh.x - sh.z * 0.12, sh.y - sh.z * 0.18, 18 * k, BALL_COL, 1)
 }
 
-/** Dotted start of the flick being held: the first part only, so the aim is still a skill. */
-function drawPreview(g: Draw, side: Side, shot: ShotParams): void {
+/** Dotted start of the flick being held, at its arc: the first part only, so the aim is still a skill. */
+function drawPreview(g: Draw, side: Side, shot: Flick): void {
   const o = originOf(side)
-  drawTrajectory(g, trace(o.x, o.y, shot, BALL, 0, 0.5, 12), SIDE[side].light)
+  drawTrajectory(g, trace(o.x, o.y, shot, ballistics(shot.arc), 0, 0.5, 12), SIDE[side].light)
 }
 
 export interface Look {
   /** The flick being previewed for the side whose turn it is, if any. */
-  preview: ShotParams | null
+  preview: Flick | null
+  /** Match time each cup's rim was last clipped: it wobbles. */
+  wobble: readonly number[]
   /** Seconds since the last cup fell, or -1 while playing. */
   end: number
   winner: Side | null
@@ -161,7 +163,11 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       const k = (i % 6) * 0.12
       hop = Math.max(0, Math.sin((look.end - k) * 9)) * 18
     }
-    drawCup(g, c, hop)
+    // A clipped rim shudders the cup for a moment.
+    const since = s.t - (look.wobble[i] ?? -9)
+    const shake = since >= 0 && since < 0.4 ? Math.sin(since * 60) * 5 * (1 - since / 0.4) : 0
+    if (shake) g.at(shake, 0, 0, () => drawCup(g, c, hop))
+    else drawCup(g, c, hop)
   }
   // The ball waits on its tee in front of whoever may flick.
   if (s.phase === 'aim' && look.end < 0) {
