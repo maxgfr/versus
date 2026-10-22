@@ -111,8 +111,13 @@ export function leaveRoom(): void {
   toast(`You left room ${code}.`, { label: 'Rejoin', run: () => go(roomPath(code)) }, 5000)
 }
 
+/**
+ * The room rides in the query, not the #fragment: link previews and in-app
+ * browsers (Messages, WhatsApp, Messenger…) often drop the fragment of a
+ * shared link. main.ts turns `?r=CODE` back into `#/online/CODE`.
+ */
 function inviteUrl(code: string): string {
-  return `${location.origin}${import.meta.env.BASE_URL}#${roomPath(code)}`
+  return `${location.origin}${import.meta.env.BASE_URL}?r=${code}`
 }
 
 function qrImage(text: string): HTMLImageElement {

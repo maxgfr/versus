@@ -101,6 +101,10 @@ route(/^\/tournament$/, async (root) => (await import('./shell/tournament.ts')).
 document.body.append(
   h('div.rotate', { 'aria-live': 'polite' }, icon('phone'), 'Turn your phone upright to play'),
 )
+// Invite links carry the room as `?r=CODE` (see inviteUrl in online.ts).
+const invited = new URLSearchParams(location.search).get('r')
+if (invited && /^[A-Za-z]{4}$/.test(invited))
+  history.replaceState(null, '', `${import.meta.env.BASE_URL}#/online/${invited.toUpperCase()}`)
 startRouter(app)
 
 // ---------- iOS install guide (first Safari visit, not installed) ----------

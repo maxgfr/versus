@@ -84,6 +84,11 @@ test('the invite still works after the host tab reloads, and a reloaded guest la
     (await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 760 } })).newPage()
   const host = await open()
   const guest = await open()
+  await host.addInitScript(() => {
+    navigator.share = async (d) => {
+      ;(window as unknown as { shared?: ShareData }).shared = d
+    }
+  })
   await host.goto('./#/online')
   await host.getByRole('button', { name: 'Create a room' }).click()
   await expect(host.locator('.code span')).toHaveCount(4)
@@ -91,7 +96,13 @@ test('the invite still works after the host tab reloads, and a reloaded guest la
   // iOS often reloads Safari behind the share sheet: the room must survive it.
   await host.reload()
   await expect(host.locator('.code')).toHaveText(code)
-  await guest.goto(`./#/online/${code}`)
+  // The guest opens exactly the link the share sheet got, minus its #fragment
+  // (which some messaging apps drop): the room is in the query.
+  await host.getByRole('button', { name: 'Send invite' }).click()
+  const url = await host.evaluate(() => (window as unknown as { shared?: ShareData }).shared?.url)
+  expect(url).toMatch(new RegExp(`/versus/\\?r=${code}$`))
+  await guest.goto((url ?? '').split('#')[0] ?? '')
+  await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
   await expect(host.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 60_000 })
   await expect(guest.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 30_000 })
   await host.locator('.card[data-id="tic-tac-toe"]').click()
