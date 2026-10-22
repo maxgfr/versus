@@ -340,7 +340,8 @@ export function renderRace(g: Draw, s: State, now: number, o: RaceOpts): void {
   const hint = 1 - Math.max(0, (now - 2.8) / 0.6)
   if (hint > 0) {
     for (const side of [0, 1] as Side[]) {
-      if (o.bots[side]) continue
+      // Bots need no prompt; online, each phone prompts only its own player.
+      if (o.bots[side] || (g.viewer !== null && side !== g.viewer)) continue
       banner(g, side, 'Tap on the beat!', frame(side, 500, 1640).y, { size: 46, alpha: hint })
     }
   }
