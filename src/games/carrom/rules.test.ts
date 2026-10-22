@@ -291,6 +291,25 @@ describe('carrom queen, friction and time limit', () => {
 })
 
 describe('carrom match', () => {
+  it('a hard computer beats an easy one most of the time over seeded boards', () => {
+    let hard = 0
+    const N = 4
+    for (let seed = 0; seed < N; seed++) {
+      const b = newBoard((seed % 2) as 0 | 1)
+      const rng = new Rng(100 + seed)
+      let guard = 0
+      while (b.phase !== 'done' && guard++ < 200) {
+        const shot = choose({ board: b }, b.turn === 0 ? 'hard' : 'easy', rng.int(1, 1e6))
+        placeStriker(b, shot.x)
+        strike(b, shot.dx, shot.dy, shot.power)
+        for (let f = 0; f < 2000 && !atRest(b); f++) frame(b)
+        resolve(b)
+      }
+      if (b.winner === 0) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(3)
+  }, 60000)
+
   it('computer vs computer finishes a board in bounded time, on either side', () => {
     for (const first of [0, 1] as const) {
       const r = playBoard(first, 'hard', 7 + first)
