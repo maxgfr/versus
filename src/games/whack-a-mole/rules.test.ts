@@ -12,6 +12,8 @@ import {
   GAME_TIME,
   HOLES,
   MOLE_POINTS,
+  QUICK,
+  QUICK_BONUS,
   holeAt,
   holeXY,
   pointsFor,
@@ -179,14 +181,32 @@ describe('whack a mole game', () => {
     }
     runTo((mole?.at ?? 0) + 0.1)
     tapHole(mole?.hole ?? 0, 1)
-    expect(game.s.score).toEqual([1, 0])
+    // A quick whack: one point extra.
+    expect(game.s.score).toEqual([MOLE_POINTS + QUICK_BONUS, 0])
     // Tapping the same mole again does nothing.
     tapHole(mole?.hole ?? 0, 2)
-    expect(game.s.score).toEqual([1, 0])
+    expect(game.s.score).toEqual([MOLE_POINTS + QUICK_BONUS, 0])
 
     runTo((bunny?.at ?? 0) + 0.1)
     tapHole(bunny?.hole ?? 0, 3)
-    expect(game.s.score).toEqual([1 + BUNNY_POINTS, 0])
+    expect(game.s.score).toEqual([MOLE_POINTS + QUICK_BONUS + BUNNY_POINTS, 0])
+  })
+
+  it('a slow whack is a plain point', () => {
+    const ctx = ctxFor([false, false], 'normal', 21)
+    const game = factory()
+    game.init(ctx)
+    const mole = game.s.plan.find((p) => p.kind === 'mole' && p.dur > QUICK + 0.15)
+    expect(mole).toBeDefined()
+    while (game.time < (mole?.at ?? 0) + QUICK + 0.08) {
+      game.update(STEP)
+      ctx.input.endStep()
+    }
+    const { x, y } = holeXY(mole?.hole ?? 0)
+    ctx.input.player(0).press(1, x, y)
+    game.update(STEP)
+    ctx.input.endStep()
+    expect(game.s.score).toEqual([MOLE_POINTS, 0])
   })
 
   it('a tap that misses every hole scores nothing', () => {
@@ -229,6 +249,55 @@ describe('whack a mole game', () => {
     }
     const [red, blue] = game.result.score ?? [0, 0]
     expect(game.result.winner).toBe(winnerOf([red, blue]))
+  })
+})
+
+describe('whack-a-mole pacing and bots', () => {
+  it('quick whacks on moles score one more; bunnies always cost two', () => {
+    expect(pointsFor('mole', 0.2)).toBe(MOLE_POINTS + QUICK_BONUS)
+    expect(pointsFor('mole', QUICK + 0.01)).toBe(MOLE_POINTS)
+    expect(pointsFor('bunny', 0.1)).toBe(BUNNY_POINTS)
+  })
+
+  it('the match ramps up: late pops come thicker and stay up shorter', () => {
+    const plan = scheduleFor(new Rng(12), false, 60)
+    const early = plan.filter((p) => p.at < 20)
+    const late = plan.filter((p) => p.at >= 40 && p.at < 60)
+    expect(late.length).toBeGreaterThan(early.length)
+    const avg = (ps: Pop[]) => ps.reduce((a, p) => a + p.dur, 0) / ps.length
+    expect(avg(late)).toBeLessThan(avg(early))
+  })
+
+  /** One half's score for a bot over a whole schedule (holes drawn the way the game does). */
+  function botScore(d: Difficulty, seed: number): number {
+    const plan = scheduleFor(new Rng(seed), false, GAME_TIME)
+    const bot = new MoleBot(new Rng(seed * 7 + 1), d)
+    const cells: (Cell | null)[] = Array.from({ length: HOLES }, () => null)
+    let next = 0
+    let score = 0
+    for (let t = 0; t < GAME_TIME; t += STEP) {
+      for (let p = plan[next]; p && p.at <= t; p = plan[++next])
+        cells[p.hole] = { kind: p.kind, at: p.at, until: p.at + p.dur, st: 'up', t: p.at }
+      for (const h of bot.drive(t, cells)) {
+        const c = cells[h]
+        if (!c || c.st !== 'up') continue
+        score += pointsFor(c.kind, t - c.at)
+        c.st = c.kind === 'mole' ? 'hit' : 'bad'
+      }
+      for (const c of cells) if (c && c.st === 'up' && t >= c.until) c.st = 'down'
+    }
+    return score
+  }
+
+  it('hard outscores normal, and normal outscores easy, on the same moles', () => {
+    let hardWins = 0
+    let normalWins = 0
+    for (let seed = 1; seed <= 10; seed++) {
+      if (botScore('hard', seed) > botScore('easy', seed)) hardWins++
+      if (botScore('normal', seed) > botScore('easy', seed)) normalWins++
+    }
+    expect(hardWins).toBeGreaterThanOrEqual(9)
+    expect(normalWins).toBeGreaterThanOrEqual(8)
   })
 })
 

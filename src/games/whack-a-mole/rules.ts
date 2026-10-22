@@ -19,6 +19,9 @@ export const UP: Record<PopKind, [number, number]> = {
   mole: [0.9, 1.45],
   bunny: [0.85, 1.25],
 }
+/** A mole whacked within this many seconds of popping up is a quick whack: one point extra. */
+export const QUICK = 0.5
+export const QUICK_BONUS = 1
 /** Taps further than this from a hole's centre miss it (world units). */
 export const REACH = 130
 
@@ -58,31 +61,38 @@ export function holeAt(x: number, y: number): number {
 /**
  * The shared schedule for the whole match. Each hole only pops again once its
  * last pop has gone down. Teams see faster pops, to keep two players busy.
+ * The match ramps up: toward the buzzer pops come faster, stay up for less
+ * time, and more of them are bunnies.
  */
 export function scheduleFor(rng: Rng, teams: boolean, len = GAME_TIME): Pop[] {
   const pops: Pop[] = []
   const busyUntil: number[] = Array.from({ length: HOLES }, () => 0)
   let t = 0.8
   while (t < len + 1) {
+    const heat = Math.min(1, t / len)
     let hole = rng.int(0, HOLES - 1)
     for (let tries = 0; (busyUntil[hole] ?? 0) > t && tries < 12; tries++) {
       hole = rng.int(0, HOLES - 1)
     }
     if ((busyUntil[hole] ?? 0) <= t) {
-      const kind: PopKind = rng.chance(0.26) ? 'bunny' : 'mole'
+      const kind: PopKind = rng.chance(0.24 + 0.1 * heat) ? 'bunny' : 'mole'
       const [lo, hi] = UP[kind]
-      const dur = rng.range(lo, hi)
+      const dur = rng.range(lo, hi) * (1 - 0.25 * heat)
       pops.push({ at: round(t), hole, kind, dur: round(dur) })
       busyUntil[hole] = t + dur + 0.2
     }
-    t += rng.range(0.34, 0.8) * (teams ? 0.7 : 1)
+    t += rng.range(0.34, 0.8) * (teams ? 0.7 : 1) * (1 - 0.35 * heat)
   }
   return pops
 }
 
-/** Points for a whack on a pop of this kind. */
-export function pointsFor(kind: PopKind): number {
-  return kind === 'mole' ? MOLE_POINTS : BUNNY_POINTS
+/**
+ * Points for a whack on a pop of this kind, `reaction` seconds after it
+ * popped up: a quick whack on a mole is worth one more.
+ */
+export function pointsFor(kind: PopKind, reaction = Infinity): number {
+  if (kind === 'bunny') return BUNNY_POINTS
+  return MOLE_POINTS + (reaction <= QUICK ? QUICK_BONUS : 0)
 }
 
 /** Who won on points, or 'draw'. */

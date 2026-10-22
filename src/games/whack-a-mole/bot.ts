@@ -11,11 +11,11 @@ import { type PopKind } from './rules.ts'
 
 const REACTION: Record<Difficulty, [number, number]> = {
   easy: [0.6, 0.85],
-  normal: [0.4, 0.6],
-  hard: [0.26, 0.4],
+  normal: [0.4, 0.58],
+  hard: [0.3, 0.46],
 }
-const MISS_MOLE: Record<Difficulty, number> = { easy: 0.25, normal: 0.12, hard: 0.04 }
-const HIT_BUNNY: Record<Difficulty, number> = { easy: 0.15, normal: 0.06, hard: 0.01 }
+const MISS_MOLE: Record<Difficulty, number> = { easy: 0.25, normal: 0.08, hard: 0.03 }
+const HIT_BUNNY: Record<Difficulty, number> = { easy: 0.15, normal: 0.04, hard: 0.01 }
 
 interface Plan {
   hole: number

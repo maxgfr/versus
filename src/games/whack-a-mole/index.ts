@@ -10,7 +10,9 @@ import {
   HOLES,
   holeAt,
   holeXY,
+  MOLE_POINTS,
   pointsFor,
+  QUICK,
   scheduleFor,
   winnerOf,
   type Pop,
@@ -142,7 +144,9 @@ class WhackAMole extends BaseGame<State> {
     const { fx, audio } = this.ctx
     const c = s.cells[side][h]
     if (!c || c.st !== 'up') return
-    const pts = pointsFor(c.kind)
+    const reaction = this.time - c.at
+    const pts = pointsFor(c.kind, reaction)
+    const quick = c.kind === 'mole' && pts > MOLE_POINTS
     s.score[side] += pts
     s.scoreAt[side] = this.time
     c.st = c.kind === 'mole' ? 'hit' : 'bad'
@@ -153,14 +157,30 @@ class WhackAMole extends BaseGame<State> {
     // so in 1P blue's top row would otherwise start at the top edge and run off it.
     const above = frame(side, x, y - 60)
     if (c.kind === 'mole') {
-      audio.play('hit', 0.95 + this.ctx.rng.next() * 0.12)
-      audio.play('pop', 1.1 + this.ctx.rng.next() * 0.12)
-      fx.burst(p.x, p.y, '#8b5a2b', { count: 10, speed: 360, size: 12, life: 0.45, gravity: 700 })
-      fx.sparks(p.x, p.y - 40, C.yellow, 10)
-      fx.ring(p.x, p.y - 40, SIDE[side].light, 150)
-      fx.float('+1', above.x, above.y, '#fff3c4', 84, side)
-      fx.shake(0.06)
-      fx.stop(2)
+      // The quicker the whack, the harder it lands.
+      const k = Math.max(0, Math.min(1, (QUICK + 0.3 - reaction) / 0.5))
+      audio.play('hit', 0.9 + k * 0.25 + Math.random() * 0.08)
+      audio.play('pop', 1.05 + k * 0.25 + Math.random() * 0.08)
+      if (quick) audio.buzz(10 + Math.round(k * 12))
+      fx.burst(p.x, p.y, '#8b5a2b', {
+        count: 8 + Math.round(k * 8),
+        speed: 300 + k * 160,
+        size: 12,
+        life: 0.45,
+        gravity: 700,
+      })
+      fx.sparks(p.x, p.y - 40, C.yellow, 6 + Math.round(k * 12))
+      fx.ring(p.x, p.y - 40, quick ? C.yellow : SIDE[side].light, 120 + k * 80)
+      fx.float(
+        quick ? 'Quick! +2' : '+1',
+        above.x,
+        above.y,
+        quick ? C.yellow : '#fff3c4',
+        quick ? 80 : 84,
+        side,
+      )
+      fx.shake(0.05 + k * 0.1)
+      fx.stop(quick ? 3 : 2)
     } else {
       audio.play('buzz')
       audio.play('boing', 0.8)
@@ -176,6 +196,7 @@ class WhackAMole extends BaseGame<State> {
       })
       fx.float('-2', above.x, above.y, '#ff6b6b', 96, side)
       fx.shake(0.2)
+      audio.buzz(40)
     }
   }
 

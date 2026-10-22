@@ -6,7 +6,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { Cell, State } from './index.ts'
-import { HOLES, holeXY } from './rules.ts'
+import { HOLES, holeXY, QUICK } from './rules.ts'
 
 /*
  * Each half is a floodlit lawn with nine holes. Holes and creatures are drawn
@@ -329,6 +329,16 @@ export function renderMoles(
       if (c) at(side, h, () => creature(g, 0, 0, c, now))
     }
     for (let h = 0; h < HOLES; h++) at(side, h, () => lip(g, 0, 0))
+    // The quick-whack window: a gold ring closing in on a fresh mole.
+    for (let h = 0; h < HOLES; h++) {
+      const c = s.cells[side][h]
+      if (!c || c.st !== 'up' || c.kind !== 'mole') continue
+      const k = (now - c.at) / QUICK
+      if (k < 0 || k >= 1) continue
+      at(side, h, () =>
+        g.alpha((1 - k) * 0.8, () => g.ring(0, -10, 70 + (1 - k) * 60, C.yellow, 5 + (1 - k) * 4)),
+      )
+    }
     for (let h = 0; h < HOLES; h++) {
       const c = s.cells[side][h]
       if (c && (c.st === 'hit' || c.st === 'bad'))
