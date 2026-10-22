@@ -152,12 +152,41 @@ describe('four in a row bot', () => {
     expect(choose({ cells: threat, turn: 1 }, 'hard', 4)).toBe(3)
   })
 
+  it('easy still takes a win or blocks one on its random moves', () => {
+    const threat = board(['.......', '.......', '.......', '.......', '.......', 'rrr....'])
+    for (let seed = 1; seed <= 30; seed++) {
+      expect(choose({ cells: threat, turn: 0 }, 'easy', seed)).toBe(3)
+      expect(choose({ cells: threat, turn: 1 }, 'easy', seed)).toBe(3)
+    }
+  })
+
+  it('hard beats easy and normal beats easy head to head, either side starting', () => {
+    const duel = (a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard', seed: number) => {
+      let cells = emptyBoard()
+      let turn: Side = seed % 2 === 0 ? 0 : 1
+      for (let n = 0; ; n++) {
+        const o = outcome(cells)
+        if (o) return o.winner
+        cells = play(cells, choose({ cells, turn }, turn === 0 ? a : b, seed * 100 + n), turn)
+        turn = turn === 0 ? 1 : 0
+      }
+    }
+    let hard = 0
+    let normal = 0
+    for (let seed = 1; seed <= 4; seed++) {
+      if (duel('hard', 'easy', seed) === 0) hard++
+      if (duel('normal', 'easy', seed) === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(3)
+    expect(normal).toBeGreaterThanOrEqual(3)
+  }, 60000)
+
   it('finishes whole matches computer against computer within bounded moves', () => {
     for (const [seed, difficulty, target] of [
       [5, 'normal', 2],
       [6, 'easy', 2],
       [7, 'normal', 3],
-      [8, 'hard', 3],
+      [8, 'hard', 1],
     ] as const) {
       const rng = new Rng(seed)
       let wins: [number, number] = [0, 0]

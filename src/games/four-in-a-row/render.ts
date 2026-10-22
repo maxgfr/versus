@@ -282,6 +282,28 @@ function spill(g: Draw, geo: Geom, s: State, now: number): void {
   })
 }
 
+/** The column under a hovering disc and the cell its disc would land in (a faint ghost and a lit lane). */
+function ghost(g: Draw, geo: Geom, s: State, side: Side, x: number): void {
+  const col = Math.floor((x - geo.x) / geo.cell)
+  if (col < 0 || col >= COLS) return
+  let row = ROWS - 1
+  while (row >= 0 && s.cells[row * COLS + col] !== null) row--
+  const top = cellCenter(geo, col, 0)
+  g.rrect(
+    top.x - geo.cell * 0.46,
+    geo.y - 6,
+    geo.cell * 0.92,
+    geo.h + 12,
+    geo.cell * 0.4,
+    alpha(SIDE[side].light, 0.12),
+  )
+  if (row < 0) return
+  const p = cellCenter(geo, col, row)
+  g.alpha(0.35 + 0.15 * Math.sin(g.t * 8), () =>
+    g.at(p.x, p.y, 0, () => disc(g, side, geo.cell * DISC)),
+  )
+}
+
 /** The next disc, hovering above the frame, for whoever is about to drop. */
 function hovering(g: Draw, geo: Geom, side: Side, now: number, x: number, since: number): void {
   const r = geo.cell * DISC
@@ -305,9 +327,10 @@ export function renderBoard(
   s: State,
   geo: Geom,
   now: number,
-  next: { side: Side; x: number; since: number } | null,
+  next: { side: Side; x: number; since: number; ghost?: boolean } | null,
 ): void {
   back(g, geo)
+  if (next?.ghost) ghost(g, geo, s, next.side, next.x)
   discs(g, geo, s, now)
   spill(g, geo, s, now)
   front(g, geo)

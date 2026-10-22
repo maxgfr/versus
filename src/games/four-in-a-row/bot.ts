@@ -5,8 +5,8 @@ import { choose as search } from './ai.ts'
 import type { Cell } from './rules.ts'
 
 /**
- * The computer player. Easy and normal search on the main thread; hard runs
- * `ai.ts` in a worker (`think`), so its deeper search never freezes a frame.
+ * The computer player. Easy searches on the main thread; normal and hard run
+ * `ai.ts` in a worker (`think`), so their deeper searches never freeze a frame.
  * Returns the column, or a promise of it when the search is off-thread.
  */
 export function choose(
@@ -17,6 +17,6 @@ export function choose(
 ): number | Promise<number> {
   const seed = rng.int(1, 2 ** 31 - 1)
   const pos = { cells: cells.slice(), turn: side }
-  if (difficulty === 'hard') return think<number>('four-in-a-row', pos, difficulty, seed)
+  if (difficulty !== 'easy') return think<number>('four-in-a-row', pos, difficulty, seed)
   return search(pos, difficulty, seed)
 }
