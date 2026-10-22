@@ -360,8 +360,11 @@ function piece(g: Draw, s: State, side: Side, now: number, look: Look): void {
   })
 }
 
+/** Online, each phone shows only its own player's controls and hints. */
+const mine = (g: Draw, side: Side): boolean => g.viewer === null || side === g.viewer
+
 function joystick(g: Draw, k: StickLook, dashT: number, now: number): void {
-  if (!k.on) return
+  if (!k.on || !mine(g, k.side)) return
   const col = SIDE[k.side]
   // The rim fills back up after a dash and glows when the next flick is ready.
   const ready = clamp((now - dashT) / DASH_CD, 0, 1)
@@ -404,7 +407,7 @@ export function renderBroken(
   // A first-round hint for each human, upright in their half.
   if (s.rounds.round === 1 && since < 3.2)
     for (const side of [0, 1] as const) {
-      if (!humans[side] || s.ctl[side]?.on) continue
+      if (!humans[side] || s.ctl[side]?.on || !mine(g, side)) continue
       const y = side === 0 ? MID + 640 : MID - 640
       g.alpha(Math.min(1, (3.2 - since) * 2) * 0.95, () =>
         g.forSide(side, W / 2, y, () => {
