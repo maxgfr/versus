@@ -33,11 +33,25 @@ function quick(p: Position, m: number): number {
   return v + evaluate(next, side) * 0.1
 }
 
-/** The move the computer plays. `easy` is random, `normal` one-ply, `hard` depth-3 negamax. */
+/**
+ * Search depth for `hard`: deeper when the move is forced into one small board
+ * (few replies), shallower on a free move across the whole big board, so the
+ * think stays within a frame or two.
+ */
+export function hardDepth(p: Position): number {
+  const n = legalMoves(p).length
+  return n <= 9 ? 6 : n <= 24 ? 5 : 4
+}
+
+/**
+ * The move the computer plays. `easy` is mostly random but grabs an obvious
+ * small board now and then, `normal` one-ply, `hard` a negamax whose depth
+ * follows the branching.
+ */
 export function choose(p: Position, difficulty: Difficulty, rng: Rng): number {
   const legal = legalMoves(p)
-  if (difficulty === 'easy') return rng.pick(legal)
-  if (difficulty === 'normal') {
+  if (difficulty === 'easy' && rng.chance(0.6)) return rng.pick(legal)
+  if (difficulty !== 'hard') {
     let best = rng.pick(legal)
     let bestV = -Infinity
     for (const m of legal) {
@@ -49,5 +63,5 @@ export function choose(p: Position, difficulty: Difficulty, rng: Rng): number {
     }
     return best
   }
-  return bestMove(spec, p, 3, (n) => rng.int(0, n - 1)) ?? rng.pick(legal)
+  return bestMove(spec, p, hardDepth(p), (n) => rng.int(0, n - 1)) ?? rng.pick(legal)
 }

@@ -5,13 +5,14 @@ import type { Ptr } from '../../core/input.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
-import { cellAt, geom, tableBackdrop, TurnGame } from '../../engines/board/index.ts'
+import { cellAt, geom, tableBackdrop, think, TurnGame } from '../../engines/board/index.ts'
 import { choose } from './bot.ts'
 import { boardCentre, boardTally, cellCentre, notice, renderUltimate } from './render.ts'
 import {
   type Cell,
   emptyPosition,
   isLegal,
+  legalMoves,
   play,
   type Position,
   type Verdict,
@@ -141,8 +142,27 @@ class UltimateTicTacToe extends TurnGame<State> {
     this.play(m)
   }
 
-  protected botPlay(): void {
-    this.play(choose(this.pos(), this.ctx.difficulty, this.ctx.rng))
+  /** Quick answers on easy and normal; hard thinks off the main thread. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.55 : d === 'normal' ? 0.45 : 0.2) + this.ctx.rng.range(0, 0.25)
+  }
+
+  protected botPlay(): void | Promise<void> {
+    if (this.ctx.difficulty !== 'hard') {
+      this.play(choose(this.pos(), this.ctx.difficulty, this.ctx.rng))
+      return
+    }
+    const seed = this.ctx.rng.int(0, 2 ** 30)
+    const turn = this.s.turn
+    const round = this.s.round
+    return think<number | null>('ultimate-tic-tac-toe', this.pos(), 'hard', seed).then((m) => {
+      const s = this.s
+      // The world may have moved on while the worker thought (restore, round over).
+      if (this.over || s.endedAt >= 0 || s.turn !== turn || s.round !== round) return
+      const p = this.pos()
+      this.play(m !== null && isLegal(p, m) ? m : (legalMoves(p)[0] as number))
+    })
   }
 
   private play(m: number): void {
@@ -159,9 +179,21 @@ class UltimateTicTacToe extends TurnGame<State> {
     s.last = m
 
     const at = cellCentre(GEO, Math.floor(m / 9), m % 9)
-    this.ctx.audio.play('place', mover === 0 ? 1 : 1.12)
-    fx.burst(at.x, at.y, SIDE[mover].main, { count: 10, speed: 340, size: 10, life: 0.4 })
-    fx.shake(0.08)
+    // The fuller the small board, the higher and harder the mark lands.
+    const b0 = Math.floor(m / 9)
+    let filled = 0
+    for (let i = 0; i < 9; i++) if (next.cells[b0 * 9 + i] !== null) filled++
+    const k = filled / 9
+    this.ctx.audio.play('place', (mover === 0 ? 0.95 : 1.07) + k * 0.3)
+    fx.burst(at.x, at.y, SIDE[mover].main, {
+      count: Math.round(6 + k * 8),
+      speed: 280 + k * 200,
+      size: 10,
+      life: 0.4,
+      colors: [SIDE[mover].main, SIDE[mover].light],
+    })
+    fx.shake(0.05 + k * 0.08)
+    this.ctx.audio.buzz(6)
 
     let boardWon = false
     for (let b = 0; b < 9; b++) {
@@ -177,6 +209,7 @@ class UltimateTicTacToe extends TurnGame<State> {
       fx.stop(4)
       this.ctx.audio.play('score', w === 0 ? 1 : 1.12)
       fx.float('Board!', k.x, k.y, SIDE[w].light, 64, w)
+      this.ctx.audio.buzz(18)
     }
 
     const v = verdict(next)
@@ -208,10 +241,24 @@ class UltimateTicTacToe extends TurnGame<State> {
       fx.flash(SIDE[v.winner].main, 0.35)
       fx.shake(0.4)
       fx.stop(8)
+      this.ctx.audio.buzz(40)
+      const col = SIDE[v.winner]
       for (const k of v.line ?? []) {
         const c = boardCentre(GEO, k)
-        fx.burst(c.x, c.y, C.yellow, { count: 18, speed: 560, size: 12, life: 0.8 })
+        fx.burst(c.x, c.y, col.main, {
+          count: 22,
+          speed: 680,
+          size: 14,
+          life: 0.9,
+          colors: [col.main, col.light, C.yellow, C.white],
+          kind: 'square',
+        })
+        fx.ring(c.x, c.y, C.yellow, 260)
       }
+      if (s.wins[v.winner] >= this.target) fx.confetti(v.winner)
+    } else {
+      this.ctx.audio.play('draw')
+      fx.shake(0.15)
     }
     if (v.winner === 'draw' || s.wins[v.winner] < this.target) {
       // Not the match yet: the round is shown, then the next board is set out. Draws score nothing.

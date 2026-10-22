@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './bot.ts'
+import { choose, hardDepth } from './bot.ts'
 import {
   type Cell,
   emptyPosition,
@@ -58,6 +58,20 @@ describe('ultimate tic tac toe rules', () => {
     const next = play(p, 3)
     expect(next.active).toBe(-1)
     expect(legalMoves(next)).toHaveLength(71)
+  })
+
+  it('frees the rival when the move wins the very board it sends them to', () => {
+    // Red holds cells 0 and 8 of board 4 and plays its centre (cell 4): board 4 is
+    // won, and the move would send blue to board 4, which is now closed.
+    const p = emptyPosition(0)
+    p.cells[36] = 0
+    p.cells[44] = 0
+    p.cells[0] = 1
+    p.cells[9] = 1
+    const next = play(p, 40)
+    expect(next.won[4]).toBe(0)
+    expect(next.active).toBe(-1)
+    expect(legalMoves(next).every((m) => Math.floor(m / 9) !== 4)).toBe(true)
   })
 
   it('marks a small board when someone completes a line on it', () => {
@@ -146,6 +160,19 @@ describe('ultimate tic tac toe bot', () => {
     p.active = 0
     expect(choose(p, 'normal', new Rng(3))).toBe(2)
   })
+
+  it('searches deeper when the reply is forced into one board', () => {
+    expect(hardDepth(emptyPosition(0))).toBeLessThan(hardDepth(play(emptyPosition(0), 4)))
+  })
+
+  it('hard beats normal from either seat', () => {
+    for (const hardSide of [0, 1] as Side[]) {
+      const rng = new Rng(100 + hardSide)
+      let p = emptyPosition(hardSide)
+      while (!verdict(p)) p = play(p, choose(p, p.turn === hardSide ? 'hard' : 'normal', rng))
+      expect(verdict(p)?.winner).toBe(hardSide)
+    }
+  }, 30_000)
 
   it('always returns a legal move', () => {
     const rng = new Rng(11)

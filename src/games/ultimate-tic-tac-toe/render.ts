@@ -33,6 +33,10 @@ export function cellCentre(geo: Geom, b: number, i: number): { x: number; y: num
   return { x: o.x + ((i % 3) + 0.5) * geo.cell, y: o.y + (Math.floor(i / 3) + 0.5) * geo.cell }
 }
 
+/** Damped wobble after an impact at t = 0: positive = wider and flatter. */
+const wobble = (t: number, amp: number, freq = 26, decay = 9): number =>
+  t <= 0 ? 0 : amp * Math.exp(-t * decay) * Math.sin(t * freq)
+
 /** Gap between a small board's panel and its neighbours. */
 const MARGIN = 0.06
 
@@ -113,8 +117,10 @@ export function renderUltimate(g: Draw, s: State, geo: Geom, now: number, live: 
       }
       const v = s.cells[m]
       if (v === null || v === undefined) continue
+      const age = now - (s.placedAt[m] ?? 0)
+      const land = wobble(age - 0.18, 0.2)
       g.alpha(won !== null ? 0.28 : full ? 0.6 : 1, () =>
-        drawMark(g, v, c.x, c.y, geo.cell * 0.9, now - (s.placedAt[m] ?? 0)),
+        drawMark(g, v, c.x, c.y, geo.cell * 0.9, age, 1 + land, 1 - land),
       )
     }
 
@@ -126,7 +132,16 @@ export function renderUltimate(g: Draw, s: State, geo: Geom, now: number, live: 
       const f = 1 - prog(t, 0, 0.35)
       if (f > 0) g.alpha(0.6 * f, () => g.rrect(px, py, ps, ps, 24, C.white))
       const k = inLine(b) ? 1 + 0.06 * Math.sin(now * 9) : 1
-      g.at(cx, cy, 0, () => drawMark(g, won, 0, 0, o.size * 0.78, t), k)
+      // The big mark slams down: squash on impact, then settles.
+      const slam = wobble(t - 0.2, 0.26, 22, 7)
+      g.at(
+        cx,
+        cy,
+        0,
+        () => drawMark(g, won, 0, 0, o.size * 0.78, t),
+        k * (1 + slam),
+        k * (1 - slam),
+      )
     } else if (full) {
       // A drawn board: a grey bar across it, nobody's.
       const cx = o.x + o.size / 2
