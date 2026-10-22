@@ -177,8 +177,13 @@ test('online has its own address, and leaving it leaves the room', async ({ brow
   await host.getByRole('button', { name: 'Back to games' }).click()
   await expect(host).toHaveURL(new RegExp(`#/online/${code}$`))
   await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
-  // The guest switches to 2P: back to a local address, out of the room.
+  // The guest switches to 2P: with the friend in the room it asks first; Stay keeps the room.
   await guest.getByRole('button', { name: '2P' }).click()
+  await guest.getByRole('button', { name: 'Stay' }).click()
+  await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
+  await guest.getByRole('button', { name: '2P' }).click()
+  await guest.getByRole('button', { name: 'Leave room' }).click()
+  // Back to a local address, out of the room.
   await expect(guest).toHaveURL(/#\/$/)
   await expect(guest.locator('.toast')).toContainText(`You left room ${code}`)
   await expect(host.locator('.status')).toContainText('Waiting for your friend', {
@@ -188,8 +193,10 @@ test('online has its own address, and leaving it leaves the room', async ({ brow
   await guest.locator('.toast button').click()
   await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
   await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 60_000 })
-  // Local games keep working while out of the room: 1P on the host…
+  // Local games keep working while out of the room: 1P on the host (confirming,
+  // since the guest is back in)…
   await host.getByRole('button', { name: '1P' }).click()
+  await host.getByRole('button', { name: 'Leave room' }).click()
   await expect(host).toHaveURL(/#\/$/)
   await host.locator('.card[data-id="tic-tac-toe"]').click()
   await expect(host).toHaveURL(/#\/play\/tic-tac-toe$/)
@@ -197,7 +204,7 @@ test('online has its own address, and leaving it leaves the room', async ({ brow
   // …and 2P (one Ready per half) on the guest, who is not pulled anywhere.
   // With the host gone the guest is back on the waiting screen.
   await expect(guest.locator('.status')).toContainText('Looking for the room', { timeout: 20_000 })
-  await guest.getByRole('button', { name: 'Back' }).click()
+  // Nobody else is in the room: 2P leaves straight away, from the same switch.
   await guest.getByRole('button', { name: '2P' }).click()
   await expect(guest).toHaveURL(/#\/$/)
   await guest.locator('.card[data-id="air-hockey"]').click()

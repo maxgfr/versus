@@ -7,7 +7,7 @@ import { h, onTap } from './dom.ts'
 import { icon, type IconName } from './icons.ts'
 import { go } from './router.ts'
 import { scoreboard } from './scoreboard.ts'
-import { openSettings } from './settings.ts'
+import { openSettings, sheet } from './settings.ts'
 import { ui } from './state.ts'
 import { toast } from './toast.ts'
 
@@ -35,8 +35,12 @@ export function playOnline(link: Link, g: GameMeta): void {
   toast(`Starting ${g.name}…`)
 }
 
-/** The game grid. `mode` online is the room screen once both phones are in (online.ts). */
-export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
+/**
+ * The home screen: the 1P · 2P · Online switch over the game grid. Online, the
+ * grid is the room once both phones are in; before that `panel` (the lobby or
+ * the waiting room, online.ts) takes the grid's place under the same switch.
+ */
+export function home(root: HTMLElement, initial: Mode = ui.local, panel?: HTMLElement): () => void {
   let mode = initial
   const games = builtGames()
   const screen = h('div.screen.home')
@@ -106,9 +110,9 @@ export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
             return
           }
           ui.local = m
-          // Leaving the room screen leaves the room (main.ts).
+          // Leaving the room screen leaves the room (main.ts): ask first if a friend is in it.
           if (mode === 'online') {
-            go('/')
+            askLeave(() => go('/'))
             return
           }
           mode = m
@@ -163,7 +167,9 @@ export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
       { style: { minHeight: '40px', padding: '0 14px', fontSize: '15px' } },
       'Leave',
     )
-    onTap(btn, () => go('/'))
+    onTap(btn, () =>
+      askLeave(() => void import('./online.ts').then((o) => (o.leaveRoom(), go('/online')))),
+    )
     if (!link.connected)
       return h(
         'div.online-banner.waiting',
@@ -197,7 +203,36 @@ export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
     return h('div', bar, again)
   }
 
+  /** Leaving a room with a friend in it disconnects them: one confirming tap. */
+  const askLeave = (leave: () => void) => {
+    const link = ui.link
+    if (!link?.connected) {
+      leave()
+      return
+    }
+    const leaveBtn = h('button.btn.big.tile.live', { style: { width: '100%' } }, 'Leave room')
+    const stay = h(
+      'button.btn.big.tile.ghost',
+      { style: { width: '100%', marginTop: '10px' } },
+      'Stay',
+    )
+    const close = sheet(screen, `Leave room ${link.code}?`, [
+      h('p.fine', { style: { fontSize: '17px' } }, 'Your friend will be disconnected.'),
+      leaveBtn,
+      stay,
+    ])
+    onTap(leaveBtn, () => {
+      close()
+      leave()
+    })
+    onTap(stay, close)
+  }
+
   const renderGrid = (animate: boolean) => {
+    if (panel) {
+      scroller.replaceChildren(panel)
+      return
+    }
     // FLIP: remember where each card was, re-render, then glide from there.
     const before = new Map<string, DOMRect>()
     if (animate)
@@ -274,15 +309,16 @@ export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
   renderModes()
   renderChips()
   renderGrid(false)
-  screen.append(top, modesEl, chipsEl, scroller, board)
+  if (panel) screen.append(top, modesEl, scroller)
+  else screen.append(top, modesEl, chipsEl, scroller, board)
   root.append(screen)
-  scroller.scrollTop = ui.scrollTop
+  if (!panel) scroller.scrollTop = ui.scrollTop
 
   // Online status changes re-render the banner.
-  const unwatch = ui.link?.watch(() => renderGrid(false))
+  const unwatch = panel ? undefined : ui.link?.watch(() => renderGrid(false))
 
   return () => {
-    ui.scrollTop = scroller.scrollTop
+    if (!panel) ui.scrollTop = scroller.scrollTop
     art.disconnect()
     unwatch?.()
   }

@@ -144,23 +144,18 @@ function qrImage(text: string): HTMLImageElement {
   return h('img', { src: q.createDataURL(6, 0), alt: 'QR code to join this room' })
 }
 
-function page(root: HTMLElement, title: string): HTMLElement {
-  const el = h('div.screen.page')
-  const back = h('button.icon-btn.tile', { 'aria-label': 'Back' }, icon('back'))
-  onTap(back, () => go('/'))
-  const body = h('div')
-  el.append(h('header.page-head', back, h('h1', title)), body)
-  root.append(el)
-  return body
+/** Online screens sit under the same 1P · 2P · Online switch as the game grid. */
+function page(root: HTMLElement, body: HTMLElement): () => void {
+  return home(root, 'online', body)
 }
 
 /** `#/online`: create a room or type a code. */
-export function lobby(root: HTMLElement): void {
+export function lobby(root: HTMLElement): (() => void) | void {
   if (ui.link) {
     go(roomPath(ui.link.code), true)
     return
   }
-  const body = page(root, 'Play online')
+  const body = h('div.online-page')
   const create = h('button.btn.big.tile.live', { style: { width: '100%' } }, 'Create a room')
   onTap(create, () => {
     audio.unlock()
@@ -216,6 +211,7 @@ export function lobby(root: HTMLElement): void {
       'The two phones connect directly when they can; otherwise moves pass through a public relay. Nothing is stored anywhere.',
     ),
   )
+  return page(root, body)
 }
 
 function ago(t: number): string {
@@ -263,9 +259,9 @@ function recent(): HTMLElement[] {
 }
 
 /** Waiting for the other phone: the code, the invite and its QR code. */
-function waiting(root: HTMLElement, link: Link): void {
+function waiting(root: HTMLElement, link: Link): () => void {
   const host = link.role === 'host'
-  const body = page(root, 'Play online')
+  const body = h('div.online-page')
   const share = h('button.btn.tile.live', icon('share'), 'Send invite')
   onTap(share, async () => {
     const url = inviteUrl(link.code)
@@ -297,6 +293,7 @@ function waiting(root: HTMLElement, link: Link): void {
     ),
     h('div.actions', host ? share : null, leave),
   )
+  return page(root, body)
 }
 
 /** `#/online/CODE`: joins the room; the game grid once both phones are in. */
