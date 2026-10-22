@@ -241,4 +241,79 @@ describe('pool rules', () => {
     expect(p.power).toBeGreaterThan(0)
     expect(BR).toBeGreaterThan(0)
   })
+
+  it('an 8 potted on the break is respotted, even when the break also claims a group', () => {
+    const w = newWorld(0, new Rng(21))
+    const p0 = POCKETS[0]
+    const p1 = POCKETS[1]
+    if (!p0 || !p1) throw new Error('no pocket')
+    // The 1 and the 8 sit in pocket mouths and drop on the first frame; the cue hits the 3.
+    staged(w, {
+      0: [500, 1200],
+      3: [500, 900],
+      1: [p1.x - 30, p1.y + 30],
+      8: [p0.x + 30, p0.y + 30],
+    })
+    expect(strike(w, 0, -1, 0.4)).toBe(true)
+    run(w)
+    expect(w.phase).toBe('aim')
+    expect(w.wins).toEqual([0, 0])
+    expect(w.balls[8]?.on).toBe(true)
+    expect(w.groups[0]).toBe('solid')
+    expect(w.turn).toBe(0)
+  })
+
+  it('sinking the last ball of the group and the 8 on one stroke loses the rack', () => {
+    const w = newWorld(0, new Rng(22))
+    w.groups = ['solid', 'stripe']
+    w.shots = 9
+    const pot = potLine(4, [500, 500])
+    const p2 = POCKETS[2]
+    if (!p2) throw new Error('no pocket')
+    staged(w, { 0: pot.cue, 2: pot.target, 8: [p2.x + 30, p2.y - 30], 9: [300, 1000] })
+    strike(w, pot.dir[0], pot.dir[1], 0.45)
+    run(w)
+    expect(w.potted).toContain(2)
+    expect(w.phase).toBe('rack')
+    expect(w.rackWinner).toBe(1)
+  })
+
+  it('the bot plays its pick out with the real rules: hard pots a makeable cut', () => {
+    const rng = new Rng(23)
+    const w = newWorld(0, rng)
+    w.groups = ['solid', 'stripe']
+    w.shots = 4
+    staged(w, { 0: [420, 1250], 5: [600, 600], 12: [300, 400], 8: [700, 1300] })
+    const p = choose(w, 0, 'hard', rng)
+    strike(w, p.dx, p.dy, p.power)
+    run(w)
+    expect(w.potted).toContain(5)
+    expect(w.foul).toBe('')
+    expect(w.turn).toBe(0)
+  })
+
+  it('never aims at a back-cut: every pot the bot lines up sends the cue towards the pocket side', () => {
+    const rng = new Rng(24)
+    const w = newWorld(0, rng)
+    w.groups = ['solid', 'stripe']
+    w.shots = 4
+    // The 6 sits between the cue and the bottom pockets; only forward pots make sense.
+    staged(w, { 0: [500, 700], 6: [500, 1100], 10: [800, 300] })
+    const p = choose(w, 0, 'normal', rng)
+    expect(p.dy).toBeGreaterThan(0)
+  })
+
+  it('hard beats easy most of the time', () => {
+    let hard = 0
+    for (let i = 0; i < 8; i++) {
+      const hardSide: Side = i % 2 === 0 ? 0 : 1
+      const { w } = botMatch(
+        hardSide === 0 ? 'hard' : 'easy',
+        hardSide === 0 ? 'easy' : 'hard',
+        100 + i,
+      )
+      if (winner(w, 1) === hardSide) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(6)
+  })
 })

@@ -1,6 +1,21 @@
 import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { BR, groupOf, HEAD, POCKETS, TABLE, validPlace, type Ball, type World } from './rules.ts'
+import {
+  BR,
+  DRAG,
+  groupOf,
+  HEAD,
+  left,
+  placeCue,
+  POCKETS,
+  SHOT_SPEED,
+  step,
+  strike,
+  TABLE,
+  validPlace,
+  type Ball,
+  type World,
+} from './rules.ts'
 
 interface Tuning {
   /** Angular error on the executed stroke (radians, ±). */
@@ -9,12 +24,16 @@ interface Tuning {
   power: number
   /** Seconds the computer "thinks" before it plays. */
   think: number
+  /** Candidate strokes played out with the real rules before choosing (0 = gut feeling). */
+  sims: number
+  /** Weighs where the cue ball ends up (next pot open for us, none for the rival). */
+  position: boolean
 }
 
 export const TUNING: Record<Difficulty, Tuning> = {
-  easy: { angle: 0.06, power: 0.2, think: 1.3 },
-  normal: { angle: 0.025, power: 0.09, think: 0.9 },
-  hard: { angle: 0.008, power: 0.03, think: 0.6 },
+  easy: { angle: 0.05, power: 0.22, think: 1.3, sims: 0, position: false },
+  normal: { angle: 0.02, power: 0.09, think: 0.9, sims: 10, position: false },
+  hard: { angle: 0.006, power: 0.03, think: 0.6, sims: 40, position: true },
 }
 
 export interface Pick {
@@ -25,7 +44,7 @@ export interface Pick {
   power: number
 }
 
-/** Balls the side may pot now: its group, or the 8 once the group is cleared. */
+/** Balls the side may hit first now: its group, or the 8 once the group is cleared. */
 export function targetsOf(w: World, side: Side): Ball[] {
   const g = w.groups[side]
   return w.balls.filter((b) => {
@@ -61,16 +80,27 @@ export function clear(
   return true
 }
 
-/**
- * The stroke for `side`: a straight pot if one is open (the cue ball goes where
- * the ghost ball sits), otherwise the nearest ball is hit gently. With the cue in
- * hand, the cue is put down behind the target first.
- */
-export function choose(w: World, side: Side, d: Difficulty, rng: Rng): Pick {
-  const tune = TUNING[d]
+/** Power (0..1) that sends the object ball `len` units after a cut of `cos`, the cue travelling `dl` first. */
+export function potPower(len: number, dl: number, cos: number): number {
+  // Exponential drag: a ball launched at v rolls v / DRAG. Aim to arrive with pace to spare.
+  const vObj = (len + 60) * DRAG * 1.3 + 90
+  const vHit = vObj / (Math.max(0.2, cos) * 0.975)
+  const v0 = vHit + dl * DRAG
+  return v0 / SHOT_SPEED
+}
+
+interface Cand {
+  pick: Pick
+  /** Geometric guess of how good it is (lower is better), for the gut-feeling bot and the shortlist. */
+  cost: number
+  pot: boolean
+}
+
+/** Every straight-line pot open to `side` (cue in hand: placed behind the object ball). */
+function pots(w: World, side: Side): Cand[] {
   const cue = w.balls[0]
   const inHand = w.phase === 'place'
-  let best: { score: number; pick: Pick } | null = null
+  const out: Cand[] = []
   for (const t of targetsOf(w, side)) {
     for (const p of POCKETS) {
       const ux = t.x - p.x
@@ -78,60 +108,137 @@ export function choose(w: World, side: Side, d: Difficulty, rng: Rng): Pick {
       const len = Math.hypot(ux, uy) || 1
       const bx = ux / len
       const by = uy / len
+      // Middle pockets swallow only balls coming in steeply.
+      if (p.x > TABLE.x0 + 1 && p.x < TABLE.x1 - 1 && Math.abs(by) < 0.45) continue
       if (!clear(w, t.x, t.y, p.x, p.y, [t.n])) continue
-      // Where the cue must sit to hit the target straight into the pocket (ghost ball).
+      // Where the cue must touch to send the target straight into the pocket (ghost ball).
       const gx = t.x + bx * BR * 2
       const gy = t.y + by * BR * 2
-      const c0 = inHand
-        ? { x: t.x + bx * (BR * 2 + 70), y: t.y + by * (BR * 2 + 70) }
-        : { x: cue?.x ?? HEAD.x, y: cue?.y ?? HEAD.y }
-      if (inHand && !validPlace(w, c0.x, c0.y)) continue
-      if (!clear(w, c0.x, c0.y, gx, gy, [t.n, 0])) continue
-      const dx = gx - c0.x
-      const dy = gy - c0.y
-      const dl = Math.hypot(dx, dy) || 1
-      // A thin cut is harder than a straight one.
-      const cos =
-        ((t.x - gx) * (p.x - t.x) + (t.y - gy) * (p.y - t.y)) /
-        (Math.hypot(t.x - gx, t.y - gy) * len || 1)
-      const score = dl + len + (1 - cos) * 600
-      if (best && score >= best.score) continue
-      const power = Math.min(1, Math.max(0.2, 0.12 + len / 1150 + dl / 2600))
-      best = {
-        score,
-        pick: {
-          place: inHand ? c0 : null,
-          dx: dx / dl,
-          dy: dy / dl,
-          power,
-        },
+      const backs = inHand ? [150, 320] : [0]
+      for (const back of backs) {
+        const c0 = inHand
+          ? { x: gx + bx * back, y: gy + by * back }
+          : { x: cue?.x ?? HEAD.x, y: cue?.y ?? HEAD.y }
+        if (inHand && !validPlace(w, c0.x, c0.y)) continue
+        if (!clear(w, c0.x, c0.y, gx, gy, [t.n, 0])) continue
+        const dx = gx - c0.x
+        const dy = gy - c0.y
+        const dl = Math.hypot(dx, dy) || 1
+        // The cut: the angle between the cue's travel and the object ball's path.
+        const cos = (dx / dl) * -bx + (dy / dl) * -by
+        if (cos < 0.25) continue
+        const power = potPower(len, dl, cos)
+        const cost = dl * 0.5 + len + (1 - cos) * 900 + (power > 1 ? 2000 : 0)
+        out.push({
+          pick: {
+            place: inHand ? c0 : null,
+            dx: dx / dl,
+            dy: dy / dl,
+            power: Math.min(1, Math.max(0.16, power)),
+          },
+          cost,
+          pot: true,
+        })
       }
     }
   }
-  if (!best) {
-    // No pot is open: a gentle hit at the nearest of our balls (or any ball).
-    const cx = cue?.x ?? HEAD.x
-    const cy = cue?.y ?? HEAD.y
-    const pool = targetsOf(w, side)
-    const near = pool.reduce<Ball | null>(
-      (a, b) => (!a || Math.hypot(b.x - cx, b.y - cy) < Math.hypot(a.x - cx, a.y - cy) ? b : a),
-      null,
-    )
-    const tx = near?.x ?? TABLE.x0 + (TABLE.x1 - TABLE.x0) / 2
-    const ty = near?.y ?? TABLE.y0 + (TABLE.y1 - TABLE.y0) / 2
-    const place = inHand ? spotNear(w, tx, ty) : null
-    const px = place?.x ?? cx
-    const py = place?.y ?? cy
-    const dl = Math.hypot(tx - px, ty - py) || 1
-    best = {
-      score: Infinity,
-      pick: { place, dx: (tx - px) / dl, dy: (ty - py) / dl, power: 0.4 },
+  return out.sort((a, b) => a.cost - b.cost)
+}
+
+/** Safe strokes: a full hit on one of our balls at two paces, so at least the contact is legal. */
+function safeties(w: World, side: Side): Cand[] {
+  const out: Cand[] = []
+  const inHand = w.phase === 'place'
+  const cue = w.balls[0]
+  for (const t of targetsOf(w, side)) {
+    const place = inHand ? spotNear(w, t.x, t.y + (t.y < 900 ? 260 : -260)) : null
+    const px = place?.x ?? cue?.x ?? HEAD.x
+    const py = place?.y ?? cue?.y ?? HEAD.y
+    const dl = Math.hypot(t.x - px, t.y - py) || 1
+    const dx = (t.x - px) / dl
+    const dy = (t.y - py) / dl
+    const open = clear(w, px, py, t.x, t.y, [t.n, 0])
+    for (const power of [0.32, 0.55]) {
+      out.push({ pick: { place, dx, dy, power }, cost: dl + (open ? 0 : 1500) + 4000, pot: false })
     }
   }
-  const pk = best.pick
-  const ang = Math.atan2(pk.dy, pk.dx) + (rng.next() * 2 - 1) * tune.angle
-  const power = Math.min(1, Math.max(0.1, pk.power * (1 + (rng.next() * 2 - 1) * tune.power)))
-  return { place: pk.place, dx: Math.cos(ang), dy: Math.sin(ang), power }
+  return out.sort((a, b) => a.cost - b.cost)
+}
+
+/** Play a stroke out on a copy of the table with the real rules; the copy as it settles. */
+export function simulate(w: World, pick: Pick): World {
+  const c = structuredClone(w)
+  if (c.phase === 'place') {
+    if (!pick.place || !placeCue(c, pick.place.x, pick.place.y)) return c
+  }
+  if (!strike(c, pick.dx, pick.dy, pick.power)) return c
+  for (let i = 0; i < 60 * 20 && c.phase === 'roll'; i++) step(c, 1 / 60)
+  return c
+}
+
+/** How good a settled table is for `side` (higher is better). */
+function value(before: World, after: World, side: Side, position: boolean): number {
+  const rival: Side = side === 0 ? 1 : 0
+  if (after.phase === 'rack') return after.rackWinner === side ? 1e5 : -1e5
+  let v = 0
+  const mine = after.groups[side]
+  const theirs = after.groups[rival]
+  for (const n of after.potted) {
+    const gp = groupOf(n)
+    if (gp && gp === mine) v += 120
+    else if (gp && gp === theirs) v -= 40
+  }
+  if (after.phase === 'place' && after.turn === rival) v -= 900
+  else if (after.turn === side) v += 600
+  if (position) {
+    // Next stroke: an open pot for us when we keep the table, none for the rival when we hand it over.
+    const next = pots(after, after.turn).length
+    v += after.turn === side ? Math.min(3, next) * 90 : -Math.min(3, next) * 70
+    // Clearing the group sooner is worth something too.
+    v -= left(after, side) * 10 - left(before, side) * 10
+  }
+  return v
+}
+
+/**
+ * The stroke for `side`. Easy trusts its eye (the cheapest-looking straight
+ * pot); normal and hard play their shortlist out with the real rules and take
+ * the best outcome (hard also reads where the cue ball ends up). The executed
+ * stroke then carries the level's hand error.
+ */
+export function choose(w: World, side: Side, d: Difficulty, rng: Rng): Pick {
+  const tune = TUNING[d]
+  const potList = pots(w, side)
+  const safe = safeties(w, side)
+  let pick: Pick | null = null
+  if (tune.sims > 0) {
+    const short: Cand[] = []
+    for (const c of potList.slice(0, tune.sims)) {
+      short.push(c)
+      // A firmer variant too: some pots need more pace than the estimate.
+      if (c.pick.power < 0.85)
+        short.push({ ...c, pick: { ...c.pick, power: Math.min(1, c.pick.power * 1.35) } })
+    }
+    short.push(...safe.slice(0, Math.max(4, tune.sims / 4)))
+    let best = -Infinity
+    for (const c of short) {
+      const v = value(w, simulate(w, c.pick), side, tune.position) - c.cost * 0.02
+      if (v > best) {
+        best = v
+        pick = c.pick
+      }
+    }
+  } else {
+    pick = potList[0]?.pick ?? safe[0]?.pick ?? null
+  }
+  if (!pick) {
+    // Nothing of ours is reachable (should not happen): roll the cue up the table.
+    const place = w.phase === 'place' ? spotNear(w, HEAD.x, HEAD.y) : null
+    pick = { place, dx: 0, dy: -1, power: 0.4 }
+  }
+  const ang = Math.atan2(pick.dy, pick.dx) + (rng.next() * 2 - 1) * tune.angle
+  const power = Math.min(1, Math.max(0.1, pick.power * (1 + (rng.next() * 2 - 1) * tune.power)))
+  return { place: pick.place, dx: Math.cos(ang), dy: Math.sin(ang), power }
 }
 
 /** A free spot nearest (x, y) on the table, for a ball in hand that has no ideal spot. */

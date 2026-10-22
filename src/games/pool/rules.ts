@@ -20,7 +20,7 @@ export const POCKETS: { x: number; y: number; r: number }[] = [
   { x: (TABLE.x0 + TABLE.x1) / 2, y: TABLE.y0, r: 56 },
   { x: (TABLE.x0 + TABLE.x1) / 2, y: TABLE.y1, r: 56 },
 ]
-const DRAG = 1.45
+export const DRAG = 1.45
 const CUSHION_E = 0.74
 const BALL_E = 0.95
 /** Cue speed (units/s) at full power. */
@@ -341,16 +341,7 @@ function settle(w: World, ev: Event[]): void {
   else if (w.firstHit === 8) {
     if (own === null || left(w, shooter) > 0) foul = 'eight'
   } else if (own !== null && groupOf(w.firstHit) !== own) foul = 'wrong'
-  // The first legal pot claims its group for the shooter.
-  if (!foul && w.groups[0] === null && w.groups[1] === null) {
-    const first = potted.find((n) => n !== 0 && n !== 8)
-    if (first !== undefined) {
-      const g = groupOf(first)
-      w.groups[shooter] = g
-      w.groups[other(shooter)] = g === 'solid' ? 'stripe' : 'solid'
-    }
-  }
-  // The break: an 8 ball potted by accident goes back on the spot.
+  // The break: an 8 ball potted on it goes back on the spot (it never decides the rack).
   if (w.shots === 1 && potted.includes(8) && w.groups[0] === null && w.groups[1] === null) {
     const eight = w.balls[8]
     if (eight) {
@@ -364,9 +355,21 @@ function settle(w: World, ev: Event[]): void {
     }
     potted.splice(potted.indexOf(8), 1)
   }
+  // The first legal pot claims its group for the shooter.
+  if (!foul && w.groups[0] === null && w.groups[1] === null) {
+    const first = potted.find((n) => n !== 0 && n !== 8)
+    if (first !== undefined) {
+      const g = groupOf(first)
+      w.groups[shooter] = g
+      w.groups[other(shooter)] = g === 'solid' ? 'stripe' : 'solid'
+    }
+  }
   // The 8 ball decides the rack.
   if (potted.includes(8)) {
-    const clean = !foul && w.groups[shooter] !== null && left(w, shooter) === 0
+    // Only a shooter already on the black wins: sinking the last ball of the
+    // group and the 8 on the same stroke still loses.
+    const clean =
+      !foul && own !== null && left(w, shooter) === 0 && !potted.some((n) => groupOf(n) === own)
     endRack(w, clean ? shooter : other(shooter), ev)
     return
   }

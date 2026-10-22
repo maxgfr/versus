@@ -1,8 +1,9 @@
 import { DragAim } from '../../core/controls.ts'
-import { lerp } from '../../core/fx/ease.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import { H, MID, W } from '../../core/stage.ts'
 import { choose, type Pick, TUNING } from './bot.ts'
 import { type Aim, type Look, render } from './render.ts'
 import {
@@ -16,6 +17,7 @@ import {
   rerack,
   step,
   strike,
+  validPlace,
   winner,
   type World,
 } from './rules.ts'
@@ -28,6 +30,8 @@ interface State {
   stroke: { x: number; y: number; dx: number; dy: number; power: number; at: number } | null
   /** Set once the match is decided: the winner and when (this.time). */
   end: { side: Side; at: number } | null
+  /** Ball in hand being dragged around by a finger, and whether it fits there. */
+  hand: { x: number; y: number; ok: boolean } | null
 }
 
 /** Racks to win (each rack is one 8-ball game), chosen by the players before the match. */
@@ -46,11 +50,15 @@ class Pool extends BaseGame<State> {
   ]
   private thinking = 0
   private thinkFor = 0
-  private rackT = 0
   /** The computer's chosen stroke, shown drawing back while it "thinks". */
   private plan: Pick | null = null
-  // Cosmetic only (not synced): previous positions for interpolation.
+  // Cosmetic only (not synced): previous positions for interpolation, ball roll
+  // (phase and heading, accumulated from drawn motion), contact pops, tray pulses.
   private prev: Ball[] | null = null
+  private roll = new Float64Array(16 * 4)
+  private pop: Spring[] = Array.from({ length: 16 }, () => new Spring(1, 520, 16))
+  private pulse: [Spring, Spring] = [new Spring(0, 240, 11), new Spring(0, 240, 11)]
+  private trail: { x: number; y: number }[] = []
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -60,7 +68,7 @@ class Pool extends BaseGame<State> {
     // Local 2P: whoever's turn it is may pull and tap from anywhere on the table.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.w.turn
     const breaker: Side = this.ctx.rng.chance(0.5) ? 0 : 1
-    return { w: newWorld(breaker, this.ctx.rng), aim: null, stroke: null, end: null }
+    return { w: newWorld(breaker, this.ctx.rng), aim: null, stroke: null, end: null, hand: null }
   }
 
   protected step(dt: number): void {
@@ -68,8 +76,8 @@ class Pool extends BaseGame<State> {
     this.prev = w.balls.map((b) => ({ ...b }))
     for (const e of step(w, dt)) this.juice(e)
     if (w.phase === 'rack') {
-      this.rackT += dt
-      if (this.rackT >= RACK_PAUSE) {
+      // The rules tick w.t while the rack stamp shows.
+      if (w.t >= RACK_PAUSE) {
         const won = winner(w, this.target)
         if (won !== null) {
           if (!this.over) {
@@ -78,8 +86,8 @@ class Pool extends BaseGame<State> {
           }
           return
         }
-        this.rackT = 0
         rerack(w, this.ctx.rng)
+        this.ctx.audio.play('roll', 1.2)
       }
       return
     }
@@ -140,38 +148,56 @@ class Pool extends BaseGame<State> {
     if (w.phase === 'aim') this.strikeNow(p.dx, p.dy, p.power)
   }
 
-  /** Strike, with the follow-through and the crack. */
+  /** Strike, with the follow-through and the crack, all scaled by the stroke's power. */
   private strikeNow(dx: number, dy: number, power: number): void {
     const w = this.s.w
     const c = w.balls[0]
     if (!c || !strike(w, dx, dy, power)) return
+    const { fx, audio } = this.ctx
     for (const a of this.aims) a.cancel()
     this.s.aim = null
+    this.s.hand = null
     this.s.stroke = { x: c.x, y: c.y, dx, dy, power, at: this.time }
-    this.ctx.audio.play('hit', 0.8 + power * 0.5)
-    if (power > 0.75) {
-      this.ctx.fx.shake(0.12 + (power - 0.75))
-      this.ctx.audio.buzz(12)
+    audio.play('hit', 0.75 + power * 0.6)
+    if (power > 0.45) audio.play('whoosh', 0.8 + power * 0.5)
+    if (power > 0.6) {
+      fx.shake(0.08 + (power - 0.6) * 0.5)
+      audio.buzz(Math.round(6 + power * 12))
     }
-    this.ctx.fx.puff(c.x - dx * BR, c.y - dy * BR, 'rgba(160,220,255,0.6)', 4)
+    if (power > 0.9) fx.stop(2)
+    // Chalk puff off the tip, more of it the harder the stroke.
+    fx.puff(c.x - dx * BR, c.y - dy * BR, 'rgba(160,220,255,0.6)', Math.round(3 + power * 7))
+    this.pop[0]?.kick(-2 - power * 5)
   }
 
-  /** A human: a tap places the cue when it is in hand; a pull from anywhere strikes. */
+  /**
+   * A human: with the cue in hand a finger carries it (it follows the finger and
+   * lands where the finger lifts; a plain tap works too); otherwise a pull from
+   * anywhere strikes.
+   */
   private humanTurn(): void {
     const w = this.s.w
     const side = w.turn
     const inp = this.ctx.input.player(side)
     if (w.phase === 'place') {
       this.s.aim = null
-      const tap = inp.downs[0]
-      if (tap) {
-        if (placeCue(w, tap.x, tap.y)) {
+      const up = inp.ups[0]
+      const held = inp.first()
+      if (up) {
+        this.s.hand = null
+        if (placeCue(w, up.x, up.y)) {
           this.ctx.audio.play('place')
-          this.ctx.fx.ring(tap.x, tap.y, C.white, 70)
+          this.ctx.fx.ring(up.x, up.y, C.white, 70)
+          this.pop[0]?.kick(-5)
         } else this.ctx.audio.play('error')
+      } else if (held) {
+        const ok = validPlace(w, held.x, held.y)
+        if (ok && this.s.hand && !this.s.hand.ok) this.ctx.audio.play('tick', 1.4)
+        this.s.hand = { x: held.x, y: held.y, ok }
       }
       return
     }
+    this.s.hand = null
     const a = this.aims[side]
     const origin = a.origin
     a.update(inp)
@@ -194,55 +220,133 @@ class Pool extends BaseGame<State> {
         : null
   }
 
+  /** Number of the ball nearest a point, among those on the table. */
+  private nearest(x: number, y: number, skip = -1): number {
+    let best = -1
+    let bd = Infinity
+    for (const b of this.s.w.balls) {
+      if (!b.on || b.n === skip) continue
+      const d = (b.x - x) ** 2 + (b.y - y) ** 2
+      if (d < bd) {
+        bd = d
+        best = b.n
+      }
+    }
+    return best
+  }
+
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
+    const w = this.s.w
     if (e.kind === 'hit') {
-      audio.play('click', 0.9 + Math.min(0.7, e.speed / 1300))
-      if (e.speed > 500) fx.sparks(e.x, e.y, C.white, 4)
+      // k: 0 for a kiss, 1 for a full-blooded break.
+      const k = Math.min(1, e.speed / 1900)
+      audio.play('click', 0.85 + k * 0.75)
+      if (e.speed > 450) fx.sparks(e.x, e.y, C.white, Math.round(3 + k * 10))
+      if (e.speed > 1300) fx.shake(0.1 + k * 0.18)
+      if (e.speed > 1700) {
+        fx.stop(3)
+        audio.buzz(14)
+      } else if (e.speed > 900) audio.buzz(6)
+      const a = this.nearest(e.x, e.y)
+      const b = this.nearest(e.x, e.y, a)
+      this.pop[a]?.kick(-1 - k * 4)
+      this.pop[b]?.kick(-1 - k * 4)
     } else if (e.kind === 'cushion') {
-      audio.play('wall', 0.9 + Math.min(0.4, e.speed / 2000))
+      const k = Math.min(1, e.speed / 1800)
+      audio.play('wall', 0.8 + k * 0.5)
+      if (e.speed > 900) fx.puff(e.x, e.y, 'rgba(120,200,140,0.45)', Math.round(2 + k * 4))
     } else if (e.kind === 'pot') {
-      const w = this.s.w
       const shooter = w.turn
       const own = w.groups[shooter]
       const good = e.n !== 0 && (own === null ? e.n !== 8 : groupOf(e.n) === own)
       audio.play(e.n === 0 ? 'error' : 'pop', e.n === 8 ? 0.8 : 1 + e.n / 30)
       audio.play('chomp', 0.9)
       const col = e.n === 0 ? C.white : good ? SIDE[shooter].light : C.yellow
+      // The pocket coughs the burst back out onto the felt.
       fx.burst(e.x, e.y, col, {
         count: 16,
-        speed: 320,
+        speed: 360,
         size: 10,
         life: 0.6,
         gravity: 0,
         drag: 3,
+        spread: Math.PI * 1.1,
+        dir: Math.atan2(MID - e.y, W / 2 - e.x),
         colors: e.n === 0 ? [C.white] : [col, C.yellow, C.white],
         kind: 'square',
       })
       fx.ring(e.x, e.y, col, 110)
       fx.shake(e.n === 8 ? 0.35 : 0.12)
-      if (e.n === 8) fx.stop(4)
-      if (good) fx.float('+1', e.x, e.y + (e.y < 900 ? 90 : -90), SIDE[shooter].light, 48, shooter)
+      audio.buzz(e.n === 8 ? 30 : 12)
+      if (e.n === 8) fx.stop(5)
+      if (good) {
+        fx.float('+1', e.x, e.y + (e.y < MID ? 90 : -90), SIDE[shooter].light, 48, shooter)
+        this.pulse[shooter].kick(12)
+      }
     } else if (e.kind === 'foul') {
       audio.play('buzz')
+      audio.buzz(20)
       fx.flash(C.red, 0.15)
+      fx.shake(0.15)
     } else if (e.kind === 'turn') {
       audio.play('tick', 1.1)
+      this.pulse[e.side].kick(6)
     } else if (e.kind === 'rack') {
+      const col = SIDE[e.side]
       audio.play('score')
+      audio.buzz(35)
+      fx.flash(col.main, 0.3)
+      fx.shake(0.4)
+      fx.stop(6)
+      fx.burst(W / 2, e.side === 0 ? H - 150 : 150, col.main, {
+        count: 40,
+        speed: 1000,
+        size: 15,
+        life: 1.1,
+        gravity: 0,
+        drag: 2.2,
+        spread: Math.PI,
+        dir: e.side === 0 ? -Math.PI / 2 : Math.PI / 2,
+        colors: [col.main, col.light, C.yellow, C.white],
+        kind: 'square',
+      })
       fx.confetti(e.side)
-      fx.flash(SIDE[e.side].main, 0.25)
+      this.pulse[e.side].kick(16)
     }
   }
 
   render(g: Draw, alpha: number): void {
     const w = this.s.w
     const prev = this.prev
+    const dt = 1 / 60
     const balls = w.balls.map((b, i): Ball => {
       const p = prev?.[i]
       if (!p || !b.on || !p.on) return b
       return { ...b, x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha) }
     })
+    // Roll: each ball's printed spot turns over as far as the ball travelled on screen.
+    const r = this.roll
+    for (const b of balls) {
+      const o = b.n * 4
+      const mx = b.x - (r[o] ?? b.x)
+      const my = b.y - (r[o + 1] ?? b.y)
+      const d = Math.hypot(mx, my)
+      if (d > 0.3 && d < 200) {
+        r[o + 2] = (r[o + 2] ?? 0) + d / BR
+        r[o + 3] = Math.atan2(my, mx)
+      }
+      r[o] = b.x
+      r[o + 1] = b.y
+    }
+    // Trail behind a fast cue ball.
+    const cue = balls[0]
+    const cueSp = Math.hypot(w.balls[0]?.vx ?? 0, w.balls[0]?.vy ?? 0)
+    if (cue && cue.on && w.phase === 'roll' && cueSp > 700) this.trail.push({ x: cue.x, y: cue.y })
+    else this.trail.shift()
+    while (this.trail.length > 6) this.trail.shift()
+    for (const s of this.pop) s.update(dt)
+    for (const p of this.pulse) p.update(dt)
     const look: Look = {
       w,
       balls,
@@ -253,6 +357,11 @@ class Pool extends BaseGame<State> {
       target: this.target,
       status: [this.status(0), this.status(1)],
       active: [this.turnOf(0), this.turnOf(1)],
+      hand: this.s.hand,
+      roll: r,
+      pop: this.pop,
+      pulse: [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)],
+      trail: this.trail,
     }
     render(g, look, [!this.isBot(0), !this.isBot(1)])
   }
@@ -275,6 +384,7 @@ class Pool extends BaseGame<State> {
   override restore(snap: unknown): void {
     super.restore(snap)
     this.prev = null
+    this.trail = []
   }
 }
 

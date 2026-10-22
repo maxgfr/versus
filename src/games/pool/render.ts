@@ -51,6 +51,16 @@ export interface Look {
   target: number
   status: [string | undefined, string | undefined]
   active: [boolean, boolean]
+  /** Ball in hand carried by a finger. */
+  hand: { x: number; y: number; ok: boolean } | null
+  /** Per ball (n * 4): last drawn x, y, roll phase, roll heading. */
+  roll: Float64Array
+  /** Per ball contact pop (radius scale spring). */
+  pop: { value: number }[]
+  /** Tray pulse per side, 0..1. */
+  pulse: [number, number]
+  /** Recent cue ball positions while it flies. */
+  trail: { x: number; y: number }[]
   /** The decided match and how long ago (s), once it is. */
   end: { side: Side; t: number } | null
 }
@@ -186,7 +196,16 @@ function pocketDrawn(p: { x: number; y: number }): { x: number; y: number } {
 }
 
 /** A ball: glossy, striped for 9..15, with its number on an ivory disc. */
-export function drawBall(g: Draw, b: Ball, angle: number, r = BR, shadow = true): void {
+export function drawBall(
+  g: Draw,
+  b: Ball,
+  angle: number,
+  r = BR,
+  shadow = true,
+  /** How far the ball has rolled (radians) and which way, to turn its spot over. */
+  phase = 0,
+  heading = 0,
+): void {
   const { x, y } = b
   if (shadow) g.shadow(x + 6, y + 10, r * 0.95, r * 0.8, 0.4)
   const col = b.n === 0 ? IVORY : (COLORS[b.n] ?? IVORY)
@@ -213,17 +232,27 @@ export function drawBall(g: Draw, b: Ball, angle: number, r = BR, shadow = true)
       y - r * 0.4,
     ),
   )
+  // The spot rides over the top as the ball rolls and hides on the far side.
+  const front = Math.cos(phase)
+  const off = Math.sin(phase) * r * 0.55
+  const sx = x + Math.cos(heading) * off
+  const sy = y + Math.sin(heading) * off
   if (b.n === 0) {
-    g.circle(x + r * 0.25, y + r * 0.2, r * 0.12, alpha(C.red, 0.55))
-  } else {
-    g.circle(x, y, r * 0.52, IVORY)
-    g.at(x, y, angle, () =>
-      g.text(String(b.n), 0, r * 0.05, {
-        size: r * (b.n >= 10 ? 0.66 : 0.78),
-        weight: 700,
-        color: C.ink,
-      }),
-    )
+    if (front > -0.2)
+      g.circle(sx + r * 0.25 * front, sy + r * 0.2 * front, r * 0.12, alpha(C.red, 0.55))
+  } else if (front > 0) {
+    const fs = Math.max(0.2, front)
+    g.at(sx, sy, heading, () => g.ellipse(0, 0, r * 0.52 * fs, r * 0.52, IVORY))
+    if (front > 0.5)
+      g.alpha(Math.min(1, (front - 0.5) * 4), () =>
+        g.at(sx, sy, angle, () =>
+          g.text(String(b.n), 0, r * 0.05, {
+            size: r * (b.n >= 10 ? 0.66 : 0.78),
+            weight: 700,
+            color: C.ink,
+          }),
+        ),
+      )
   }
   g.alpha(0.75, () => g.ellipse(x - r * 0.36, y - r * 0.44, r * 0.3, r * 0.14, '#fff', -0.6))
 }
@@ -343,17 +372,21 @@ function isLegal(w: World, side: Side, n: number): boolean {
 }
 
 /** Ball in hand: the cue ball floats at the head spot (or where it lies), pulsing, with a hint. */
-function drawInHand(g: Draw, w: World, turn: Side, human: boolean): void {
+function drawInHand(g: Draw, w: World, turn: Side, human: boolean, hand: Look['hand']): void {
   const cue = w.balls[0]
-  const at = cue && cue.on ? cue : { x: HEAD.x, y: HEAD.y }
+  const at = hand ?? (cue && cue.on ? cue : { x: HEAD.x, y: HEAD.y })
   const k = 0.5 + 0.5 * Math.sin(g.t * 6)
-  g.alpha(0.55 + 0.3 * k, () =>
-    drawBall(g, { ...(cue as Ball), x: at.x, y: at.y - 8 }, 0, BR, false),
+  // Carried by a finger: lifted higher (bigger shadow offset), red ring where it won't fit.
+  const lift = hand ? 22 : 8 + k * 4
+  g.shadow(at.x + lift * 0.6, at.y + lift, BR * 0.9, BR * 0.7, hand ? 0.3 : 0.2)
+  g.alpha(hand ? 0.95 : 0.55 + 0.3 * k, () =>
+    drawBall(g, { ...(cue as Ball), x: at.x, y: at.y - lift }, 0, BR, false),
   )
-  g.ring(at.x, at.y, BR + 12 + k * 8, alpha(C.yellow, 0.8), 6)
-  if (human) {
+  const ring = hand && !hand.ok ? C.red : C.yellow
+  g.ring(at.x, at.y, BR + 12 + k * 8, alpha(ring, 0.8), 6)
+  if (human && !hand) {
     const y = turn === 0 ? MID + 360 : MID - 360
-    banner(g, turn, 'Ball in hand: tap to place', y, { size: 44, color: C.yellow, alpha: 0.95 })
+    banner(g, turn, 'Ball in hand: drag or tap', y, { size: 44, color: C.yellow, alpha: 0.95 })
   }
 }
 
@@ -364,14 +397,24 @@ function drawInHand(g: Draw, w: World, turn: Side, human: boolean): void {
 const HUD_INSET = 40
 
 /** Each player's tray: their group's balls still to pot (or "Open table"), and rack pips. */
-function tray(g: Draw, w: World, side: Side, target: number): void {
+function tray(g: Draw, w: World, side: Side, target: number, pulse: number): void {
   const y = hudY(g, side, HUD_INSET)
   const ang = textAngle(g, side)
   const grp: Group = w.groups[side]
   inFrame(g, side, () => {
     const yy = frame(side, 0, y).y
     g.rrect(560, yy - 34, 380, 68, 34, alpha(C.ink, 0.86))
-    g.rrect(560, yy - 34, 380, 68, 34, undefined, alpha(SIDE[side].main, 0.45), 3)
+    const pk = Math.min(1, pulse)
+    g.rrect(
+      560,
+      yy - 34,
+      380,
+      68,
+      34,
+      undefined,
+      alpha(SIDE[side].main, 0.45 + 0.55 * pk),
+      3 + 5 * pk,
+    )
     if (grp === null) {
       g.at(750, yy, ang, () =>
         g.text('Open table', 0, 2, { size: 34, weight: 600, color: alpha(C.white, 0.7) }),
@@ -388,7 +431,7 @@ function tray(g: Draw, w: World, side: Side, target: number): void {
       })
       if (cleared)
         g.at(750, yy, ang, () =>
-          g.text('Black!', 64, 2, { size: 30, weight: 700, color: C.yellow }),
+          g.text('Black!', 70, 2, { size: 34, weight: 700, color: C.yellow }),
         )
     }
     // Racks won, only when the match is longer than one rack: a column of
@@ -489,12 +532,27 @@ export function render(g: Draw, look: Look, human: [boolean, boolean]): void {
     const s = 1 - outCubic(k) * 0.7
     g.alpha(1 - k * k, () => drawBall(g, { ...b, x: p.x, y: p.y }, 0, BR * s, false))
   }
+  // A fast cue ball leaves a short comet tail.
+  look.trail.forEach((p, i) => {
+    const k = (i + 1) / (look.trail.length + 1)
+    g.circle(p.x, p.y, BR * (0.4 + 0.5 * k), alpha(IVORY, 0.18 * k))
+  })
   for (const b of look.balls) {
     if (!b.on) continue
     if (b.n === 0 && w.phase === 'place') continue
-    drawBall(g, b, b.y < MID ? g.orient(1) : g.orient(0))
+    const o = b.n * 4
+    const pop = Math.max(0.85, Math.min(1.2, look.pop[b.n]?.value ?? 1))
+    drawBall(
+      g,
+      b,
+      b.y < MID ? g.orient(1) : g.orient(0),
+      BR * pop,
+      true,
+      look.roll[o + 2] ?? 0,
+      look.roll[o + 3] ?? 0,
+    )
   }
-  if (w.phase === 'place') drawInHand(g, w, w.turn, human[w.turn])
+  if (w.phase === 'place') drawInHand(g, w, w.turn, human[w.turn], look.hand)
   if (look.aim && w.phase === 'aim') drawAim(g, w, look.aim, w.turn)
   // The stroke: the stick thrusts through the cue ball's old spot and fades.
   const st = look.stroke
@@ -514,7 +572,7 @@ export function render(g: Draw, look: Look, human: [boolean, boolean]): void {
       x: side === 0 ? 310 : W - 310,
       inset: HUD_INSET,
     })
-    tray(g, w, side, look.target)
+    tray(g, w, side, look.target, look.pulse[side])
   }
   if (look.end) ending(g, look.end, look.names[look.end.side])
 }
