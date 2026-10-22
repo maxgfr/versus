@@ -13,6 +13,11 @@ export interface Look {
   bats: [Disc, Disc]
   /** Drawn height of the ball above the table. */
   z: number
+  /** Spin angle of the ball's logo. */
+  roll: number
+  /** Net shiver (spring value) and where along it the ball crossed. */
+  net: number
+  netX: number
   trail: { x: number; y: number; z: number }[]
   squash: number[]
   /** 0..1 pulse for the scorer's figure. */
@@ -149,17 +154,32 @@ function drawTable(g: Draw): void {
   }
 }
 
-/** The net across the midline: shadow on the table, mesh, a white tape and two clamps. */
-function drawNet(g: Draw): void {
+/**
+ * The net across the midline: shadow on the table, mesh, a white tape and two
+ * clamps. `wob` bulges the tape around `cx` when the ball skims over it.
+ */
+function drawNet(g: Draw, wob: number, cx: number): void {
   const x0 = TABLE.x0 - 10
   const x1 = TABLE.x1 + 10
   g.rect(x0, MID + 6, x1 - x0, 22, alpha('#000000', 0.25))
   g.rect(x0, MID - 14, x1 - x0, 26, alpha(C.ink, 0.55))
+  // Ripple: a bump centred where the ball went over, fading along the tape.
+  const bump = (x: number): number => wob * 1.6 * Math.exp(-(((x - cx) / 170) ** 2))
   g.alpha(0.35, () => {
-    for (let x = x0 + 8; x < x1; x += 16) g.rect(x, MID - 14, 2, 26, '#ffffff')
+    for (let x = x0 + 8; x < x1; x += 16) g.rect(x, MID - 14 + bump(x) * 0.5, 2, 26, '#ffffff')
     g.rect(x0, MID - 2, x1 - x0, 2, '#ffffff')
   })
-  g.rrect(x0, MID - 20, x1 - x0, 10, 4, '#ffffff')
+  if (Math.abs(wob) < 0.3) g.rrect(x0, MID - 20, x1 - x0, 10, 4, '#ffffff')
+  else
+    g.path(
+      (c) => {
+        c.moveTo(x0, MID - 15 + bump(x0))
+        for (let x = x0 + 20; x <= x1; x += 20) c.lineTo(x, MID - 15 + bump(x))
+      },
+      undefined,
+      '#ffffff',
+      10,
+    )
   for (const x of [x0 - 6, x1 - 18]) {
     g.rrect(x, MID - 26, 24, 44, 8, shade(C.ink4, 0.1))
     g.rrect(x + 4, MID - 22, 16, 10, 4, alpha('#ffffff', 0.25))
@@ -235,7 +255,7 @@ function drawBat(
 }
 
 /** The ball with its drawn height: it grows and its shadow slides away as it rises. */
-function drawBall(g: Draw, b: Disc, z: number, a: number, scale = 1): void {
+function drawBall(g: Draw, b: Disc, z: number, a: number, scale = 1, roll = 0): void {
   const r = b.r * (1 + z / 260) * scale
   g.alpha(a, () => {
     g.alpha(Math.max(0.15, 0.45 - z / 400), () =>
@@ -248,6 +268,10 @@ function drawBall(g: Draw, b: Disc, z: number, a: number, scale = 1): void {
       ),
     )
     g.ball(b.x, b.y, r, C.white, 1)
+    // A little logo rolling round the ball shows its travel and spin.
+    const lx = Math.cos(roll) * r * 0.5
+    const lw = Math.max(0.15, Math.abs(Math.cos(roll)))
+    g.alpha(0.55 * lw, () => g.ellipse(b.x + lx, b.y + r * 0.1, r * 0.22 * lw, r * 0.3, C.orange))
   })
 }
 
@@ -364,13 +388,13 @@ export function render(g: Draw, w: World, look: Look): void {
       w.phase === 'serve' && w.server === side && look.ended < 0,
     )
   })
-  drawNet(g)
+  drawNet(g, look.net, look.netX)
   if (w.phase === 'play' || w.phase === 'serve') {
-    const hot = clamp((w.speed - 1300) / 800, 0, 1)
+    const hot = clamp((Math.hypot(w.ball.vx, w.ball.vy) - 1300) / 900, 0, 1)
     if (w.phase === 'play') trailOf(g, ball, look.trail, hot)
     if (hot > 0 && w.phase === 'play')
       g.alpha(hot * 0.35, () => g.circle(ball.x, ball.y, ball.r * 1.9, alpha(C.yellow, 0.5)))
-    drawBall(g, ball, look.z, look.serve)
+    drawBall(g, ball, look.z, w.phase === 'serve' ? 1 : look.serve, 1, look.roll)
     if (look.serve < 1)
       g.ring(ball.x, ball.y, ball.r * (2.6 - look.serve * 1.4), alpha(C.yellow, 1 - look.serve), 6)
   } else if (look.fell >= 0 && look.fell < 0.6) {

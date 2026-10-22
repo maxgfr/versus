@@ -10,6 +10,7 @@ import {
   bandOf,
   type Cmd,
   newWorld,
+  predictCross,
   REST_Y,
   serverOf,
   step,
@@ -58,6 +59,93 @@ describe('scoring rules', () => {
     expect(serverOf([2, 1], 0)).toBe(1)
     expect(serverOf([3, 1], 0)).toBe(0)
     expect(serverOf([0, 0], 1)).toBe(1)
+  })
+})
+
+describe('deuce', () => {
+  it('alternates the serve every point once both players reach target - 1', () => {
+    // First to 7: at 6-6 the two-point rhythm gives way to one point each.
+    const at66 = serverOf([6, 6], 0, 7)
+    expect(serverOf([7, 6], 0, 7)).toBe(at66 === 0 ? 1 : 0)
+    expect(serverOf([7, 7], 0, 7)).toBe(at66)
+    expect(serverOf([8, 7], 0, 7)).toBe(at66 === 0 ? 1 : 0)
+    // Before deuce, the usual two-point rhythm.
+    expect(serverOf([6, 5], 0, 7)).toBe(serverOf([6, 5], 0))
+  })
+
+  it('the world carries the chosen target into the serve rule', () => {
+    const w = newWorld(0, 3)
+    w.score = [2, 2]
+    const first = serverOf([2, 2], 0, 3)
+    inPlay(w, W / 2, TABLE.y1 + BALL_R - 1, 0, 900)
+    step(w, STEP, idle(), new Rng(1))
+    expect(w.score).toEqual([2, 3])
+    expect(w.server).toBe(first === 0 ? 1 : 0)
+  })
+})
+
+describe('stroke force', () => {
+  /** Red hits a ball dropping straight onto its bat while the bat moves at (bvx, bvy). */
+  function stroke(bvx: number, bvy: number): World {
+    const w = newWorld(0)
+    const bat = w.bats[0]
+    inPlay(w, bat.x, bat.y - (BAT_R + BALL_R + 6), 0, 900)
+    const cmd = idle()
+    cmd.target[0] = { x: bat.x + bvx * STEP, y: bat.y + bvy * STEP }
+    step(w, STEP, cmd, new Rng(1))
+    return w
+  }
+
+  it('moves the bat evenly through the substeps, at the finger speed', () => {
+    const w = newWorld(0)
+    const cmd = idle()
+    cmd.target[0] = { x: w.bats[0].x + 1200 * STEP, y: w.bats[0].y }
+    step(w, STEP, cmd, new Rng(1))
+    expect(w.bats[0].vx).toBeCloseTo(1200, 0)
+  })
+
+  it('driving the bat forward into the ball smashes it faster', () => {
+    const still = stroke(0, 0)
+    const smash = stroke(0, -2400)
+    const sp = (w: World) => Math.hypot(w.ball.vx, w.ball.vy)
+    expect(smash.rally).toBe(1)
+    expect(sp(smash)).toBeGreaterThan(sp(still) + 600)
+  })
+
+  it('pulling the bat back blocks: a softer return', () => {
+    const sp = (w: World) => Math.hypot(w.ball.vx, w.ball.vy)
+    expect(sp(stroke(0, 1500))).toBeLessThan(sp(stroke(0, 0)))
+  })
+
+  it('a sideways swipe puts curl on the ball, the way the bat moved', () => {
+    const w = stroke(1800, 0)
+    expect(w.spin).toBeGreaterThan(0)
+    const vx0 = w.ball.vx
+    for (let i = 0; i < 10; i++) step(w, STEP, idle(), new Rng(1))
+    expect(w.ball.vx).toBeGreaterThan(vx0 + 100)
+  })
+
+  it('the rail kills the spin so the ball cannot hug the wall', () => {
+    const w = inPlay(newWorld(0), TABLE.x1 - BALL_R - 2, 900, 800, -600)
+    w.spin = 1500
+    step(w, STEP, idle(), new Rng(1))
+    expect(w.spin).toBe(0)
+    expect(w.ball.vx).toBeLessThan(0)
+  })
+
+  it('predicts the curled crossing point the ball really reaches', () => {
+    const w = inPlay(newWorld(0), 400, 600, 300, 1200)
+    w.spin = 1200
+    const y = REST_Y[0]
+    const guess = predictCross(w, y)
+    expect(guess).not.toBeNull()
+    let prevY = w.ball.y
+    for (let i = 0; i < 200 && w.ball.y < y; i++) {
+      prevY = w.ball.y
+      step(w, STEP, idle(), new Rng(1))
+    }
+    expect(prevY).toBeLessThan(y)
+    expect(Math.abs((guess as number) - w.ball.x)).toBeLessThan(40)
   })
 })
 

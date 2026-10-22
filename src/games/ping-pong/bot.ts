@@ -2,8 +2,7 @@ import type { Difficulty, Side } from '../../core/game.ts'
 import { other } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import { W } from '../../core/stage.ts'
-import { predictX } from '../../engines/puck/index.ts'
-import { BALL_R, BAT_R, REST_Y, TABLE, type Target, type World, bandOf } from './rules.ts'
+import { BALL_R, BAT_R, REST_Y, type Target, type World, bandOf, predictCross } from './rules.ts'
 
 interface Tuning {
   /** Bat top speed (units/s). */
@@ -16,12 +15,14 @@ interface Tuning {
   miss: number
   /** Extra miss chance per stroke of the rally: long rallies wear the bot down. */
   fatigue: number
+  /** Chance per approach to step in and drive the bat through the ball (a smash). */
+  smash: number
 }
 
 export const TUNING: Record<Difficulty, Tuning> = {
-  easy: { speed: 1150, react: 0.26, noise: 90, miss: 0.14, fatigue: 0.02 },
-  normal: { speed: 1800, react: 0.13, noise: 40, miss: 0.06, fatigue: 0.012 },
-  hard: { speed: 2600, react: 0.05, noise: 10, miss: 0.02, fatigue: 0.007 },
+  easy: { speed: 1150, react: 0.26, noise: 90, miss: 0.14, fatigue: 0.02, smash: 0 },
+  normal: { speed: 1800, react: 0.13, noise: 40, miss: 0.06, fatigue: 0.012, smash: 0.18 },
+  hard: { speed: 2600, react: 0.05, noise: 10, miss: 0.02, fatigue: 0.007, smash: 0.35 },
 }
 
 /** Per-bot memory carried between steps (not part of the synced state). */
@@ -40,6 +41,8 @@ export interface BotMemory {
   mistimed: boolean
   /** Which way a mistimed bat ends up beside the ball. */
   missDir: number
+  /** Rolled once per approach: step in and smash this one. */
+  smashing: boolean
 }
 
 export const newMemory = (): BotMemory => ({
@@ -50,6 +53,7 @@ export const newMemory = (): BotMemory => ({
   incoming: false,
   mistimed: false,
   missDir: 1,
+  smashing: false,
 })
 
 export interface Decision {
@@ -88,18 +92,25 @@ export function decide(
   if (toward && !mem.incoming) {
     mem.mistimed = rng.next() < tune.miss + w.rally * tune.fatigue
     mem.missDir = rng.chance(0.5) ? -1 : 1
+    mem.smashing = !mem.mistimed && rng.next() < tune.smash
   }
   mem.incoming = toward
   if (w.phase !== 'play' || !toward) {
     mem.target = w.phase === 'play' ? { x: W / 2 + (w.ball.x - W / 2) * 0.4, y: rest.y } : rest
     return { target: mem.target, serve: false }
   }
-  const px = predictX(w.ball, REST_Y[side], TABLE, 2.5) ?? w.ball.x
+  // A smash waits at the back of the band, then lunges at the net as the ball arrives.
+  const band = bandOf(side)
+  const back = side === 0 ? band.y1 - 20 : band.y0 + 20
+  const front = side === 0 ? band.y0 + 30 : band.y1 - 30
+  const gap = Math.abs(w.ball.y - REST_Y[side])
+  const lunge = mem.smashing && gap < 320
+  const y = mem.smashing ? (lunge ? front : back) : rest.y
+  const px = predictCross(w, y) ?? w.ball.x
   const rival = w.bats[other(side)]
   // Aim the return away from the rival's side of the table.
   const want = -Math.max(-1, Math.min(1, (rival.x - W / 2) / 320)) * 0.6
   const reach = BAT_R + BALL_R
-  const band = bandOf(side)
   let x: number
   if (mem.mistimed) {
     // Mistimed: the bat ends up just beside the ball.
@@ -109,6 +120,6 @@ export function decide(
     x = px + (rng.next() - 0.5) * 2 * tune.noise - aim * reach
   }
   x = Math.max(band.x0, Math.min(band.x1, x))
-  mem.target = { x, y: rest.y }
+  mem.target = { x, y }
   return { target: mem.target, serve: false }
 }
