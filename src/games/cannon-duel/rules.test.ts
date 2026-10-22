@@ -13,6 +13,7 @@ import {
   fire,
   fort,
   newState,
+  nextRound,
   winner,
   WIND_MAX,
 } from './rules.ts'
@@ -93,5 +94,73 @@ describe('cannon duel', () => {
     let wins = 0
     for (let s = 1; s <= 5; s++) if (duel('hard', 'easy', s).winner === 0) wins++
     expect(wins).toBeGreaterThanOrEqual(3)
+  })
+})
+
+/** Shots one side needs to raze the other's keep when it shoots every turn. */
+function shotsToKill(d: Difficulty, seed: number): number {
+  const rng = new Rng(seed)
+  const wind = () => rng.range(-WIND_MAX, WIND_MAX)
+  const s = newState(0, wind())
+  let n = 0
+  while (winner(s) === null && n < 200) {
+    s.turn = 0
+    fire(s, choose(s, 0, d, rng))
+    n++
+    while (s.phase !== 'aim' && winner(s) === null) advance(s, STEP, wind)
+  }
+  return n
+}
+
+describe('cannon duel: edge cases', () => {
+  it('each difficulty is clearly sharper than the one below', () => {
+    const avg = (d: Difficulty) => {
+      let t = 0
+      for (let seed = 1; seed <= 12; seed++) t += shotsToKill(d, seed)
+      return t / 12
+    }
+    const [easy, normal, hard] = [avg('easy'), avg('normal'), avg('hard')]
+    expect(hard).toBeLessThan(normal)
+    expect(normal).toBeLessThan(easy)
+    // Easy still gets there: a beginner is not facing a wall.
+    expect(easy).toBeLessThan(30)
+  })
+
+  it('razing your own keep hands the round to your rival', () => {
+    const s = newState(0, 0)
+    const core = s.blocks.findIndex((b) => b.kind === 'core' && b.side === 0)
+    const k = s.blocks[core]
+    if (!k) throw new Error('no core')
+    k.hp = 1
+    s.shell = { x: k.x, y: k.y, z: 40, vx: 0, vy: 0, vz: -200, t: 0, side: 0 }
+    s.phase = 'fly'
+    const ev = advance(s, STEP, () => 0)
+    expect(ev[0]?.kind).toBe('boom')
+    expect(winner(s)).toBe(1)
+  })
+
+  it('ground hits leave a capped trail of craters, block hits do not', () => {
+    const s = newState(0, 0)
+    for (let i = 0; i < 14; i++) {
+      s.shell = { x: 500, y: 900, z: 5, vx: 0, vy: 0, vz: -600, t: 0, side: 0 }
+      s.phase = 'fly'
+      const ev = advance(s, STEP, () => 0)
+      const e = ev[0]
+      expect(e?.kind === 'boom' && e.speed > 500).toBe(true)
+    }
+    expect(s.craters.length).toBe(10)
+    expect(s.hitAt.length).toBe(s.blocks.length)
+  })
+
+  it('a new round brings fresh forts and clears the scars', () => {
+    const s = newState(0, 0)
+    s.craters.push({ x: 1, y: 2, r: 30 })
+    s.hitAt[0] = 3
+    s.wins[1] = 1
+    nextRound(s, 1, 0)
+    expect(s.craters).toEqual([])
+    expect(s.hitAt.every((t) => t === -1)).toBe(true)
+    expect(s.wins).toEqual([0, 1])
+    expect(s.turn).toBe(1)
   })
 })

@@ -17,6 +17,8 @@ export const BALL: Ballistics = { g: 1300, vmax: 1350, elev: 1, z0: 70 }
 export const WIND_MAX = 260
 export const BLAST_R = 80
 export const CORE_HP = 3
+/** A full-power shell lands at about this speed: impact juice is scaled against it. */
+export const IMPACT_MAX = 1900
 const BLOCK = 72
 
 export interface State {
@@ -40,7 +42,15 @@ export interface State {
   endedAt: number
   /** Banner for the round just decided. */
   roundText: string
+  /** Game time each block was last hit (index-aligned with `blocks`), -1 if never: wobble and collapse. */
+  hitAt: number[]
+  /** Scorch marks left by shells that hit the ground this round (newest last, capped). */
+  craters: { x: number; y: number; r: number }[]
+  /** Game time of the last shot, for the muzzle flash. */
+  firedAt: number
 }
+
+const MAX_CRATERS = 10
 
 /** Point symmetry: blue's fort is red's turned half a turn about the centre. */
 const mirror = (x: number, y: number, side: Side) =>
@@ -80,9 +90,10 @@ export function fort(side: Side): Block[] {
 }
 
 export function newState(starter: Side, wind: number): State {
+  const blocks = [...fort(0), ...fort(1)]
   return {
     turn: starter,
-    blocks: [...fort(0), ...fort(1)],
+    blocks,
     shell: null,
     wind,
     phase: 'aim',
@@ -97,6 +108,9 @@ export function newState(starter: Side, wind: number): State {
     starter,
     endedAt: -1,
     roundText: '',
+    hitAt: blocks.map(() => -1),
+    craters: [],
+    firedAt: -1,
   }
 }
 
@@ -116,7 +130,16 @@ export function fire(s: State, shot: ShotParams): void {
 }
 
 export type Event =
-  | { kind: 'boom'; x: number; y: number; hit: number[]; destroyed: number[]; direct: number }
+  | {
+      kind: 'boom'
+      x: number
+      y: number
+      hit: number[]
+      destroyed: number[]
+      direct: number
+      /** Impact speed (3D), drives how hard the hit feels. */
+      speed: number
+    }
   | { kind: 'miss'; x: number; y: number }
   | { kind: 'turn'; side: Side }
 
@@ -142,7 +165,20 @@ export function advance(s: State, dt: number, nextWind: () => number): Event[] {
           core ? 1 : 2,
           (b) => b.kind !== 'core',
         )
-        ev.push({ kind: 'boom', x: sh.x, y: sh.y, hit: r.hit, destroyed: r.destroyed, direct: hit })
+        const speed = Math.hypot(sh.vx, sh.vy, sh.vz)
+        ev.push({
+          kind: 'boom',
+          x: sh.x,
+          y: sh.y,
+          hit: r.hit,
+          destroyed: r.destroyed,
+          direct: hit,
+          speed,
+        })
+        if (hit < 0) {
+          s.craters.push({ x: sh.x, y: sh.y, r: 26 + Math.min(1, speed / IMPACT_MAX) * 22 })
+          if (s.craters.length > MAX_CRATERS) s.craters.shift()
+        }
         s.shell = null
         s.phase = 'boom'
         s.beat = 1.1

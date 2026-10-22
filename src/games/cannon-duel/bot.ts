@@ -5,9 +5,9 @@ import { jitter, type ShotParams, simulate, solveShot } from '../../engines/aim/
 import { BALL, cannonOf, coreOf, type State } from './rules.ts'
 
 const ERR: Record<Difficulty, { angle: number; power: number; wind: number }> = {
-  easy: { angle: 0.08, power: 0.07, wind: 0 },
-  normal: { angle: 0.045, power: 0.035, wind: 0.6 },
-  hard: { angle: 0.008, power: 0.008, wind: 1 },
+  easy: { angle: 0.05, power: 0.045, wind: 0.5 },
+  normal: { angle: 0.03, power: 0.025, wind: 0.8 },
+  hard: { angle: 0.014, power: 0.012, wind: 1 },
 }
 
 /** Aim at the rival core by simulation (wind as well as the bot can read it), then miss a little. */
