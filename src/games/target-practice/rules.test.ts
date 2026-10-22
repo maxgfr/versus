@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { STEP, type Difficulty, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { aimPoint, pickTarget, reaction } from './bot.ts'
+import { aimPoint, bestTarget, pickTarget, reaction } from './bot.ts'
 import {
   advance,
   BOLT_TIME,
@@ -12,6 +12,7 @@ import {
   isAlive,
   KINDS,
   leader,
+  lifeScale,
   MAX_ALIVE,
   newState,
   pointIn,
@@ -91,6 +92,7 @@ describe('target practice: landing', () => {
     const s = newState()
     const t = target(s, { x: 500, y: 900 })
     fire(s, 0, 500, 900)
+    advance(s, STEP, new Rng(3))
     s.reload[1] = 0
     fire(s, 1, 500, 905)
     const ev = run(s, new Rng(3), 0.5)
@@ -283,5 +285,77 @@ describe('target practice: computer players', () => {
     expect(steps).toBeLessThan(60 * 50)
     expect(s.score[0] + s.score[1]).toBeGreaterThan(0)
     expect(MAX_ALIVE).toBeGreaterThan(0)
+  })
+
+  it('normal and hard go for the most valuable open target, not a claimed one', () => {
+    const s = newState()
+    const can = target(s, { x: 500, y: 1500, kind: 'can' } as Partial<Target> & {
+      x: number
+      y: number
+    })
+    can.kind = 'can'
+    const bull = target(s, { x: 300, y: 500 })
+    bull.kind = 'bull'
+    expect(bestTarget(s, 0)?.id).toBe(bull.id)
+    // The rival already has a bolt on the bull: take the can.
+    fire(s, 1, bull.x, bull.y)
+    expect(bestTarget(s, 0)?.id).toBe(can.id)
+  })
+
+  it('hard outscores normal over seeded rounds', () => {
+    const play = (a: Difficulty, b: Difficulty, seed: number): [number, number] => {
+      const rng = new Rng(seed)
+      const s = newState()
+      const bots: [Difficulty, Difficulty] = [a, b]
+      const wait: [number, number] = [reaction(a, rng), reaction(b, rng)]
+      for (let i = 0; i < Math.round((TIME + 1) / STEP); i++) {
+        for (const side of [0, 1] as Side[]) {
+          wait[side] -= STEP
+          if (wait[side] > 0 || s.reload[side] > 0) continue
+          const d = bots[side]
+          const t = d === 'easy' ? pickTarget(s, side) : bestTarget(s, side)
+          if (!t) {
+            wait[side] = 0.1
+            continue
+          }
+          const p = aimPoint(t, d, rng)
+          fire(s, side, p.x, p.y)
+          wait[side] = reaction(d, rng)
+        }
+        advance(s, STEP, rng)
+        if (s.ended) break
+      }
+      return s.score
+    }
+    let wins = 0
+    for (let seed = 1; seed <= 8; seed++) {
+      const hs: Side = seed % 2 ? 0 : 1
+      const sc = play(hs === 0 ? 'hard' : 'normal', hs === 0 ? 'normal' : 'hard', 30 + seed)
+      if (sc[hs] > sc[hs === 0 ? 1 : 0]) wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(6)
+  })
+})
+
+describe('target practice: fairness and ramp', () => {
+  it('two bolts loosed on the same step at one target: a coin flip, not always red', () => {
+    const wins = [0, 0]
+    for (let seed = 1; seed <= 60; seed++) {
+      const s = newState()
+      target(s, { x: 500, y: 900 })
+      fire(s, 0, 500, 900)
+      fire(s, 1, 500, 900)
+      run(s, new Rng(seed), 0.5)
+      if (s.hits[0]) wins[0]!++
+      if (s.hits[1]) wins[1]!++
+    }
+    expect(wins[0]).toBeGreaterThan(15)
+    expect(wins[1]).toBeGreaterThan(15)
+    expect((wins[0] ?? 0) + (wins[1] ?? 0)).toBe(60)
+  })
+
+  it('targets stay up for less time late in the round', () => {
+    expect(lifeScale(0, TIME)).toBe(1)
+    expect(lifeScale(TIME, TIME)).toBeCloseTo(0.75, 5)
   })
 })

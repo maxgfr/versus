@@ -3,7 +3,7 @@ import { banner, bigScore, hudY, namePill } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, shade, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import { aimPoint, pickTarget, reaction } from './bot.ts'
+import { aimPoint, bestTarget, pickTarget, reaction } from './bot.ts'
 import { render } from './render.ts'
 import { advance, BOW, type Event, fire, leader, newState, type State, TIME } from './rules.ts'
 
@@ -64,7 +64,8 @@ class TargetPractice extends BaseGame<State> {
     if (this.s.reload[side] > 0 || this.s.left <= 0) return
     this.botWait[side] -= dt
     if (this.botWait[side] > 0) return
-    const t = pickTarget(this.s, side)
+    // Easy shoots whatever is nearest; normal and hard pick the most valuable open target.
+    const t = this.ctx.difficulty === 'easy' ? pickTarget(this.s, side) : bestTarget(this.s, side)
     if (!t) {
       this.botWait[side] = 0.1
       return
@@ -136,9 +137,19 @@ class TargetPractice extends BaseGame<State> {
             colors: ['#e9c47e', C.yellow, C.white],
           })
         }
-        fx.ring(t.x, t.y, SIDE[e.side].light, t.r * 2.4)
-        fx.shake(t.kind === 'bull' ? 0.22 : 0.14)
-        fx.stop(t.kind === 'bull' ? 4 : 2)
+        // Accuracy and a run of hits both turn the feedback up.
+        const k = Math.min(1, e.acc * 0.6 + Math.min(1, (e.streak - 1) / 6) * 0.4)
+        fx.ring(t.x, t.y, SIDE[e.side].light, t.r * (2.2 + k))
+        fx.shake((t.kind === 'bull' ? 0.18 : 0.1) + k * 0.15)
+        fx.stop(Math.round((t.kind === 'bull' ? 3 : 2) + k * 3))
+        audio.buzz(Math.round(10 + k * 20))
+        if (t.kind === 'bull' && e.acc > 0.75) {
+          audio.play('powerup', 1.3)
+          fx.sparks(t.x, t.y, C.yellow, 16)
+          fx.float('Bullseye!', t.x, t.y - up * (t.r + 40), C.yellow, 56, e.side)
+        }
+        if (e.streak >= 3 && e.streak % 3 === 0)
+          fx.float(`${e.streak} in a row!`, t.x, t.y + up * (t.r + 170), C.white, 44, e.side)
         fx.float(
           `+${e.pts}`,
           t.x,
@@ -211,7 +222,7 @@ class TargetPractice extends BaseGame<State> {
       }
     } else if (this.time < 6) {
       for (const side of [0, 1] as Side[]) {
-        if (this.isBot(side)) continue
+        if (this.isBot(side) || (g.viewer !== null && side !== g.viewer)) continue
         banner(g, side, 'Tap a target to shoot it', side === 0 ? MID + 150 : MID - 150, {
           size: 38,
           alpha: Math.min(1, (6 - this.time) * 2),

@@ -104,13 +104,24 @@ export interface State {
   shotAt: [number, number]
   pops: Pop[]
   misses: Miss[]
+  /** Hits in a row per side (a bolt that lands late resets it). */
+  streak: [number, number]
 }
 
 export type Event =
   | { kind: 'spawn'; target: Target }
   | { kind: 'expire'; target: Target }
   | { kind: 'fire'; side: Side; x: number; y: number }
-  | { kind: 'hit'; side: Side; target: Target; pts: number; bonus: boolean }
+  | {
+      kind: 'hit'
+      side: Side
+      target: Target
+      pts: number
+      bonus: boolean
+      /** How close to the centre it landed: 1 dead centre, 0 at the rim. */
+      acc: number
+      streak: number
+    }
   | { kind: 'late'; side: Side; x: number; y: number }
   | { kind: 'end' }
 
@@ -131,6 +142,7 @@ export function newState(length = TIME): State {
     shotAt: [-9, -9],
     pops: [],
     misses: [],
+    streak: [0, 0],
   }
 }
 
@@ -146,6 +158,11 @@ export function isAlive(t: Target, now: number): boolean {
 
 export function pointIn(t: Target, x: number, y: number, pad = 0): boolean {
   return (t.x - x) ** 2 + (t.y - y) ** 2 <= (t.r + pad) ** 2
+}
+
+/** Targets stay up for less time as the round goes on (down to 75% at the end). */
+export function lifeScale(elapsed: number, length: number): number {
+  return 1 - 0.25 * Math.min(1, Math.max(0, elapsed / length))
 }
 
 /** Pop a target at a random free spot across the table. */
@@ -165,7 +182,7 @@ export function spawn(s: State, rng: Rng): Target | null {
       y,
       r,
       born: s.now,
-      life: KINDS[kind].life * rng.range(0.9, 1.1),
+      life: KINDS[kind].life * rng.range(0.9, 1.1) * lifeScale(s.now, s.length),
       vy: kind === 'balloon' ? -36 : 0,
     }
     s.targets.push(t)
@@ -223,9 +240,19 @@ export function advance(s: State, dt: number, rng: Rng): Event[] {
   for (const t of gone) ev.push({ kind: 'expire', target: t })
   s.targets = s.targets.filter((t) => isAlive(t, s.now))
 
-  // Bolts arrive in the order they were loosed.
-  const landed = s.bolts.filter((b) => b.at <= s.now)
+  // Bolts arrive in the order they were loosed. Two loosed on the same step
+  // are a dead heat: a seeded coin flip decides, not the colour.
+  const landed = s.bolts.filter((b) => b.at <= s.now).sort((a, b) => a.at - b.at)
   s.bolts = s.bolts.filter((b) => b.at > s.now)
+  for (let i = 0; i + 1 < landed.length; i++) {
+    const a = landed[i] as Bolt
+    const b = landed[i + 1] as Bolt
+    if (a.at === b.at && a.side !== b.side && rng.chance(0.5)) {
+      landed[i] = b
+      landed[i + 1] = a
+      i++
+    }
+  }
   for (const b of landed) {
     const i = s.targets.findIndex((t) => t.id === b.target)
     const t = s.targets[i]
@@ -234,9 +261,20 @@ export function advance(s: State, dt: number, rng: Rng): Event[] {
       s.targets.splice(i, 1)
       s.score[b.side] += pts
       s.hits[b.side]++
+      if (s.streak) s.streak[b.side]++
       s.pops.push({ kind: t.kind, x: t.x, y: t.y, r: t.r, id: t.id, side: b.side, pts, at: s.now })
-      ev.push({ kind: 'hit', side: b.side, target: t, pts, bonus })
+      const acc = Math.max(0, 1 - Math.hypot(b.x - t.x, b.y - t.y) / t.r)
+      ev.push({
+        kind: 'hit',
+        side: b.side,
+        target: t,
+        pts,
+        bonus,
+        acc,
+        streak: s.streak?.[b.side] ?? 1,
+      })
     } else {
+      if (s.streak) s.streak[b.side] = 0
       s.misses.push({ side: b.side, x: b.x, y: b.y, at: s.now })
       ev.push({ kind: 'late', side: b.side, x: b.x, y: b.y })
     }
