@@ -28,6 +28,8 @@ export interface View {
   over: boolean
   /** Game time the match ended (-1 while playing). */
   endAt: number
+  /** Seconds the frame sits before the last step (for smooth motion between steps). */
+  back: number
 }
 
 /** World point of a point in `side`'s lane. */
@@ -41,8 +43,9 @@ export function renderDuel(g: Draw, lanes: [Lane, Lane], now: number, v: View): 
     const lane = lanes[side]
     inFrame(g, side, () => {
       for (const sp of lane.splats) splat(g, sp, now)
-      if (!v.over && now < 3.2) hint(g, side, now)
-      for (const f of lane.fruit) fruit(g, f, now)
+      // Online, each phone coaches only its own player.
+      if (!v.over && now < 3.2 && (g.viewer === null || g.viewer === side)) hint(g, side, now)
+      for (const f of lane.fruit) fruit(g, f, now, v.back)
       for (const h of lane.halves) half(g, h, now)
       swipe(g, side, lane, now)
     })
@@ -160,7 +163,11 @@ function hint(g: Draw, side: Side, now: number): void {
 
 // ---------- fruit ----------
 
-function fruit(g: Draw, f: Fruit, now: number): void {
+function fruit(g: Draw, fr: Fruit, now: number, back = 0): void {
+  // Drawn where it was a fraction of a step ago, so flight is smooth at any refresh rate.
+  const f = back > 0 ? { ...fr, x: fr.x - fr.vx * back, y: fr.y - fr.vy * back } : fr
+  // Squash at the top of the arc, stretch when rising or falling fast.
+  const st = 1 + Math.min(0.12, Math.abs(f.vy) / 12000)
   if (f.kind === BOMB) {
     const p = 0.5 + 0.5 * Math.sin(now * 14)
     // A red warning glow and a fizzing fuse, so bombs read as bombs.
@@ -178,7 +185,7 @@ function fruit(g: Draw, f: Fruit, now: number): void {
   }
   // A soft shadow under each fruit makes it feel thrown rather than pasted on.
   g.shadow(f.x + 14, f.y + 74, 54, 13, 0.22)
-  g.emoji((FRUITS[f.kind] as (typeof FRUITS)[number]).ch, f.x, f.y, FRUIT_SIZE, f.rot)
+  g.emoji((FRUITS[f.kind] as (typeof FRUITS)[number]).ch, f.x, f.y, FRUIT_SIZE, f.rot, 2 - st, st)
 }
 
 /** One half of a sliced fruit: the emoji clipped to its side of the cut, flesh showing. */
@@ -228,7 +235,7 @@ function swipe(g: Draw, side: Side, lane: Lane, now: number): void {
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1]
       const b = pts[i]
-      if (!a || !b) continue
+      if (!a || !b || b.b) continue
       const k = clamp(1 - (now - b.t) / TRAIL_LIFE, 0, 1)
       if (k <= 0) continue
       if (pass === 0) g.line(a.x, a.y, b.x, b.y, alpha(col.main, 0.45 * k), 10 + 46 * k)

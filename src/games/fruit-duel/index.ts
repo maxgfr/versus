@@ -121,17 +121,29 @@ class FruitDuel extends BaseGame<State> {
         continue
       }
       const juice = (FRUITS[ev.kind] as (typeof FRUITS)[number]).juice
-      ctx.audio.play('swish', 0.95 + ev.value * 0.05)
+      // A faster blade: higher swish, a wider spray, a little kick.
+      const k = ev.force
+      ctx.audio.play('swish', 0.9 + ev.value * 0.05 + k * 0.35)
       ctx.audio.play('pop', 1 + Math.random() * 0.15)
       fx.burst(p.x, p.y, juice, {
-        count: 22,
-        speed: 640,
+        count: Math.round(16 + k * 16),
+        speed: 520 + k * 420,
         size: 13,
         life: 0.6,
         gravity: 1100,
         drag: 2.2,
       })
-      fx.burst(p.x, p.y, juice, { count: 8, speed: 900, size: 6, life: 0.3, kind: 'spark' })
+      fx.burst(p.x, p.y, juice, {
+        count: Math.round(6 + k * 8),
+        speed: 800 + k * 500,
+        size: 6,
+        life: 0.3,
+        kind: 'spark',
+      })
+      if (k > 0.55) {
+        fx.shake(0.05 + k * 0.08)
+        ctx.audio.buzz(Math.round(6 + k * 8))
+      }
       fx.burst(p.x, p.y, '#ffffff', { count: 5, speed: 380, size: 6, life: 0.3, kind: 'spark' })
       fx.ring(p.x, p.y, juice, 120)
       floatFor(fx, side, `+${ev.value}`, p.x, p.y)
@@ -150,9 +162,10 @@ class FruitDuel extends BaseGame<State> {
     for (const lane of this.s.lanes) integrate(lane, dt, this.time)
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha = 1): void {
     const { s, ctx } = this
     renderDuel(g, s.lanes, this.time, {
+      back: this.over ? 0 : (1 - alpha) / 60,
       names: ctx.names,
       sec: Math.max(0, Math.ceil(this.limit() - this.time)),
       over: this.over,

@@ -4,7 +4,10 @@ import { SliceBot } from './bot.ts'
 import {
   BOMB,
   BOMB_PENALTY,
+  cutForce,
+  FAST_CUT,
   FRUITS,
+  MIN_CUT_SPEED,
   G,
   LAUNCH_Y,
   LIMIT,
@@ -50,10 +53,29 @@ describe('fruit duel rules', () => {
     expect(l.halves).toHaveLength(0)
   })
 
-  it('a tap (zero-length path) cuts a fruit under the finger', () => {
+  it('a resting finger does not cut: the blade must move', () => {
     const l = lane(0, 300, 1000)
+    // A finger held still on the fruit, and one creeping slower than the cut speed.
     slice(l, [[300, 1000, 300, 1000]], 1)
+    slice(l, [[300, 1000, 300 + (MIN_CUT_SPEED * STEP) / 2, 1000]], 1)
+    expect(l.fruit).toHaveLength(1)
+    // A real flick through it cuts.
+    slice(l, [[300, 1000, 300 + MIN_CUT_SPEED * STEP * 3, 1000]], 1)
     expect(l.fruit).toHaveLength(0)
+  })
+
+  it('a faster blade cuts harder: the halves fly further apart', () => {
+    const spread = (len: number): number => {
+      const l = lane(0, 500, 1200)
+      const evs = slice(l, [through(500, 1200, len)], 1)
+      const [a, b] = l.halves
+      expect(evs[0]?.k === 'slice' && evs[0].force).toBeGreaterThan(0)
+      return Math.hypot((a?.vx ?? 0) - (b?.vx ?? 0), (a?.vy ?? 0) - (b?.vy ?? 0))
+    }
+    expect(spread(60)).toBeGreaterThan(0)
+    expect(spread(200)).toBeGreaterThan(spread(30))
+    expect(cutForce([0, 0, FAST_CUT, 0], 1)).toBe(1)
+    expect(cutForce([0, 0, 1, 0], 1)).toBe(0)
   })
 
   it('slicing a bomb costs points', () => {
@@ -152,7 +174,10 @@ describe('fruit duel rules', () => {
     const l = laneNew()
     laneStep(l, STEP, 0, [], [[0, 0, 10, 10]])
     laneStep(l, STEP, 1, [], [[0, 0, 20, 20]])
-    expect(l.trail.length).toBe(1)
+    // The old stroke has faded; the new one starts fresh (not joined to the old one).
+    expect(l.trail.every((p) => p.t === 1)).toBe(true)
+    expect(l.trail[0]?.b).toBe(1)
+    expect(l.trail.length).toBe(2)
   })
 })
 
@@ -205,7 +230,26 @@ describe('fruit duel bot vs bot', () => {
     for (let seed = 0; seed < 20; seed++) {
       if (play(200 + seed, 'hard', 'easy').winner === 0) hard++
     }
-    expect(hard).toBeGreaterThanOrEqual(12)
+    expect(hard).toBeGreaterThanOrEqual(17)
+  })
+
+  it('hard never trails normal, and normal beats easy most of the time', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 0; seed < 10; seed++) {
+      const h = play(500 + seed, 'hard', 'normal')
+      if (h.scores[0] >= h.scores[1]) hard++
+      if (play(500 + seed, 'normal', 'easy').winner === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(9)
+    expect(normal).toBeGreaterThanOrEqual(7)
+  })
+
+  it('a late volley is busier than an early one', () => {
+    const sched = schedule(7, 120)
+    const early = sched.filter((t) => t.t < 30).length
+    const late = sched.filter((t) => t.t >= 90).length
+    expect(late).toBeGreaterThan(early)
   })
 
   it('hard bots hardly ever cut a bomb', () => {

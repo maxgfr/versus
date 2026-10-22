@@ -1,6 +1,6 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { BOMB, crossesBomb, FRUITS, type Lane, type Seg } from './rules.ts'
+import { BOMB, crossesBomb, distSq, FRUITS, type Lane, REACH, type Seg } from './rules.ts'
 
 /**
  * Computer slicer. It sees a fruit only after a reaction delay, swipes at the
@@ -9,11 +9,26 @@ import { BOMB, crossesBomb, FRUITS, type Lane, type Seg } from './rules.ts'
  * through the same slicing code as a human's.
  */
 
-const CFG: Record<Difficulty, { speed: number; react: [number, number]; accuracy: number }> = {
-  easy: { speed: 900, react: [0.55, 0.85], accuracy: 0.55 },
-  normal: { speed: 1400, react: [0.32, 0.5], accuracy: 0.85 },
-  hard: { speed: 2100, react: [0.18, 0.28], accuracy: 1 },
+interface Cfg {
+  /** Finger speed (world units / s): a cut needs the blade moving, see MIN_CUT_SPEED. */
+  speed: number
+  react: [number, number]
+  /** Chance it notices a bomb in the way. */
+  accuracy: number
+  /** Whether it lines up several fruit in one swipe for the combo bonus. */
+  combos: boolean
+  /** Aim error (world units, ±): a sloppy cut can miss its fruit. */
+  aim: number
 }
+
+export const CFG: Record<Difficulty, Cfg> = {
+  easy: { speed: 800, react: [0.5, 0.8], accuracy: 0.6, combos: false, aim: 40 },
+  normal: { speed: 1500, react: [0.28, 0.42], accuracy: 0.97, combos: true, aim: 24 },
+  hard: { speed: 2700, react: [0.12, 0.2], accuracy: 1, combos: true, aim: 10 },
+}
+
+/** How far past a fruit the finger follows through, so the blade is still moving as it cuts. */
+const FOLLOW = 90
 
 /** Where the finger rests between swipes, in lane coordinates. */
 const REST = { x: 500, y: 1400 }
@@ -60,10 +75,17 @@ export class SliceBot {
       this.moveTo(REST.x, REST.y, c.speed * 0.5 * dt)
       return null
     }
-    const aimX = fruit.x + t.ox + fruit.vx * 0.04
-    const aimY = fruit.y + t.oy + fruit.vy * 0.04
+    // Aim where the fruit will be, and swipe through it rather than stopping on it.
+    const lead = Math.hypot(fruit.x - this.pos.x, fruit.y - this.pos.y) / c.speed
+    let aimX = fruit.x + t.ox + fruit.vx * lead
+    let aimY = fruit.y + t.oy + (fruit.vy + 750 * lead) * lead
+    const dx = aimX - this.pos.x
+    const dy = aimY - this.pos.y
+    const d = Math.hypot(dx, dy) || 1
+    aimX += (dx / d) * FOLLOW
+    aimY += (dy / d) * FOLLOW
     const seg = this.moveTo(aimX, aimY, c.speed * dt)
-    if (t.respect && crossesBomb(l, seg)) {
+    if (t.respect && crossesBomb(l, seg, 1.45)) {
       // A bomb has drifted into the way: wait for a clear path.
       this.target = null
       return null
@@ -95,18 +117,28 @@ export class SliceBot {
       .map((f) => {
         const value = (FRUITS[f.kind] as (typeof FRUITS)[number]).value
         const dist = Math.hypot(f.x - this.pos.x, f.y - this.pos.y)
-        // Valuable fruit first, fruit on its way down first, near ones first.
-        return { f, score: value * 2 + (f.vy > 0 ? 1.2 : 0) - dist / 700 }
+        // Fruit lined up with this one on the way there: a combo swipe.
+        let lined = 0
+        if (c.combos) {
+          const line: Seg = [this.pos.x, this.pos.y, f.x, f.y]
+          for (const o of l.fruit)
+            if (o.id !== f.id && o.kind !== BOMB && distSq(o.x, o.y, line) < REACH * REACH * 0.6)
+              lined++
+        }
+        // Valuable fruit first, combos first, fruit on its way down first, near ones first.
+        return { f, score: value * 2 + lined * 2.5 + (f.vy > 0 ? 1.2 : 0) - dist / 700 }
       })
       .sort((a, b) => b.score - a.score)
+    // One look per decision: rolling for every candidate would make a bomb-blind
+    // pick near-certain whenever the board is busy.
+    const respect = cands.length > 0 && this.rng.chance(c.accuracy)
     for (const { f } of cands) {
-      const respect = this.rng.chance(c.accuracy)
       const line: Seg = [this.pos.x, this.pos.y, f.x, f.y]
-      if (respect && crossesBomb(l, line)) continue
+      if (respect && crossesBomb(l, line, 1.2)) continue
       this.target = {
         id: f.id,
-        ox: this.rng.range(-16, 16),
-        oy: this.rng.range(-16, 16),
+        ox: this.rng.range(-c.aim, c.aim),
+        oy: this.rng.range(-c.aim, c.aim),
         respect,
       }
       return

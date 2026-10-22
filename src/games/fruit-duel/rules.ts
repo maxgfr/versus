@@ -18,6 +18,13 @@ export const LAUNCH_Y = 1880
 export const REACH = 84
 /** Points lost for slicing a bomb. */
 export const BOMB_PENALTY = 5
+/**
+ * A blade must move to cut: a finger slower than this (world units / s) only
+ * brushes the fruit. A resting finger can no longer wait for fruit to fly into it.
+ */
+export const MIN_CUT_SPEED = 420
+/** Blade speed for the strongest cut (halves fly apart hardest, juice sprays widest). */
+export const FAST_CUT = 3200
 /** Swipe trail lifetime, seconds. */
 export const TRAIL_LIFE = 0.2
 /** Juice stains left on the board, newest last. */
@@ -91,6 +98,8 @@ export interface Pt {
   x: number
   y: number
   t: number
+  /** 1 when this point starts a new stroke (not joined to the one before). */
+  b?: 1
 }
 
 /** A juice stain (or a scorch mark for a bomb) on the board, cosmetic. */
@@ -133,6 +142,8 @@ export type Ev =
       bonus: number
       /** How many things this one swipe cut. */
       cut: number
+      /** 0..1 how fast the blade was moving. */
+      force: number
     }
 
 export const laneNew = (): Lane => ({
@@ -157,7 +168,8 @@ export function schedule(seed: number, limit = LIMIT): Throw[] {
   let t = 1.2
   while (t < limit) {
     const k = t / limit
-    const volley = rng.chance(0.1) ? 3 : rng.chance(0.35) ? 2 : 1
+    // Busier as the clock runs down: more doubles and triples late in the match.
+    const volley = rng.chance(0.06 + 0.16 * k) ? 3 : rng.chance(0.3 + 0.2 * k) ? 2 : 1
     for (let i = 0; i < volley; i++) {
       const bomb = rng.chance(0.13 + 0.06 * k)
       const kind = bomb ? BOMB : rng.int(0, FRUITS.length - 1)
@@ -213,8 +225,9 @@ export function distSq(px: number, py: number, s: Seg): number {
 }
 
 /** Would a swipe along `s` pass close to any bomb in the lane? */
-export function crossesBomb(l: Lane, s: Seg): boolean {
-  return l.fruit.some((f) => f.kind === BOMB && distSq(f.x, f.y, s) <= REACH * REACH)
+export function crossesBomb(l: Lane, s: Seg, margin = 1): boolean {
+  const r = REACH * margin
+  return l.fruit.some((f) => f.kind === BOMB && distSq(f.x, f.y, s) <= r * r)
 }
 
 /** Move fruit and halves for one step; drop what has fallen away or faded. */
@@ -247,13 +260,20 @@ function stain(l: Lane, f: Fruit, cut: number, time: number): void {
  * Fruit adds its value; a swipe that cuts several fruit also earns one bonus
  * point per fruit beyond the first.
  */
-export function slice(l: Lane, paths: readonly Seg[], time: number): Ev[] {
+/** How fast a blade segment moved over `dt`, as 0..1 of a full-speed cut (below the minimum: 0). */
+export function cutForce(s: Seg, dt: number): number {
+  const v = Math.hypot(s[2] - s[0], s[3] - s[1]) / Math.max(dt, 1e-6)
+  if (v < MIN_CUT_SPEED) return 0
+  return Math.min(1, Math.max(0.05, (v - MIN_CUT_SPEED) / (FAST_CUT - MIN_CUT_SPEED)))
+}
+
+export function slice(l: Lane, paths: readonly Seg[], time: number, dt = 1 / 60): Ev[] {
   const out: Ev[] = []
   if (paths.length === 0) return out
-  const hit: { f: Fruit; seg: Seg }[] = []
+  const hit: { f: Fruit; seg: Seg; force: number }[] = []
   for (const f of l.fruit) {
-    const seg = paths.find((s) => distSq(f.x, f.y, s) <= REACH * REACH)
-    if (seg) hit.push({ f, seg })
+    const seg = paths.find((s) => distSq(f.x, f.y, s) <= REACH * REACH && cutForce(s, dt) > 0)
+    if (seg) hit.push({ f, seg, force: cutForce(seg, dt) })
   }
   if (hit.length === 0) return out
   const hitIds = new Set(hit.map((h) => h.f.id))
@@ -262,7 +282,7 @@ export function slice(l: Lane, paths: readonly Seg[], time: number): Ev[] {
   const bonus = Math.max(0, fruitCut - 1)
   l.score += bonus
   let bonusLeft = bonus
-  for (const { f, seg } of hit) {
+  for (const { f, seg, force } of hit) {
     const cut = Math.atan2(seg[3] - seg[1], seg[2] - seg[0])
     stain(l, f, cut, time)
     l.hitAt = time
@@ -277,6 +297,7 @@ export function slice(l: Lane, paths: readonly Seg[], time: number): Ev[] {
         value: -BOMB_PENALTY,
         bonus: 0,
         cut: hit.length,
+        force,
       })
       continue
     }
@@ -286,20 +307,32 @@ export function slice(l: Lane, paths: readonly Seg[], time: number): Ev[] {
     // The combo bonus is shown once, on the first fruit of the swipe.
     const extra = bonusLeft
     bonusLeft = 0
-    out.push({ k: 'slice', x: f.x, y: f.y, kind: f.kind, value, bonus: extra, cut: hit.length })
-    // The two halves fly apart across the cut.
+    out.push({
+      k: 'slice',
+      x: f.x,
+      y: f.y,
+      kind: f.kind,
+      value,
+      bonus: extra,
+      cut: hit.length,
+      force,
+    })
+    // The two halves fly apart across the cut, harder for a faster blade, and
+    // carried a little along the swipe.
     const px = -Math.sin(cut)
     const py = Math.cos(cut)
     const spin = f.id % 2 === 0 ? 1 : -1
+    const apart = 220 + 260 * force
+    const carry = 160 * force
     for (const part of [1, -1] as const) {
       l.halves.push({
         kind: f.kind,
         x: f.x,
         y: f.y,
-        vx: f.vx + px * part * 300,
-        vy: f.vy + py * part * 300 - 120,
+        vx: f.vx + px * part * apart + Math.cos(cut) * carry,
+        vy: f.vy + py * part * apart - 120 + Math.sin(cut) * carry,
         rot: f.rot,
-        vr: spin * 5 * part,
+        vr: spin * (4 + 5 * force) * part,
         cut,
         part,
         born: time,
@@ -319,9 +352,15 @@ export function laneStep(
 ): Ev[] {
   const out = launchDue(l, sched, time)
   integrate(l, dt, time)
-  out.push(...slice(l, paths, time))
-  const last = paths[paths.length - 1]
-  if (last) l.trail.push({ x: last[2], y: last[3], t: time })
+  out.push(...slice(l, paths, time, dt))
+  // The blade trail follows the first finger; a fresh stroke is not joined to the last one.
+  const seg = paths[0]
+  if (seg) {
+    const prev = l.trail[l.trail.length - 1]
+    if (!prev || Math.hypot(prev.x - seg[0], prev.y - seg[1]) > 1)
+      l.trail.push({ x: seg[0], y: seg[1], t: time, b: 1 })
+    if (seg[2] !== seg[0] || seg[3] !== seg[1]) l.trail.push({ x: seg[2], y: seg[3], t: time })
+  }
   return out
 }
 
