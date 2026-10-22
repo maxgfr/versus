@@ -11,12 +11,13 @@ import {
   ARENA,
   ARENA_BOTTOM,
   HP,
+  OVERCHARGE_T,
   PITS,
   R,
   type Robot,
   SAW,
   ZAP_ARC,
-  ZAP_CD,
+  zapCdAt,
   ZAP_RANGE,
 } from './rules.ts'
 
@@ -216,6 +217,7 @@ function zap(g: Draw, r: Robot, now: number): void {
  * from the top, a visor with eyes, and a zap fork that glows yellow when ready.
  */
 function robot(g: Draw, r: Robot, now: number, cheer: boolean, squash = 1): void {
+  const full = zapCdAt(now)
   const col = SIDE[r.side]
   const hurt = clamp01(1 - (now - r.hitT) / 0.16)
   const fall = r.fell ? clamp01((now - r.koT) / 0.7) : 0
@@ -232,7 +234,7 @@ function robot(g: Draw, r: Robot, now: number, cheer: boolean, squash = 1): void
     return
   }
   const ready = r.cd <= 0
-  const charge = clamp01(1 - r.cd / ZAP_CD)
+  const charge = clamp01(1 - r.cd / full)
   const shake = hurt > 0 ? jag(now * 50, r.id) * 8 * hurt : 0
   const hop = cheer ? Math.abs(Math.sin(now * 9)) * 10 : 0
   const sc = 1.12 * (1 - fall * 0.75) * (1 + hop / 120)
@@ -441,6 +443,22 @@ export function renderRobots(g: Draw, s: State, now: number, v: View, look: Look
   g.fillView(C.ink)
   drawStrip(g, ARENA.y0 - 28, ARENA_BOTTOM + 28)
   floor(g)
+  if (w.t >= OVERCHARGE_T) {
+    // Overcharge: the arena rim crackles yellow.
+    const k = Math.min(1, (w.t - OVERCHARGE_T) / 1)
+    g.alpha(k * (0.3 + 0.25 * Math.sin(g.t * 11)), () =>
+      g.rrect(
+        ARENA.x0 - 14,
+        ARENA.y0 - 14,
+        ARENA.size + 28,
+        ARENA.size + 28,
+        30,
+        undefined,
+        C.yellow,
+        8,
+      ),
+    )
+  }
   for (const p of PITS) pit(g, p.x, p.y, p.r, w.t)
   const hot = Math.max(0, ...w.robots.map((k) => clamp01(1 - (w.t - k.sawT) / 0.3)))
   saw(g, w.t, hot)

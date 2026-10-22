@@ -21,6 +21,14 @@ export const ZAP_RANGE = 190
 export const ZAP_ARC = 0.85
 export const ZAP_DMG = 22
 export const ZAP_CD = 1.1
+/**
+ * Overcharge: a fight still going after this many seconds turns frantic, and
+ * both robots' zaps recharge faster for the rest of the round.
+ */
+export const OVERCHARGE_T = 20
+export const OVERCHARGE_CD = 0.7
+/** Zap cooldown at round time `t`. */
+export const zapCdAt = (t: number): number => (t >= OVERCHARGE_T ? OVERCHARGE_CD : ZAP_CD)
 /** Knock-back speed a zap gives the robot it hits. */
 export const ZAP_PUSH = 360
 /**
@@ -86,6 +94,8 @@ export type Ev =
   | { k: 'ram'; x: number; y: number; dmg: number; speed: number; by: Side }
   | { k: 'saw'; x: number; y: number; side: Side }
   | { k: 'wall'; x: number; y: number; v: number }
+  /** The fight has gone on long enough: overcharge starts. */
+  | { k: 'overcharge' }
   | { k: 'fall'; x: number; y: number; side: Side }
   | { k: 'ko'; x: number; y: number; side: Side }
 
@@ -267,12 +277,13 @@ export function stepWorld(
         b.vy += uy * closing * 0.5
       }
     }
+  if (w.t < OVERCHARGE_T && w.t + dt >= OVERCHARGE_T) ev.push({ k: 'overcharge' })
   w.t += dt
 }
 
 /** A zap: every rival inside the arc in front of the robot takes damage and is pushed back. */
 function zap(w: World, r: Robot, ev: Ev[]): void {
-  r.cd = ZAP_CD
+  r.cd = zapCdAt(w.t)
   r.zapT = w.t
   // Lunge: the robot's own speed along its facing, as a share of full speed.
   const power = Math.max(0, Math.min(1, (r.vx * Math.cos(r.a) + r.vy * Math.sin(r.a)) / MAX_SPEED))

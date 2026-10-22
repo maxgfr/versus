@@ -21,7 +21,7 @@ import {
   newWorld,
   roundWinner,
   stepWorld,
-  ZAP_CD,
+  zapCdAt,
   type World,
 } from './rules.ts'
 
@@ -102,7 +102,7 @@ class Robots extends BaseGame<State> {
     this.smoke()
     s.ctl = this.controls.map((c) => {
       const r = s.w.robots.find((k) => k.side === c.side)
-      return snapControl(c, r ? 1 - r.cd / ZAP_CD : 1)
+      return snapControl(c, r ? Math.max(0, 1 - r.cd / zapCdAt(s.w.t)) : 1)
     })
     if (!playing) return
     const w = roundWinner(s.w)
@@ -211,6 +211,12 @@ class Robots extends BaseGame<State> {
         this.squash[e.by].kick(-2 - k * 3)
         break
       }
+      case 'overcharge':
+        audio.play('powerup')
+        fx.flash(C.yellow, 0.2)
+        fx.shake(0.2)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Overcharge!')
+        break
       case 'saw':
         audio.play('chomp', 1.3)
         fx.sparks(e.x, e.y, C.orange, 6)

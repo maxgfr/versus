@@ -12,6 +12,8 @@ import {
   LUNGE,
   MAX_SPEED,
   newWorld,
+  OVERCHARGE_CD,
+  OVERCHARGE_T,
   PITS,
   R,
   roundWinner,
@@ -206,6 +208,20 @@ describe('robot arena', () => {
     }
     expect(hitBy(0)).toBeCloseTo(ZAP_DMG, 6)
     expect(hitBy(MAX_SPEED)).toBeGreaterThan(ZAP_DMG * (1 + LUNGE * 0.9))
+  })
+
+  it('a long fight overcharges: both zaps recharge faster', () => {
+    const w = duel()
+    const red = w.robots[0] as NonNullable<World['robots'][number]>
+    stepWorld(w, [{ jx: 0, jy: 0, zap: true }, undefined], STEP, [])
+    expect(red.cd).toBeCloseTo(ZAP_CD, 6)
+    w.t = OVERCHARGE_T - STEP / 2
+    red.cd = 0
+    const ev: Ev[] = []
+    stepWorld(w, none(w), STEP, ev)
+    expect(ev.filter((e) => e.k === 'overcharge').length).toBe(1)
+    stepWorld(w, [{ jx: 0, jy: 0, zap: true }, undefined], STEP, ev)
+    expect(red.cd).toBeCloseTo(OVERCHARGE_CD, 6)
   })
 
   it('the saw wears robots down and throws them out', () => {
