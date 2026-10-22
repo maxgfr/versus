@@ -19,6 +19,11 @@ const FRICTION = 0.7
 export const DASH_V = 900
 export const DASH_T = 0.2
 export const DASH_CD = 2.4
+/**
+ * A dash's burst follows how hard the stick is pushed: a nudge is a short hop
+ * (this share of a full dash), a full push the whole burst.
+ */
+export const DASH_MIN = 0.55
 
 export interface Penguin {
   x: number
@@ -53,12 +58,19 @@ export interface Drive {
 }
 
 export type Ev =
-  | { k: 'dash'; side: Side; x: number; y: number }
+  /** `power` 0..1: how much of a full dash it was. */
+  | { k: 'dash'; side: Side; x: number; y: number; power: number }
   | { k: 'bump'; x: number; y: number; speed: number }
   | { k: 'fall'; side: Side; x: number; y: number }
 
+/**
+ * The melt speeds up as the round goes on (units / s²), so a cautious round
+ * still ends: the floe is gone a little after a minute instead of 86 s.
+ */
+export const MELT_ACC = 0.04
+
 /** The floe's radius at round time t. */
-export const floeR = (t: number): number => Math.max(0, R0 - SHRINK * t)
+export const floeR = (t: number): number => Math.max(0, R0 - SHRINK * t - MELT_ACC * t * t)
 
 /** How far from the floe's centre a penguin is. */
 export const distC = (p: { x: number; y: number }): number =>
@@ -98,11 +110,13 @@ export function stepWorld(w: World, drives: readonly Drive[], dt: number, ev: Ev
       const sp = Math.hypot(p.vx, p.vy)
       const dx = m > 0.3 ? ux : sp > 20 ? p.vx / sp : Math.cos(p.a)
       const dy = m > 0.3 ? uy : sp > 20 ? p.vy / sp : Math.sin(p.a)
-      p.vx += dx * DASH_V
-      p.vy += dy * DASH_V
+      // No stick at all: a full dash the way it slides (or faces).
+      const power = m > 0.3 ? DASH_MIN + (1 - DASH_MIN) * Math.min(1, (m - 0.3) / 0.6) : 1
+      p.vx += dx * DASH_V * power
+      p.vy += dy * DASH_V * power
       p.dash = t + DASH_T
       p.ready = t + DASH_CD
-      ev.push({ k: 'dash', side, x: p.x, y: p.y })
+      ev.push({ k: 'dash', side, x: p.x, y: p.y, power })
     }
     if (m > 0.05) {
       p.vx += ux * m * ACCEL * dt

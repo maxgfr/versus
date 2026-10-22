@@ -387,15 +387,30 @@ function stamp(g: Draw, title: string, sub: string, age: number, color: string, 
   })
 }
 
+/** Cosmetic extras from the game (never in the state). */
+export interface Look {
+  alpha: number
+  /** Last step's position of each penguin, for interpolation. */
+  prev: readonly ({ x: number; y: number } | undefined)[]
+}
+
 export function renderIce(
   g: Draw,
   s: State,
   now: number,
   names: [string, string],
   over: boolean,
+  look: Look,
 ): void {
   const w: World = s.w
   const r = s.rounds
+  // Each penguin blended between the last two steps.
+  const shown = w.p.map((p, i) => {
+    const q = look.prev[i]
+    return q && p.fell < 0
+      ? { ...p, x: q.x + (p.x - q.x) * look.alpha, y: q.y + (p.y - q.y) * look.alpha }
+      : p
+  })
   sea(g, w.t)
   bergs(g, w.t)
   const won = (side: Side) => (r.phase === 'between' || over) && r.last === side
@@ -405,11 +420,13 @@ export function renderIce(
   )
   rink(g, () => {
     floe(g, w.t)
-    for (const side of [0, 1] as Side[]) trail(g, w.p[side], w.t)
-    for (const side of order) penguin(g, w.p[side], side, w.t, won(side))
+    for (const side of [0, 1] as Side[]) trail(g, shown[side] as Penguin, w.t)
+    for (const side of order) penguin(g, shown[side] as Penguin, side, w.t, won(side))
   })
-  for (const c of s.ctl) stick(g, c)
-  for (const c of s.ctl) dashPad(g, c)
+  // Online, each phone shows only its own player's stick and button.
+  const mine = (c: ControlLook) => g.viewer === null || c.side === g.viewer
+  for (const c of s.ctl) if (mine(c)) stick(g, c)
+  for (const c of s.ctl) if (mine(c)) dashPad(g, c)
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, names[side], { active: won(side) })
     wins(g, side, r)

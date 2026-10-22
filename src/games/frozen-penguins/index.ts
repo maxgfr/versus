@@ -1,4 +1,5 @@
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { floatFor } from '../../core/fx/fx.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import {
@@ -10,8 +11,16 @@ import {
 } from '../../engines/arena/index.ts'
 import { type Rounds, roundEnd, roundsNew, roundsStep } from '../../engines/reflex/index.ts'
 import { PenguinBot } from './bot.ts'
-import { renderIce, rinkXY } from './render.ts'
-import { type Drive, type Ev, newWorld, roundWinner, stepWorld, type World } from './rules.ts'
+import { type Look, renderIce, rinkXY } from './render.ts'
+import {
+  DASH_CD,
+  type Drive,
+  type Ev,
+  newWorld,
+  roundWinner,
+  stepWorld,
+  type World,
+} from './rules.ts'
 
 export interface State {
   w: World
@@ -30,6 +39,9 @@ class FrozenPenguins extends BaseGame<State> {
   private controls: SideControl[] = []
   private bots: (PenguinBot | null)[] = []
   private ev: Ev[] = []
+  // Cosmetic only (never synced): last step's positions for interpolation.
+  private prev: ({ x: number; y: number } | undefined)[] = []
+  private look: Look = { alpha: 1, prev: this.prev }
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -51,8 +63,16 @@ class FrozenPenguins extends BaseGame<State> {
   protected step(dt: number): void {
     const s = this.s
     const { ctx } = this
+    s.w.p.forEach((p, i) => {
+      const q = this.prev[i]
+      if (q) {
+        q.x = p.x
+        q.y = p.y
+      } else this.prev[i] = { x: p.x, y: p.y }
+    })
     if (roundsStep(s.rounds, this.time, BETWEEN)) {
       s.w = newWorld()
+      this.prev.length = 0
       ctx.audio.play('go')
       return
     }
@@ -73,7 +93,7 @@ class FrozenPenguins extends BaseGame<State> {
     })
     s.ctl = this.controls.map((c) => {
       const p = s.w.p[c.side]
-      const ready = Math.min(1, Math.max(0, 1 - (p.ready - s.w.t) / 2.4))
+      const ready = Math.min(1, Math.max(0, 1 - (p.ready - s.w.t) / DASH_CD))
       return snapControl(c, ready)
     })
     if (!playing) {
@@ -89,8 +109,15 @@ class FrozenPenguins extends BaseGame<State> {
     ctx.audio.play('score')
     if (roundEnd(s.rounds, w, this.time, ctx.names) && w !== 'draw') {
       ctx.fx.confetti(w)
+      ctx.fx.flash(SIDE[w].main, 0.25)
       this.finish(w, { score: [s.rounds.wins[0], s.rounds.wins[1]], delay: 2.6 })
-    }
+    } else if (w !== 'draw') floatFor(ctx.fx, w, 'Still dry!')
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    // The guest has no previous step to blend from.
+    this.prev.length = 0
   }
 
   protected override afterEnd(dt: number): void {
@@ -98,22 +125,33 @@ class FrozenPenguins extends BaseGame<State> {
   }
 
   private feedback(ev: Ev): void {
-    const { fx, audio, rng } = this.ctx
+    const { fx, audio } = this.ctx
     // Effects land where the rink is drawn (it is scaled about the floe's centre).
     const [x, y] = rinkXY(ev.x, ev.y)
     const e = { ...ev, x, y }
     switch (e.k) {
       case 'dash':
-        audio.play('whoosh', 1 + rng.next() * 0.15)
-        fx.puff(e.x, e.y, 'rgba(240,250,255,0.55)', 7)
-        fx.shake(0.1)
+        // A full push is a big whoosh and a spray of ice; a nudge a little hop.
+        audio.play('whoosh', 1.15 - e.power * 0.2 + Math.random() * 0.1)
+        fx.puff(e.x, e.y, 'rgba(240,250,255,0.55)', Math.round(3 + e.power * 6))
+        fx.burst(e.x, e.y, '#e8f6ff', {
+          count: Math.round(4 + e.power * 8),
+          speed: 260 + e.power * 200,
+          size: 8,
+          life: 0.35,
+          gravity: 0,
+          drag: 3,
+          kind: 'spark',
+        })
+        fx.shake(0.05 + e.power * 0.1)
+        if (e.power > 0.8) audio.buzz(10)
         break
       case 'bump':
         audio.play('bounce', 0.9 + Math.min(0.5, e.speed / 800))
         if (e.speed > 400) audio.play('slap', 1)
         fx.ring(e.x, e.y, C.white, 60 + Math.min(120, e.speed / 6))
-        audio.buzz(14)
-        fx.sparks(e.x, e.y, C.white, 10)
+        audio.buzz(10 + Math.round(Math.min(40, e.speed / 30)))
+        fx.sparks(e.x, e.y, C.white, Math.round(6 + Math.min(16, e.speed / 60)))
         fx.shake(0.2 + Math.min(0.3, e.speed / 1500))
         fx.stop(e.speed > 500 ? 4 : 2)
         break
@@ -147,8 +185,9 @@ class FrozenPenguins extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderIce(g, this.s, this.time, this.ctx.names, this.over)
+  render(g: Draw, alpha: number): void {
+    this.look.alpha = alpha
+    renderIce(g, this.s, this.time, this.ctx.names, this.over, this.look)
   }
 }
 

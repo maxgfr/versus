@@ -4,6 +4,7 @@ import { Rng } from '../../core/rng.ts'
 import { PenguinBot } from './bot.ts'
 import {
   DASH_CD,
+  DASH_MIN,
   DASH_V,
   type Drive,
   type Ev,
@@ -113,7 +114,58 @@ describe('frozen penguins: bumping', () => {
   })
 })
 
+describe('frozen penguins: force and pace', () => {
+  it('a dash bursts as hard as the stick is pushed', () => {
+    const burst = (push: number): number => {
+      const w = newWorld()
+      place(w, [FLOE.cx, FLOE.cy + 100], [FLOE.cx + 300, FLOE.cy - 200])
+      const ev: Ev[] = []
+      stepWorld(w, [{ jx: push, jy: 0, press: true }, still], STEP, ev)
+      const d = ev.find((e) => e.k === 'dash')
+      expect(d).toBeDefined()
+      return w.p[0].vx
+    }
+    const full = burst(1)
+    const nudge = burst(0.35)
+    expect(full).toBeGreaterThan(DASH_V * 0.95)
+    expect(nudge).toBeLessThan(full * 0.7)
+    expect(nudge).toBeGreaterThan(DASH_V * DASH_MIN * 0.9)
+  })
+
+  it('the melt speeds up: the floe is gone a little after a minute', () => {
+    expect(floeR(30)).toBeLessThan(R0 - 30 * 5.2)
+    expect(floeR(70)).toBe(0)
+    // Still a fair floe early on.
+    expect(floeR(10)).toBeGreaterThan(R0 * 0.85)
+  })
+})
+
 describe('frozen penguins: bot', () => {
+  it('hard pushes easy and normal off the ice in most seeded rounds', () => {
+    for (const weak of ['easy', 'normal'] as const) {
+      let wins = 0
+      let decided = 0
+      for (let seed = 0; seed < 16; seed++) {
+        const rng = new Rng(seed)
+        const w = newWorld()
+        const side = seed % 2
+        const bots = [0, 1].map((s) => new PenguinBot(rng.fork(), s === side ? 'hard' : weak))
+        for (let i = 0; i < 60 * 120 && roundWinner(w) === null; i++)
+          stepWorld(
+            w,
+            [0, 1].map((s) => bots[s]?.decide(w, s as 0 | 1, STEP) ?? still),
+            STEP,
+            [],
+          )
+        const r = roundWinner(w)
+        if (r === null || r === 'draw') continue
+        decided++
+        if (r === side) wins++
+      }
+      expect(wins / decided).toBeGreaterThan(0.65)
+    }
+  })
+
   it('plays either side and stops once it has fallen', () => {
     const w = newWorld()
     const bot = new PenguinBot(new Rng(1), 'normal')
