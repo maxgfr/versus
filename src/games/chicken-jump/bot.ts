@@ -30,7 +30,7 @@ interface Skill {
 
 const SKILL: Record<Difficulty, Skill> = {
   easy: { lapse: 0.08, slip: 7, greed: 0, hold: false },
-  normal: { lapse: 0.03, slip: 3, greed: 2, hold: true },
+  normal: { lapse: 0.015, slip: 3, greed: 4, hold: true },
   hard: { lapse: 0.004, slip: 1, greed: 8, hold: true },
 }
 
