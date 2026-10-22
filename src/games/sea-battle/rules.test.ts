@@ -192,6 +192,48 @@ describe('sea battle bot', () => {
     }
   })
 
+  it('normal and hard never waste a shot on the water around a sunk ship', () => {
+    // A destroyer at (0,0)-(0,1) is sunk: (0,2) and (1,0), (1,1) are known to be empty.
+    const sea = seaOf([
+      [0, 0, 2, 'h'],
+      [5, 5, 3, 'h'],
+    ])
+    let s = fire(sea, 0).sea
+    s = fire(s, 1).sea
+    const water = [2, N, N + 1]
+    for (const d of ['normal', 'hard'] as const) {
+      for (let seed = 0; seed < 30; seed++) {
+        expect(water).not.toContain(choose(viewOf(s), d, new Rng(seed)))
+      }
+    }
+  })
+
+  it('hard extends two hits in a row along their line', () => {
+    const sea = seaOf([[3, 2, 4, 'h']])
+    let s = fire(sea, 3 * N + 3).sea
+    s = fire(s, 3 * N + 4).sea
+    for (let seed = 0; seed < 20; seed++) {
+      expect([3 * N + 2, 3 * N + 5]).toContain(choose(viewOf(s), 'hard', new Rng(seed)))
+    }
+  })
+
+  it('hard hunts where most ships still fit, not into a corner', () => {
+    const s = seaOf([[3, 2, 4, 'h']])
+    const cell = choose(viewOf(s), 'hard', new Rng(1))
+    expect([0, N - 1, CELLS - N, CELLS - 1]).not.toContain(cell)
+  })
+
+  it('hard needs fewer shots than normal, and normal fewer than easy', () => {
+    const avg = (d: Difficulty) => {
+      let n = 0
+      for (let seed = 1; seed <= 16; seed++) n += play(d, d, seed).shots
+      return n / 16
+    }
+    const [e, n, h] = [avg('easy'), avg('normal'), avg('hard')]
+    expect(h).toBeLessThan(n)
+    expect(n).toBeLessThan(e)
+  })
+
   it('hard needs fewer shots than easy on average', () => {
     let hard = 0
     let easy = 0
@@ -217,7 +259,7 @@ function ctxFor(
     stage: {} as Stage,
     input: new Input({} as Stage, mode, local),
     fx: new Fx(),
-    audio: { play: () => {} } as unknown as GameContext['audio'],
+    audio: { play: () => {}, buzz: () => {} } as unknown as GameContext['audio'],
     rng: new Rng(seed),
     mode,
     difficulty: 'normal',

@@ -44,7 +44,7 @@ import {
 /** Seconds to hide your fleet before the guns open. Shuffle works only inside it. Every round starts with one. */
 export const SETUP = 8
 /** Seconds a shell is in the air. */
-const FLIGHT = 0.75
+const FLIGHT = 0.62
 /** Seconds the fleets stay on show after a round is decided, before the next round. */
 const ROUND_TIME = 4.5
 
@@ -131,6 +131,12 @@ class SeaBattle extends TurnGame<State> {
     const round = freshRound(rng, SETUP)
     const starter: Side = rng.chance(0.5) ? 0 : 1
     return { ...round, turn: starter, starter, wins: [0, 0], roundText: '', resetAt: -1 }
+  }
+
+  /** Picking a cell takes the computer a beat, not a pause: the shell flight already reads as its turn. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.5 : d === 'normal' ? 0.4 : 0.3) + this.ctx.rng.range(0, 0.3)
   }
 
   protected override step(dt: number): void {
@@ -244,6 +250,7 @@ class SeaBattle extends TurnGame<State> {
     fx.puff(from.x, from.y, 'rgba(220,225,235,0.6)', 8)
     fx.ring(from.x, from.y, C.yellow, 160)
     fx.shake(0.12)
+    this.ctx.audio.buzz(8)
     this.ctx.audio.play('shoot', by === 0 ? 1 : 1.1)
     this.ctx.audio.play('whoosh', 0.8)
   }
@@ -265,10 +272,11 @@ class SeaBattle extends TurnGame<State> {
     s.landedAt[sh.owner][sh.cell] = this.time
     const { hit, sunk, ship, win } = next.shot
     const p = cellPos(sh.owner, sh.cell)
-    let pause = 0.55
+    let pause = 0.4
     const fire3 = ['#ffb13b', '#ff4b5c', '#ffcd3c', C.white]
     if (hit) {
-      pause = 0.85
+      pause = 0.65
+      this.ctx.audio.buzz(sunk ? 45 : 20)
       fx.burst(p.x, p.y, '#ffb13b', { count: 30, speed: 600, size: 16, life: 0.7, colors: fire3 })
       fx.burst(p.x, p.y, C.white, { count: 12, speed: 380, size: 10, life: 0.4, kind: 'spark' })
       fx.puff(p.x, p.y, 'rgba(70,74,88,0.75)', 9)
@@ -276,7 +284,7 @@ class SeaBattle extends TurnGame<State> {
       fx.shake(sunk ? 0.75 : 0.45)
       fx.stop(sunk ? 6 : 3)
       if (sunk) {
-        pause = 1.7
+        pause = 1.35
         s.revealAt[sh.owner][ship] = this.time
         const cells = next.sea.ships[ship] ?? []
         s.sank = { by: sh.by, owner: sh.owner, len: cells.length, at: this.time }
@@ -311,6 +319,7 @@ class SeaBattle extends TurnGame<State> {
       fx.ring(p.x, p.y, '#e8f6ff', 160)
       fx.burst(p.x, p.y, '#8fd3ff', { count: 18, speed: 340, size: 10, life: 0.6, gravity: 800 })
       fx.burst(p.x, p.y, C.white, { count: 6, speed: 200, size: 7, life: 0.5, gravity: 600 })
+      fx.shake(0.05)
       this.ctx.audio.play('splash', sh.by === 0 ? 1 : 1.1)
     }
     s.turn = other(sh.by)
@@ -402,6 +411,8 @@ class SeaBattle extends TurnGame<State> {
     if (!this.over) {
       for (const side of [0, 1] as Side[]) {
         if (this.isBot(side)) continue
+        // Online, each phone shows only its own player's buttons.
+        if (g.viewer !== null && side !== g.viewer) continue
         if (this.ctx.mode === '2p')
           button(g, side, peekRect(side), 'Peek', '👀', { on: s.peek[side], pressed: s.peek[side] })
         if (setup)

@@ -6,7 +6,6 @@ import {
   N,
   neighbours,
   pendingHits,
-  randomLine,
   reserve,
   rowOf,
   UNTRIED,
@@ -15,13 +14,16 @@ import {
 
 /**
  * The computer's shots. It only ever reads a `View`: what a human could see
- * too (shots, sunk ships, sizes left). Easy shoots at random, normal hunts at
- * random and finishes off hits along their line, hard runs a probability
- * density over the fleets still consistent with what it knows (hunting on the
- * even squares, where every ship must cross at least one).
+ * too (shots, sunk ships, sizes left), plus the rule that ships never touch
+ * side to side, so the water around a sunk ship is known to be empty.
+ * - easy: shoots at random, and only sometimes follows up a hit.
+ * - normal: hunts at random (skipping water known to be empty) and finishes
+ *   off hits along their line.
+ * - hard: counts, for every cell, how many placements of the ships still
+ *   afloat fit what it knows (through the open hits when there are some) and
+ *   fires where a ship is most likely.
  */
 
-const SAMPLES = 120
 const DIRS: readonly (readonly [number, number])[] = [
   [0, 1],
   [0, -1],
@@ -29,23 +31,56 @@ const DIRS: readonly (readonly [number, number])[] = [
   [-1, 0],
 ]
 
+/** Every straight placement of a ship of each length, computed once. */
+const LINES: Map<number, number[][]> = new Map()
+function linesOf(len: number): number[][] {
+  let out = LINES.get(len)
+  if (out) return out
+  out = []
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) {
+      if (c + len <= N) out.push(Array.from({ length: len }, (_, k) => r * N + c + k))
+      if (len > 1 && r + len <= N) out.push(Array.from({ length: len }, (_, k) => (r + k) * N + c))
+    }
+  }
+  LINES.set(len, out)
+  return out
+}
+
+/** Cells that cannot hold a ship: on or beside a sunk one. */
+function emptyWater(view: View): boolean[] {
+  const blocked = Array<boolean>(CELLS).fill(false)
+  for (const cells of view.sunk) reserve(blocked, cells)
+  return blocked
+}
+
 export function choose(view: View, difficulty: Difficulty, rng: Rng): number {
   const open: number[] = []
   view.shots.forEach((v, i) => {
     if (v === UNTRIED) open.push(i)
   })
-  if (difficulty === 'easy') return rng.pick(open)
+  if (difficulty === 'easy') {
+    const pend = pendingHits(view)
+    if (pend.length && rng.chance(0.45)) {
+      const around = pend.flatMap(neighbours).filter((c) => view.shots[c] === UNTRIED)
+      if (around.length) return rng.pick(around)
+    }
+    return rng.pick(open)
+  }
   if (difficulty === 'normal') return normal(view, open, rng)
   return hard(view, open, rng)
 }
 
 function normal(view: View, open: number[], rng: Rng): number {
+  const blocked = emptyWater(view)
+  const sensible = open.filter((c) => !blocked[c])
+  const pool = sensible.length ? sensible : open
   const pend = pendingHits(view)
-  if (pend.length === 0) return rng.pick(open)
-  const line = lineTargets(view, pend)
+  if (pend.length === 0) return rng.pick(pool)
+  const line = lineTargets(view, pend).filter((c) => !blocked[c])
   if (line.length) return rng.pick(line)
-  const around = pend.flatMap(neighbours).filter((c) => view.shots[c] === UNTRIED)
-  return around.length ? rng.pick(around) : rng.pick(open)
+  const around = pend.flatMap(neighbours).filter((c) => view.shots[c] === UNTRIED && !blocked[c])
+  return around.length ? rng.pick(around) : rng.pick(pool)
 }
 
 const at = (r: number, c: number): number | null =>
@@ -82,62 +117,56 @@ function lineTargets(view: View, pend: number[]): number[] {
   return out
 }
 
-function hard(view: View, open: number[], rng: Rng): number {
-  const pend = pendingHits(view)
-  const dens = coverage(view, pend, rng)
-  let pool = open
-  if (pend.length === 0) {
-    // Hunting: every ship (length 2 or more) covers an even square, so only those need checking.
-    const even = open.filter((c) => (rowOf(c) + colOf(c)) % 2 === 0)
-    if (even.length) pool = even
-  }
-  let best = -1
-  let ties: number[] = []
-  for (const c of pool) {
-    const d = dens[c] ?? 0
-    if (d > best) {
-      best = d
-      ties = [c]
-    } else if (d === best) ties.push(c)
-  }
-  return rng.pick(ties)
-}
-
-/** How many sampled legal fleets put a ship on each cell. */
-function coverage(view: View, pend: number[], rng: Rng): number[] {
+/**
+ * Likelihood of a ship on each untried cell: the number of placements of the
+ * ships still afloat that fit the known shots. With open hits, only
+ * placements through them count (weighted by how many they explain), and a
+ * placement may not run beside a hit it does not include (ships never touch).
+ */
+export function density(view: View): number[] {
   const dens = Array<number>(CELLS).fill(0)
-  const pendSet = new Set(pend)
-  const blocked = Array<boolean>(CELLS).fill(false)
-  for (const cells of view.sunk) reserve(blocked, cells)
-  const usable = (c: number) => view.shots[c] === UNTRIED || pendSet.has(c)
-  for (let k = 0; k < SAMPLES; k++) {
-    const fleet = sampleFleet(view.left, usable, blocked, rng)
-    if (!fleet) continue
-    const cells = fleet.flat()
-    if (!pend.every((p) => cells.includes(p))) continue
-    for (const c of cells) dens[c] = (dens[c] ?? 0) + 1
+  const pend = pendingHits(view)
+  const isPend = Array<boolean>(CELLS).fill(false)
+  for (const p of pend) isPend[p] = true
+  const blocked = emptyWater(view)
+  for (const len of view.left) {
+    for (const pl of linesOf(len)) {
+      let covers = 0
+      let ok = true
+      for (const c of pl) {
+        if (blocked[c] || (view.shots[c] !== UNTRIED && !isPend[c])) {
+          ok = false
+          break
+        }
+        if (isPend[c]) covers++
+      }
+      if (!ok) continue
+      if (pend.length) {
+        if (covers === 0) continue
+        // A hit right beside this ship but not on it would make two ships touch.
+        let touches = false
+        for (const c of pl) {
+          for (const n of neighbours(c)) if (isPend[n] && !pl.includes(n)) touches = true
+        }
+        if (touches) continue
+      }
+      const w = pend.length ? covers * covers * 4 : 1
+      for (const c of pl) if (view.shots[c] === UNTRIED) dens[c] = (dens[c] ?? 0) + w
+    }
   }
   return dens
 }
 
-/** One random fleet for the ships still afloat that respects the known cells. */
-function sampleFleet(
-  lengths: readonly number[],
-  usable: (c: number) => boolean,
-  blocked: readonly boolean[],
-  rng: Rng,
-): number[][] | null {
-  const near = blocked.slice()
-  const ships: number[][] = []
-  for (const len of [...lengths].sort((a, b) => b - a)) {
-    let cells: number[] | null = null
-    for (let t = 0; t < 60 && !cells; t++) {
-      const cand = randomLine(rng, len)
-      if (cand.every((c) => usable(c) && !near[c])) cells = cand
-    }
-    if (!cells) return null
-    reserve(near, cells)
-    ships.push(cells)
+function hard(view: View, open: number[], rng: Rng): number {
+  const dens = density(view)
+  let best = 0
+  let ties: number[] = []
+  for (const c of open) {
+    const d = dens[c] ?? 0
+    if (d > best) {
+      best = d
+      ties = [c]
+    } else if (d === best && d > 0) ties.push(c)
   }
-  return ships
+  return ties.length ? rng.pick(ties) : rng.pick(open)
 }
