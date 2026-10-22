@@ -261,7 +261,8 @@ function car(g: Draw, c: Car, leader: boolean, now: number, squash: number): voi
 
 function sticks(g: Draw, looks: StickLook[]): void {
   for (const k of looks) {
-    if (!k.on) continue
+    // Online, each phone shows only its own player's stick.
+    if (!k.on || (g.viewer !== null && k.side !== g.viewer)) continue
     const col = SIDE[k.side]
     g.alpha(0.9, () => {
       g.circle(k.bx, k.by, k.r, alpha(col.dark, 0.35), alpha(col.light, 0.5), 5)
@@ -334,6 +335,7 @@ export function renderRace(
   if (now - s.go < 2.6 && now >= s.go)
     for (const side of [0, 1] as const) {
       if (!humans[side] || s.ctl[side]?.on) continue
+      if (g.viewer !== null && side !== g.viewer) continue
       const y = side === 0 ? MID + 640 : MID - 640
       g.alpha(Math.min(1, (2.6 - (now - s.go)) * 2), () =>
         g.sideText(side, 'Drag to steer', W / 2, y, {
