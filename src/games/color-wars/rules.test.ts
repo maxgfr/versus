@@ -178,3 +178,39 @@ describe('color wars bot', () => {
     }
   })
 })
+
+describe('color wars runaway chains and strength', () => {
+  it('a board too full to ever sit still is still settled in bounded time', () => {
+    // 25 cells at three dots plus one more: more dots than 25 stable cells can hold.
+    const cells: [number, Side, number][] = []
+    for (let i = 0; i < CELLS; i++) cells.push([i, i % 2 === 0 ? 0 : 1, 3])
+    const p = board(0, [true, true], cells)
+    p.dots[12] = 4
+    const q = settle(p)
+    // It returned (a side was wiped out mid-chain, or the wave cap stopped it), and
+    // bursts never make dots: they are kept or lost at the edges.
+    expect(q.dots.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(76)
+  })
+
+  const duel = (a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard', seed: number) => {
+    const rng = new Rng(seed)
+    let p = emptyPosition(seed % 2 === 0 ? 0 : 1)
+    for (let t = 0; t < 300; t++) {
+      const w = winner(p)
+      if (w !== null) return w
+      p = settle(apply(p, choose(p, p.turn, p.turn === 0 ? a : b, rng)))
+    }
+    return 'draw'
+  }
+
+  it('hard beats normal and normal beats easy, either side opening', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 1; seed <= 6; seed++) {
+      if (duel('hard', 'normal', seed) === 0) hard++
+      if (duel('normal', 'easy', seed) === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(5)
+    expect(normal).toBeGreaterThanOrEqual(5)
+  }, 30000)
+})

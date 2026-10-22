@@ -16,6 +16,7 @@ import {
   emptyPosition,
   legalCells,
   type Position,
+  settle,
   SIZE,
   unstable,
   winner,
@@ -57,8 +58,16 @@ export interface State {
 }
 
 const GEO = geom(SIZE, SIZE, 780, 780, MID)
-/** Seconds between waves of a chain reaction. */
+/** Seconds between waves of a chain reaction; a long chain speeds up, down to WAVE_MIN. */
 const WAVE = 0.15
+const WAVE_MIN = 0.07
+/**
+ * Waves one move may set off before the rest is resolved at once. More than 75
+ * dots can never all sit still on 25 cells, so a chain can in principle go on
+ * for ever; past this it is settled in one go, and if it still cannot settle
+ * the cells decide the round.
+ */
+const CHAIN_CAP = 60
 /** Seconds between a move and the first wave it causes. */
 const FIRST = 0.22
 /** Guard against endless stalemates: past this many moves the cells decide. */
@@ -144,6 +153,12 @@ class ColorWars extends TurnGame<State> {
     this.play(cell)
   }
 
+  /** The computer answers briskly. */
+  protected override botDelay(): number {
+    const d = this.ctx.difficulty
+    return (d === 'easy' ? 0.6 : d === 'normal' ? 0.45 : 0.35) + this.ctx.rng.range(0, 0.25)
+  }
+
   protected botPlay(): void {
     this.play(choose(this.pos(), this.s.turn, this.ctx.difficulty, this.ctx.rng))
   }
@@ -163,6 +178,7 @@ class ColorWars extends TurnGame<State> {
     }
     const c = centre(cell)
     this.ctx.audio.play(first ? 'place' : 'click', side === 0 ? 1 : 1.12)
+    this.ctx.audio.buzz(first ? 12 : 6)
     fx.burst(c.x, c.y, SIDE[side].light, {
       count: first ? 16 : 8,
       speed: 320,
@@ -187,6 +203,8 @@ class ColorWars extends TurnGame<State> {
     s.burstSides = []
     s.burstAt = this.time
     let mover: Side = 0
+    // Each wave of a chain hits harder than the last.
+    const k = Math.min(1, s.chain / 8)
     for (const c of s.pending) {
       const side = before.owner[c] ?? null
       if (side === null || (before.dots[c] ?? 0) < BURST) continue
@@ -194,9 +212,14 @@ class ColorWars extends TurnGame<State> {
       s.burstCells.push(c)
       s.burstSides.push(side)
       const at = centre(c)
-      fx.burst(at.x, at.y, SIDE[side].light, { count: 18, speed: 520, size: 12, life: 0.55 })
+      fx.burst(at.x, at.y, SIDE[side].light, {
+        count: Math.round(14 + k * 12),
+        speed: 460 + k * 260,
+        size: 12,
+        life: 0.55,
+      })
       fx.burst(at.x, at.y, C.white, { count: 6, speed: 300, size: 8, life: 0.35 })
-      fx.ring(at.x, at.y, SIDE[side].light, 150)
+      fx.ring(at.x, at.y, SIDE[side].light, 140 + k * 60)
     }
     for (let i = 0; i < CELLS; i++) {
       const was = before.owner[i] ?? null
@@ -211,8 +234,9 @@ class ColorWars extends TurnGame<State> {
     }
     this.ctx.audio.play('pop', 0.85 + Math.min(s.chain, 12) * 0.07)
     if (s.chain >= 2) this.ctx.audio.play('zap', 0.8 + Math.min(s.chain, 10) * 0.05)
-    fx.shake(Math.min(0.35, 0.1 + s.chain * 0.03))
-    if (s.burstCells.length > 1 || s.chain > 0) fx.stop(2)
+    fx.shake(Math.min(0.4, 0.1 + s.chain * 0.035))
+    if (s.burstCells.length > 1 || s.chain > 0) fx.stop(2 + Math.round(k * 2))
+    this.ctx.audio.buzz(Math.round(10 + k * 20))
     this.store(next)
 
     const w = winner(next)
@@ -221,6 +245,17 @@ class ColorWars extends TurnGame<State> {
       return
     }
     s.pending = unstable(next)
+    if (s.pending.length > 0 && s.chain + 1 >= CHAIN_CAP) {
+      // A runaway chain: resolve the rest at once.
+      const done = settle(next)
+      this.store(done)
+      for (let i = 0; i < CELLS; i++) s.stampAt[i] = this.time
+      const w2 = winner(done)
+      if (w2 !== null) this.end(w2)
+      else if (unstable(done).length > 0) this.end(this.byCells())
+      else s.pending = []
+      return
+    }
     if (s.pending.length > 0) {
       s.chain++
       if (s.chain === 3 || s.chain === 6 || s.chain === 10) {
@@ -233,7 +268,7 @@ class ColorWars extends TurnGame<State> {
           mover,
         )
       }
-      s.waveAt = this.time + WAVE
+      s.waveAt = this.time + Math.max(WAVE_MIN, WAVE - s.chain * 0.008)
       return
     }
     if (s.turns >= TURN_CAP) this.end(this.byCells())
@@ -282,6 +317,8 @@ class ColorWars extends TurnGame<State> {
     if (w !== 'draw') {
       s.wins[w]++
       this.ctx.audio.play('explode', 0.9)
+      this.ctx.audio.buzz(40)
+      if (s.wins[w] >= this.target) fx.confetti(w)
       fx.flash(SIDE[w].main, 0.35)
       fx.shake(0.45)
       fx.stop(8)
@@ -302,7 +339,13 @@ class ColorWars extends TurnGame<State> {
   render(g: Draw): void {
     const s = this.s
     tableBackdrop(g)
-    const live = !this.over && s.endedAt < 0 && s.pending.length === 0 && !this.isBot(s.turn)
+    // Online, the playable-cell glow and the coaching show only on the mover's phone.
+    const live =
+      !this.over &&
+      s.endedAt < 0 &&
+      s.pending.length === 0 &&
+      !this.isBot(s.turn) &&
+      (g.viewer === null || g.viewer === s.turn)
     renderBoard(g, s, GEO, this.time, live)
     this.drawTurns(g, undefined, s.endedAt < 0 && s.pending.length === 0)
     const counts = [cellsOf(this.pos(), 0), cellsOf(this.pos(), 1)]
