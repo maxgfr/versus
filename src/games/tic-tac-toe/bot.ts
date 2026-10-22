@@ -37,8 +37,8 @@ export function choose(cells: Cell[], side: Side, difficulty: Difficulty, rng: R
   const win = finishing(cells, side)
   if (win !== undefined && (difficulty === 'normal' || rng.chance(0.6))) return win
   const block = finishing(cells, other(side))
-  if (block !== undefined && (difficulty === 'normal' ? rng.chance(0.9) : rng.chance(0.4)))
-    return block
-  if (difficulty === 'normal' && rng.chance(0.5)) return perfect()
+  if (block !== undefined && (difficulty === 'normal' || rng.chance(0.4))) return block
+  // Normal plays perfectly most of the time: it can still be out-forked now and then.
+  if (difficulty === 'normal' && rng.chance(0.75)) return perfect()
   return random()
 }

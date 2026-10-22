@@ -62,6 +62,28 @@ describe('tic tac toe bot', () => {
     }
   })
 
+  it('normal never misses a block, and beats easy far more than it loses', () => {
+    for (let seed = 0; seed < 20; seed++) {
+      expect(choose(board('oo..x....'), 1, 'normal', new Rng(seed))).toBe(2)
+    }
+    let won = 0
+    let lost = 0
+    for (let seed = 0; seed < 200; seed++) {
+      const rng = new Rng(seed)
+      const normal = (seed % 2) as 0 | 1
+      let cells = emptyBoard()
+      let turn: 0 | 1 = 0
+      while (!outcome(cells)) {
+        cells = place(cells, choose(cells, turn, turn === normal ? 'normal' : 'easy', rng), turn)
+        turn = turn === 0 ? 1 : 0
+      }
+      const o = outcome(cells)
+      if (o?.winner === normal) won++
+      else if (o?.winner !== 'draw') lost++
+    }
+    expect(won).toBeGreaterThan(lost * 5)
+  })
+
   it('easy still finishes games with legal moves', () => {
     const rng = new Rng(7)
     let cells = emptyBoard()
