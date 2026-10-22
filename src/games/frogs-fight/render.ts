@@ -4,22 +4,23 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
 import type { State } from './index.ts'
+import { outBack } from '../../core/fx/ease.ts'
 import {
-  airborne,
-  available,
   COLS,
   type Frog,
-  HOP_T,
+  flightT,
   hopsFor,
-  inPond,
+  landsAt,
   PAD_DX,
   PAD_DY,
   PAD_R,
   PAD_Y0,
   padCol,
+  padDist,
   padRow,
   padXY,
   ROWS,
+  shoveDest,
   SINK_AT,
   type World,
 } from './rules.ts'
@@ -97,21 +98,45 @@ function padPath(c: CanvasRenderingContext2D, x: number, y: number, r: number, r
   c.closePath()
 }
 
+const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v)
+
+/**
+ * How far a pad is pressed into the water right now: it dips and springs back
+ * under a landing (deeper for a long leap), and recoils as a frog kicks off it.
+ */
+function padDip(w: World, i: number, now: number): number {
+  let dip = 0
+  for (const f of w.frogs) {
+    if (f.fellT >= 0 || f.hopT < 0) continue
+    if (!f.air && f.pad === i) {
+      const tl = now - landsAt(f)
+      if (tl >= 0 && tl < 0.6)
+        dip += Math.sin(tl * 16) * Math.exp(-tl * 7) * (f.power >= 2 ? 1 : 0.6)
+    }
+    if (f.from === i && f.from !== f.pad) {
+      const tk = now - f.hopT
+      if (tk >= 0 && tk < 0.3) dip += Math.sin((tk / 0.3) * Math.PI) * 0.35
+    }
+  }
+  return dip
+}
+
 /**
  * A lily pad: glossy green leaf with a notch and veins. It yellows, cracks and
  * starts to bob as it is landed on; a doomed pad bubbles under its frog.
  */
-function pad(g: Draw, i: number, uses: number, now: number, scale = 1, fade = 1): void {
+function pad(g: Draw, i: number, uses: number, now: number, scale = 1, fade = 1, dip = 0): void {
   const p = padXY(i)
   const wear = Math.min(uses, SINK_AT)
   const bob = wear >= SINK_AT - 1 ? Math.sin(now * (wear >= SINK_AT ? 9 : 5) + i) : 0
   const x = p.x
-  const y = p.y + bob * (wear >= SINK_AT ? 3 : 1.5)
-  const r = PAD_R * scale * (1 - wear * 0.03)
+  const y = p.y + bob * (wear >= SINK_AT ? 3 : 1.5) + dip * 9
+  const r = PAD_R * scale * (1 - wear * 0.03) * (1 - dip * 0.05)
+  if (r <= 0) return
   const rot = -0.9 + ((i * 1.7) % 1.2)
   const leaf = LEAF[wear] ?? LEAF[0]!
   g.alpha(fade, () => {
-    g.ellipse(x + 8, y + 14, r * 1.02, r * 0.9, alpha('#001820', 0.35))
+    g.ellipse(x + 8, y + 14 - dip * 6, r * 1.02, r * 0.9, alpha('#001820', 0.35))
     g.path((c) => padPath(c, x, y + 7, r, rot), shade(leaf, -0.45))
     g.path(
       (c) => padPath(c, x, y, r, rot),
@@ -150,20 +175,22 @@ function pad(g: Draw, i: number, uses: number, now: number, scale = 1, fade = 1)
       const pts = cracks[k]!
       g.path(
         (c) => {
-          c.moveTo(x + pts[0]!, y + pts[1]!)
-          for (let j = 2; j < pts.length; j += 2) c.lineTo(x + pts[j]!, y + pts[j + 1]!)
+          c.moveTo(x + pts[0]! * scale, y + pts[1]! * scale)
+          for (let j = 2; j < pts.length; j += 2)
+            c.lineTo(x + pts[j]! * scale, y + pts[j + 1]! * scale)
         },
         undefined,
         crack,
         4,
       )
     }
-    // A lotus flower on some pads.
+    // A lotus flower on some pads, swaying a little.
     if (i % 3 === 1 && wear < 2) {
       const fx = x + Math.cos(rot + 3.2) * r * 0.45
       const fy = y + Math.sin(rot + 3.2) * r * 0.45
+      const sway = Math.sin(now * 1.6 + i) * 0.2
       for (let k = 0; k < 5; k++) {
-        const a = (k / 5) * Math.PI * 2 + i
+        const a = (k / 5) * Math.PI * 2 + i + sway
         g.ellipse(fx + Math.cos(a) * 7, fy + Math.sin(a) * 7, 8, 5, '#ffb3d1', a)
       }
       g.circle(fx, fy, 5, C.yellow)
@@ -213,72 +240,92 @@ interface Pose {
   under: number
 }
 
-/** Direction a frog looks: where it last hopped, or across the pond at the start. */
+/** Direction a frog looks: where it last hopped (back at its attacker after a shove), or across the pond. */
 function facing(f: Frog): number {
-  if (f.from === f.pad || f.pad < 0) return f.side === 0 ? 0 : Math.PI
+  if (f.from === f.pad || f.pad < 0 || f.from < 0) return f.side === 0 ? 0 : Math.PI
   const dc = padCol(f.pad) - padCol(f.from)
   const dr = padRow(f.pad) - padRow(f.from)
-  return Math.atan2(dr, dc) + Math.PI / 2
+  return Math.atan2(dr, dc) + Math.PI / 2 + (f.shoved ? Math.PI : 0)
 }
 
-/** Where a frog is drawn and how it sits right now (all from state timestamps). */
-function pose(w: World, f: Frog, now: number, cheer: boolean): Pose {
+/** Where a frog is drawn and how it sits at time `now` (all from state timestamps). */
+function pose(f: Frog, now: number, cheer: boolean, intro: number): Pose {
   const base = { a: facing(f), stretch: 0, sx: 1, sy: 1, o: 1, under: 0 }
   if (f.fellT >= 0) {
-    const from = padXY(f.from)
+    const from = padXY(f.from >= 0 ? f.from : 0)
     if (f.dx || f.dy) {
-      // Knocked off: tumbles in an arc to the water, then goes under.
-      const k = Math.min(1, Math.max(0, (now - f.hopT) / 0.5))
-      const under = Math.min(1, Math.max(0, (now - f.fellT - 0.5) / 0.7))
+      // Knocked off: tumbles in an arc as far as the shove sent it, then goes under.
+      const d = Math.max(1, f.power)
+      const fly = 0.32 + d * 0.12
+      const k = clamp01((now - f.hopT) / fly)
+      const under = clamp01((now - f.fellT - fly) / 0.7)
       return {
         ...base,
-        x: from.x + f.dx * PAD_DX * k,
-        y: from.y + f.dy * PAD_DY * k,
-        h: Math.sin(Math.PI * k) * 80,
-        a: Math.atan2(f.dy, f.dx) + Math.PI / 2 + k * Math.PI * 3,
+        x: from.x + f.dx * PAD_DX * d * k,
+        y: from.y + f.dy * PAD_DY * d * k,
+        h: Math.sin(Math.PI * k) * (50 + d * 40),
+        a: Math.atan2(f.dy, f.dx) + Math.PI / 2 + k * Math.PI * (2 + d),
         stretch: 1 - under,
         o: 1 - under,
         under,
       }
     }
     const p = padXY(f.pad)
-    const k = Math.min(1, Math.max(0, (now - f.fellT) / 0.7))
+    const k = clamp01((now - f.fellT) / 0.7)
     return { ...base, x: p.x, y: p.y, h: 0, sx: 1 - k * 0.3, sy: 1 - k * 0.3, o: 1 - k, under: k }
   }
-  if (airborne(w, f)) {
-    const k = Math.min(1, Math.max(0, (now - f.hopT) / HOP_T))
+  if (f.air) {
+    const k = clamp01((now - f.hopT) / flightT(f))
     const a = padXY(f.from)
     const b = padXY(f.pad)
     const dist = Math.hypot(b.x - a.x, b.y - a.y)
     const s = Math.sin(Math.PI * k)
+    if (f.shoved)
+      // Shoved or bounced: a low, flailing skid backwards with a wobble.
+      return {
+        ...base,
+        x: a.x + (b.x - a.x) * k,
+        y: a.y + (b.y - a.y) * k,
+        h: s * (24 + dist * 0.08),
+        a: base.a + s * 0.9 * (f.side === 0 ? 1 : -1),
+        stretch: 0.5 * s,
+        sx: 1 + 0.12 * s,
+        sy: 1 - 0.1 * s,
+      }
     return {
       ...base,
       x: a.x + (b.x - a.x) * k,
       y: a.y + (b.y - a.y) * k,
-      h: s * (50 + dist * 0.14),
+      h: s * (50 + dist * 0.16),
       stretch: s,
-      sx: 1 - 0.08 * s,
-      sy: 1 + 0.16 * s,
+      // Long and thin in the air, more so on a long leap.
+      sx: 1 - 0.1 * s,
+      sy: 1 + (f.power >= 2 ? 0.26 : 0.16) * s,
     }
   }
   const p = padXY(f.pad)
-  const land = Math.max(0, 1 - (now - f.hopT - HOP_T) / 0.16)
-  // Breathing while it sits, a victory bounce when the match is won.
+  // Landing squash, deeper after a long leap.
+  const tl = now - landsAt(f)
+  const land = f.hopT >= 0 && tl >= 0 ? Math.max(0, 1 - tl / 0.2) * (f.power >= 2 ? 1.4 : 1) : 0
+  // Breathing while it sits, a victory bounce when the round is won.
   const breathe = Math.sin(now * 3 + f.side * 2) * 0.03
   const jump = cheer ? Math.abs(Math.sin(now * 7)) : 0
+  const drop = intro < 1 ? (1 - intro) * (1 - intro) * 420 : 0
   return {
     ...base,
     x: p.x,
     y: p.y,
-    h: jump * 46,
+    h: jump * 46 + drop,
     stretch: jump * 0.6,
     sx: 1 + 0.22 * land + breathe,
     sy: 1 - 0.18 * land - breathe,
   }
 }
 
+type Mood = 'happy' | 'wow' | 'dizzy' | 'grin' | 'blink'
+
 /** A top-down toy frog facing -y: folded hind legs, front feet, eye domes, a back marked with its side's shape. */
-function frogBody(g: Draw, side: Side, mood: 'happy' | 'wow' | 'dizzy' | 'grin', st: number): void {
+function frogBody(g: Draw, side: Side, mood: Mood, st: number): void {
   const col = SIDE[side]
   const limb = shade(col.main, -0.32)
   const toe = shade(col.main, -0.12)
@@ -326,6 +373,10 @@ function frogBody(g: Draw, side: Side, mood: 'happy' | 'wow' | 'dizzy' | 'grin',
   // Eye domes at the front, a smile across the snout.
   for (const ex of [-14, 14]) {
     g.circle(ex, -24, 13, shade(col.main, 0.1))
+    if (mood === 'blink') {
+      g.line(ex - 7, -27, ex + 7, -27, shade(col.main, -0.55), 3.5)
+      continue
+    }
     g.circle(ex, -26, 9.5, '#fff')
     if (mood === 'dizzy') {
       g.line(ex - 5, -31, ex + 5, -21, C.ink, 3.5)
@@ -340,11 +391,34 @@ function frogBody(g: Draw, side: Side, mood: 'happy' | 'wow' | 'dizzy' | 'grin',
   else g.arc(0, -16, 9, 0.5, Math.PI - 0.5, alpha(C.ink, 0.7), 3)
 }
 
-function frog(g: Draw, f: Frog, w: World, now: number, cheer: boolean): void {
-  const p = pose(w, f, now, cheer)
+function frog(g: Draw, f: Frog, now: number, cheer: boolean, intro: number): void {
+  const p = pose(f, now, cheer, intro)
   if (p.o <= 0) return
-  const pushed = f.fellT < 0 && now - f.hopT < 0.45 && f.from !== f.pad && !airborne(w, f)
-  const mood = f.fellT >= 0 ? 'dizzy' : cheer ? 'grin' : pushed ? 'wow' : 'happy'
+  const col = SIDE[f.side]
+  // Ghosts along the arc of a long leap or a shove: speed reads at a glance.
+  if (f.air && (f.power >= 2 || f.shoved) && f.fellT < 0) {
+    for (let i = 3; i >= 1; i--) {
+      const q = pose(f, Math.max(f.hopT, now - i * 0.035), false, 1)
+      g.ellipse(q.x, q.y - q.h, 28, 32, alpha(col.light, 0.16 - i * 0.035), q.a)
+    }
+  }
+  const tl = now - landsAt(f)
+  const mood: Mood =
+    f.fellT >= 0
+      ? 'dizzy'
+      : cheer
+        ? 'grin'
+        : f.shoved && (f.air || tl < 0.4)
+          ? 'wow'
+          : (now * 0.7 + f.side * 1.3) % 3.4 < 0.12
+            ? 'blink'
+            : 'happy'
+  // Rings spread on the water around a fresh landing.
+  if (f.fellT < 0 && !f.air && f.hopT >= 0 && tl >= 0 && tl < 0.55) {
+    const k = tl / 0.55
+    const big = f.power >= 2 ? 1.3 : 1
+    g.ring(p.x, p.y, PAD_R * (0.9 + k * 0.9 * big), alpha('#e9fdff', 0.45 * (1 - k)), 5)
+  }
   // Shadow stays on the pad / water; the frog grows as it rises toward the camera.
   const lift = 1 + p.h / 260
   g.alpha(p.o, () => {
@@ -381,32 +455,52 @@ function marker(
 
 /**
  * Where each human's frog can hop, outlined in their shape and colour; a rival
- * within reach gets the yellow target and an arrow showing where the push sends it.
+ * within reach gets the yellow target and one chevron per pad the shove would
+ * send it (solid when it would go into the pond). A tap buffered mid-air is
+ * marked on its pad.
  */
 function hints(g: Draw, w: World, now: number, show: readonly boolean[]): void {
   for (const f of w.frogs) {
-    if (!show[f.side] || f.fellT >= 0 || airborne(w, f)) continue
+    // Online, each phone shows only its own player's hop hints.
+    if (!show[f.side] || f.fellT >= 0 || (g.viewer !== null && f.side !== g.viewer)) continue
     const col = SIDE[f.side]
     const rival = w.frogs.find((k) => k.side !== f.side && k.fellT < 0)
+    // Dimmer while in the air: they are the pads reachable from where it lands.
+    const dim = f.air ? 0.35 : 1
     for (const i of hopsFor(w, f)) {
       const { x, y } = padXY(i)
       const k = 0.5 + 0.5 * Math.sin(now * 4 + i * 0.7)
-      if (rival && rival.pad === i && !airborne(w, rival)) {
+      if (rival && rival.pad === i && !rival.shoved) {
         const dc = Math.sign(padCol(i) - padCol(f.pad))
         const dr = Math.sign(padRow(i) - padRow(f.pad))
-        const nc = padCol(i) + dc
-        const nr = padRow(i) + dr
-        const off = !inPond(nc, nr) || !available(w, nc + nr * COLS)
-        marker(g, f.side, x, y, PAD_R + 16 + k * 6, C.yellow, 7)
-        const ax = x + dc * (PAD_R + 40)
-        const ay = y + dr * (PAD_R + 40)
-        g.at(ax, ay, Math.atan2(dr, dc), () =>
-          g.poly([-14, -18, 16, 0, -14, 18], off ? C.yellow : alpha(C.yellow, 0.55)),
-        )
+        const d = padDist(i, f.pad)
+        const off = shoveDest(w, f.pad, i) < 0
+        g.alpha(dim, () => {
+          marker(g, f.side, x, y, PAD_R + 16 + k * 6, C.yellow, 7)
+          for (let n = 0; n < d; n++) {
+            const ax = x + dc * (PAD_R + 40 + n * 38)
+            const ay = y + dr * (PAD_R + 40 + n * 38)
+            g.at(ax, ay, Math.atan2(dr, dc), () =>
+              g.poly([-14, -18, 16, 0, -14, 18], off ? C.yellow : alpha(C.yellow, 0.55)),
+            )
+          }
+        })
         continue
       }
       // Vivid enough to read on the teal water, softly breathing.
-      marker(g, f.side, x, y, PAD_R + 12, alpha(mix(col.main, '#ffffff', 0.3), 0.5 + 0.4 * k), 6)
+      marker(
+        g,
+        f.side,
+        x,
+        y,
+        PAD_R + 12,
+        alpha(mix(col.main, '#ffffff', 0.3), (0.5 + 0.4 * k) * dim),
+        6,
+      )
+    }
+    if (f.queue >= 0) {
+      const { x, y } = padXY(f.queue)
+      marker(g, f.side, x, y, PAD_R + 8 + Math.sin(now * 20) * 4, C.yellow, 8)
     }
   }
 }
@@ -416,31 +510,51 @@ export interface View {
   over: boolean
   /** Sides whose reachable pads are outlined (the humans). */
   hints: readonly boolean[]
+  /** Pond time to draw at (between the last two steps). */
+  now: number
+  /** 0..1 pulse on each side's pips after a round win. */
+  pulse: [number, number]
 }
 
 /** The whole pond: water, banks, pads, hop hints, frogs, the score rows and the round banners. */
 export function renderPond(g: Draw, s: State, now: number, v: View): void {
   const w = s.w
   const r = s.rounds
-  water(g, w.t)
+  const t = v.now
+  water(g, t)
   bank(g, 1)
   bank(g, 0)
+  // From round 2, pads pop up from the middle out and the frogs drop in.
+  const fresh = r.round > 1 && r.phase === 'play'
   for (let i = 0; i < COLS * ROWS; i++) {
-    if (w.sunk[i] === 1) sinking(g, i, w.t, w.sunkT[i] ?? -9)
-    else pad(g, i, w.uses[i] ?? 0, w.t)
+    if (w.sunk[i] === 1) {
+      sinking(g, i, t, w.sunkT[i] ?? -9)
+      continue
+    }
+    let sc = 1
+    if (fresh && t < 0.8) {
+      const delay = Math.abs(padRow(i) - (ROWS - 1) / 2) * 0.05 + (i % COLS) * 0.015
+      sc = outBack(clamp01((t - delay) / 0.32))
+    }
+    pad(g, i, w.uses[i] ?? 0, t, sc, 1, padDip(w, i, t))
   }
-  if (r.phase === 'play' && !v.over) hints(g, w, w.t, v.hints)
-  const champ = v.over && r.last !== 'draw' ? r.last : null
+  if (r.phase === 'play' && !v.over) hints(g, w, t, v.hints)
+  // The round's survivor cheers until the next round (and through the ending).
+  const champ = r.phase === 'between' && r.last !== 'draw' ? r.last : null
+  const intro = fresh ? clamp01((t - 0.2) / 0.35) : 1
   // Fallen frogs under, then grounded, then airborne ones on top.
   const order = [...w.frogs].sort(
-    (a, b) =>
-      Number(a.fellT < 0) - Number(b.fellT < 0) || Number(airborne(w, a)) - Number(airborne(w, b)),
+    (a, b) => Number(a.fellT < 0) - Number(b.fellT < 0) || Number(a.air) - Number(b.air),
   )
-  for (const f of order) frog(g, f, w, w.t, champ === f.side)
+  for (const f of order) frog(g, f, t, champ === f.side, intro)
   g.vignette(0.35)
   for (const side of [0, 1] as const) {
-    namePill(g, side, v.names[side], { active: champ === side })
-    pips(g, side, r.wins[side], r.target)
+    namePill(g, side, v.names[side], { active: champ === side && v.over })
+    // Pips swell when a round is won.
+    const px = side === 0 ? W - 150 : 150
+    const py = side === 0 ? g.stage.edge(0) - 70 : g.stage.edge(1) + 70
+    const sc = 1 + v.pulse[side] * 0.35
+    g.at(px, py, 0, () => g.at(-px, -py, 0, () => pips(g, side, r.wins[side], r.target)), sc)
   }
   if (v.over) return
   if (r.phase === 'between' && r.text) {
