@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { nextMove } from './bot.ts'
+import { nextMove, PACE } from './bot.ts'
 import {
   candidateList,
   completedUnits,
@@ -9,6 +9,7 @@ import {
   entry,
   generate,
   GIVENS,
+  givensFor,
   hiddenSingles,
   isSolved,
   matchWinner,
@@ -17,6 +18,7 @@ import {
   progress,
   raceWinner,
   roundSeed,
+  solve,
   UNITS,
 } from './rules.ts'
 
@@ -90,7 +92,7 @@ describe('sudoku helpers', () => {
     const rng = new Rng(5)
     let mistakes = 0
     for (let n = 0; n < 200 && !isSolved(grid, solution); n++) {
-      const m = nextMove(grid, solution, 'easy', rng)
+      const m = nextMove(grid, 'easy', rng)
       if (!m) break
       if (m.digit === solution[m.cell]) grid[m.cell] = m.digit
       else mistakes++
@@ -174,7 +176,7 @@ describe('sudoku bot', () => {
     let moves = 0
     let avoid: { cell: number; digit: number } | null = null
     while (!isSolved(grid, solution) && moves < 400) {
-      const m = nextMove(grid, solution, d, rng, avoid)
+      const m = nextMove(grid, d, rng, avoid)
       if (!m) break
       moves++
       expect(m.cell === avoid?.cell && m.digit === avoid.digit).toBe(false)
@@ -203,5 +205,55 @@ describe('sudoku bot', () => {
 
   it('normal finishes every puzzle', () => {
     for (const seed of [21, 22]) solve('normal', seed)
+  })
+})
+
+describe('sudoku difficulty', () => {
+  it('hard puzzles have fewer clues, and every round of a match tightens to a floor', () => {
+    expect(GIVENS.easy).toBeGreaterThan(GIVENS.normal)
+    expect(GIVENS.normal).toBeGreaterThan(GIVENS.hard)
+    expect(givensFor('normal', 0)).toBe(GIVENS.normal)
+    expect(givensFor('normal', 1)).toBe(GIVENS.normal - 2)
+    expect(givensFor('hard', 50)).toBeGreaterThan(20)
+    for (const d of ['easy', 'normal', 'hard'] as const)
+      for (let r = 1; r < 6; r++) expect(givensFor(d, r)).toBeLessThanOrEqual(givensFor(d, r - 1))
+  })
+
+  it('solves from the board alone, and finds nothing on a broken grid', () => {
+    const { puzzle, solution } = generate(31, GIVENS.hard)
+    expect(solve(puzzle)).toEqual(solution)
+    const broken = puzzle.slice()
+    const i = broken.findIndex((v) => v === 0)
+    const peer = (PEERS[i] as number[]).find((p) => broken[p] !== 0) as number
+    broken[i] = broken[peer] as number
+    expect(solve(broken)).toBeNull()
+  })
+
+  it('a hard bot beats an easy one on the same puzzle in most seeded races', () => {
+    // Race clock: the bot's think time per entry plus the penalty for each mistake.
+    const clock = (d: 'easy' | 'hard', seed: number): number => {
+      const { puzzle, solution } = generate(seed, GIVENS.hard)
+      const grid = puzzle.slice()
+      const rng = new Rng(seed * 3 + (d === 'hard' ? 1 : 2))
+      let t = 0
+      let avoid: { cell: number; digit: number } | null = null
+      for (let n = 0; n < 400 && !isSolved(grid, solution); n++) {
+        const m = nextMove(grid, d, rng, avoid)
+        if (!m) break
+        t += PACE[d] * (m.think * rng.range(0.6, 1.2) + 0.15)
+        if (m.digit === solution[m.cell]) {
+          grid[m.cell] = m.digit
+          avoid = null
+        } else {
+          t += 10
+          avoid = m
+        }
+      }
+      return t
+    }
+    let hardWins = 0
+    const seeds = [41, 42, 43, 44, 45, 46]
+    for (const seed of seeds) if (clock('hard', seed) < clock('easy', seed)) hardWins++
+    expect(hardWins).toBeGreaterThanOrEqual(seeds.length - 1)
   })
 })

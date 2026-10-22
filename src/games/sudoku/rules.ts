@@ -3,7 +3,18 @@ import { Rng } from '../../core/rng.ts'
 
 /** Pure Sudoku: generation from a seed (unique solution), checks, hints. 0 = empty. */
 
-export const GIVENS: Record<Difficulty, number> = { easy: 38, normal: 32, hard: 27 }
+export const GIVENS: Record<Difficulty, number> = { easy: 38, normal: 30, hard: 25 }
+
+/** The fewest givens a round may ramp down to, per level. */
+const FLOOR: Record<Difficulty, number> = { easy: 34, normal: 26, hard: 22 }
+
+/**
+ * Givens for round `r` of a match: each new puzzle has two fewer clues than
+ * the last, down to a floor, so a long match tightens as it goes.
+ */
+export function givensFor(d: Difficulty, r: number): number {
+  return Math.max(FLOOR[d], GIVENS[d] - 2 * r)
+}
 
 /** Seed of round `r` of a match: round 0 is the game seed, later rounds get their own puzzle. */
 export const roundSeed = (seed: number, r: number): number => seed + r * 7919
@@ -72,6 +83,40 @@ export function countSolutions(grid: number[], limit = 2): number {
   }
   grid[best] = 0
   return total
+}
+
+/**
+ * Solve a grid by deduction and search (the first solution found), or null if
+ * it has none. Works from what is on the board only.
+ */
+export function solve(grid: readonly number[]): number[] | null {
+  const g = grid.slice()
+  const go = (): boolean => {
+    let best = -1
+    let bestMask = 0
+    let bestN = 10
+    for (let i = 0; i < 81; i++) {
+      if (g[i] !== 0) continue
+      const m = candidates(g, i)
+      const n = bits(m)
+      if (n === 0) return false
+      if (n < bestN) {
+        best = i
+        bestMask = m
+        bestN = n
+        if (n === 1) break
+      }
+    }
+    if (best < 0) return true
+    for (let d = 1; d <= 9; d++) {
+      if (!(bestMask & (1 << d))) continue
+      g[best] = d
+      if (go()) return true
+    }
+    g[best] = 0
+    return false
+  }
+  return go() ? g : null
 }
 
 function fill(grid: number[], rng: Rng): boolean {

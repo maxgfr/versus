@@ -20,7 +20,7 @@ import {
   digitCounts,
   entry,
   generate,
-  GIVENS,
+  givensFor,
   isSolved,
   matchWinner,
   progress,
@@ -115,7 +115,7 @@ class Sudoku extends PuzzleRace<State> {
   }
 
   private loadRound(r: number): void {
-    const p = generate(roundSeed(this.ctx.seed, r), GIVENS[this.ctx.difficulty])
+    const p = generate(roundSeed(this.ctx.seed, r), givensFor(this.ctx.difficulty, r))
     this.puzzle = p.puzzle
     this.solution = p.solution
     this.loaded = r
@@ -210,7 +210,7 @@ class Sudoku extends PuzzleRace<State> {
       }
       // It remembers its last miss and does not type the same wrong digit twice.
       const avoid = b.errCell >= 0 ? { cell: b.errCell, digit: b.errKey + 1 } : null
-      const m = nextMove(b.cells, this.solution, this.ctx.difficulty, this.ctx.rng, avoid)
+      const m = nextMove(b.cells, this.ctx.difficulty, this.ctx.rng, avoid)
       if (!m) return
       // Select the cell first, then think about it: it reads like a person.
       b.sel = m.cell

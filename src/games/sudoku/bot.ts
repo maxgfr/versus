@@ -1,15 +1,15 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { candidateList, candidates, hiddenSingles, nakedSingles } from './rules.ts'
+import { candidateList, candidates, hiddenSingles, nakedSingles, solve } from './rules.ts'
 
 /**
  * Seconds a single takes to spot (it plays only in demos and tests: 1P is a
  * solo time trial). Harder deductions take longer, see `Move.think`.
  */
-export const PACE: Record<Difficulty, number> = { easy: 6, normal: 4, hard: 2.4 }
+export const PACE: Record<Difficulty, number> = { easy: 6, normal: 3.2, hard: 1.8 }
 
 /** Chance of a slip of the finger on an obvious cell. */
-const SLIP: Record<Difficulty, number> = { easy: 0.08, normal: 0.03, hard: 0 }
+const SLIP: Record<Difficulty, number> = { easy: 0.08, normal: 0.02, hard: 0 }
 
 export interface Move {
   cell: number
@@ -21,13 +21,13 @@ export interface Move {
 /**
  * The next cell a person would fill, by the real rules: an obvious cell (a
  * single candidate) first, then a digit with one place left in a row, column
- * or box (normal and hard). With nothing obvious, hard reasons it out (it is
- * always right, but slow); easy and normal guess among the candidates of the
- * tightest cell, and a wrong guess costs them the penalty.
+ * or box (normal and hard). With nothing obvious, hard works the grid out
+ * by search (always right, but slow); easy and normal guess among the
+ * candidates of the tightest cell, and a wrong guess costs them the penalty.
+ * It sees only the board: the hidden solution is never read.
  */
 export function nextMove(
   grid: readonly number[],
-  solution: readonly number[],
   d: Difficulty,
   rng: Rng,
   avoid: { cell: number; digit: number } | null = null,
@@ -60,8 +60,13 @@ export function nextMove(
     }
   }
   if (best < 0) return null
-  const right = solution[best] as number
-  if (d === 'hard') return { cell: best, digit: right, think: 2 }
-  const guesses = candidateList(grid, best).filter((v) => best !== avoid?.cell || v !== avoid.digit)
-  return { cell: best, digit: guesses.length ? rng.pick(guesses) : right, think: 1.6 }
+  if (d === 'hard') {
+    const worked = solve(grid)
+    if (worked) return { cell: best, digit: worked[best] as number, think: 2 }
+  }
+  const all = candidateList(grid, best)
+  const guesses = all.filter((v) => best !== avoid?.cell || v !== avoid.digit)
+  const pool = guesses.length ? guesses : all
+  if (!pool.length) return null
+  return { cell: best, digit: rng.pick(pool), think: 1.6 }
 }
