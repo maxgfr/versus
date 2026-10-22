@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { DodgeBot, farthestLane } from './bot.ts'
+import { bestLane, botLateral, DodgeBot, farthestLane, laneScore } from './bot.ts'
 import {
   CAR_Y,
   type Ev,
@@ -11,10 +11,14 @@ import {
   LIVES,
   newWorld,
   type Obs,
+  OVERTIME,
   ROAD_L,
   ROAD_R,
+  ROW_GAP,
+  doubleChance,
   roundOver,
   speedAt,
+  VTOP,
   stepWorld,
   type World,
 } from './rules.ts'
@@ -68,9 +72,44 @@ describe('traffic', () => {
     for (let k = 0; k < 60; k++) expect(laneOf(12, k)).toBe(laneOf(12, k))
   })
 
-  it('speed ramps with round time and is capped', () => {
+  it('speed ramps with round time, holds, then creeps on in overtime to a cap', () => {
     expect(speedAt(10)).toBeGreaterThan(speedAt(0))
-    expect(speedAt(1000)).toBe(900)
+    expect(speedAt(40)).toBe(900)
+    expect(speedAt(OVERTIME)).toBe(900)
+    expect(speedAt(OVERTIME + 20)).toBeGreaterThan(900)
+    expect(speedAt(1000)).toBe(VTOP)
+  })
+
+  it('two-car rows come later in a round, always leave a lane open, with room around them', () => {
+    expect(doubleChance(0)).toBe(0)
+    expect(doubleChance(120)).toBeGreaterThan(0.2)
+    const w = newWorld(77)
+    // Record each car's spawn time and lane by watching the obstacle list grow.
+    const rowsAt = new Map<number, number[]>()
+    let seen = 0
+    for (let i = 0; i < 60 * 150; i++) {
+      stepWorld(w, STEP, NONE, [], false)
+      for (const o of w.obs[0]) {
+        if (o.id <= seen) continue
+        seen = o.id
+        const t = Math.round(w.rt * 1000)
+        rowsAt.set(t, [...(rowsAt.get(t) ?? []), o.lane])
+      }
+    }
+    const times = [...rowsAt.keys()].sort((a, b) => a - b)
+    let rows = 0
+    times.forEach((t, i) => {
+      const lanes = rowsAt.get(t) ?? []
+      expect(lanes.length).toBeLessThanOrEqual(2)
+      if (lanes.length < 2) return
+      rows++
+      expect(new Set(lanes).size).toBe(2)
+      const before = times[i - 1]
+      const after = times[i + 1]
+      if (before !== undefined) expect(t - before).toBeGreaterThanOrEqual(ROW_GAP * 1000 - 20)
+      if (after !== undefined) expect(after - t).toBeGreaterThanOrEqual(ROW_GAP * 1000 - 20)
+    })
+    expect(rows).toBeGreaterThan(3)
   })
 
   it('a new car arrives on a schedule that tightens over the round', () => {
@@ -175,6 +214,50 @@ describe('bot', () => {
     // A car far up lane 2 is still farther than a close one in lane 1.
     w.obs[0].push({ id: 3, lane: 2, y: CAR_Y - 900, near: false })
     expect(farthestLane(w, 0, 1)).toBe(2)
+  })
+
+  it('never swerves through a lane with a car alongside', () => {
+    const w = quiet(newWorld(8))
+    park(w, 0)
+    // Lane 0 (here) is about to be hit; lane 1 has a car right alongside; lane 2 is open.
+    w.obs[0].push({ id: 1, lane: 0, y: CAR_Y - 260, near: false })
+    w.obs[0].push({ id: 2, lane: 1, y: CAR_Y - 60, near: false })
+    // Crossing lane 1 now means a crash; the open lane 2 is not reachable safely.
+    expect(laneScore(w, 0, LANE_X[0] as number, 2, 1000)).toBeLessThan(0)
+    expect(laneScore(w, 0, LANE_X[0] as number, 1, 1000)).toBeLessThan(0)
+    // Once that car has gone by, the bot gets out of the doomed lane.
+    w.obs[0][1]!.y = CAR_Y + 200
+    expect(bestLane(w, 0, LANE_X[0] as number, 0, 1000)).not.toBe(0)
+    expect(laneScore(w, 0, LANE_X[0] as number, 2, 1000)).toBeGreaterThan(0)
+  })
+
+  it('a faster swerve makes a tight gap reachable', () => {
+    const w = quiet(newWorld(8))
+    park(w, 0)
+    w.obs[0].push({ id: 1, lane: 1, y: CAR_Y - 330, near: false })
+    expect(laneScore(w, 0, LANE_X[0] as number, 2, 700)).toBeLessThan(0)
+    expect(laneScore(w, 0, LANE_X[0] as number, 2, 2600)).toBeGreaterThan(0)
+  })
+
+  it('a hard bot outlasts an easy one most of the time', () => {
+    let hard = 0
+    const n = 10
+    for (let seed = 1; seed <= n; seed++) {
+      const w = newWorld(seed * 13)
+      const bots = [new DodgeBot(new Rng(seed), 'hard'), new DodgeBot(new Rng(seed + 50), 'easy')]
+      const lat: [number, number] = [botLateral('hard'), botLateral('easy')]
+      let steps = 0
+      while (roundOver(w) === null && steps < 60 * 150) {
+        const steer: [number, number] = [
+          bots[0]?.decide(w, 0, STEP) ?? 0,
+          bots[1]?.decide(w, 1, STEP) ?? 0,
+        ]
+        stepWorld(w, STEP, steer, [], true, lat)
+        steps++
+      }
+      if (roundOver(w) === 0) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(8)
   })
 
   for (const d of ['easy', 'normal', 'hard'] as const) {

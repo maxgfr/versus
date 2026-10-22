@@ -11,7 +11,6 @@ import {
   CAR_HH,
   CAR_HW,
   CAR_Y,
-  distAt,
   HORIZON,
   LANE_X,
   LIVES,
@@ -46,7 +45,7 @@ function rows(dist: number, period: number, phase = 0): number[] {
 // ---------- the road ----------
 
 function road(g: Draw, side: Side, s: World): void {
-  const dist = distAt(s.rt)
+  const dist = s.dist
   const v = speedAt(s.rt)
   const col = SIDE[side]
   const up = textAngle(g, side)
@@ -207,21 +206,22 @@ function carBody(g: Draw, body: string, marker?: Side): void {
 }
 
 /** Oncoming cars, nose toward the driver, headlights blazing, growing out of the fog. */
-function oncoming(g: Draw, side: Side, s: World): void {
+function oncoming(g: Draw, side: Side, s: World, back: number): void {
   // Clipped at the horizon: a car crests the seam instead of ghosting across into the rival's road.
   inFrame(g, side, () =>
     g.clip(-600, HORIZON, W + 1200, H, 0, () => {
-      for (const o of s.obs[side]) {
-        const a = clamp((o.y - HORIZON) / 160, 0, 1)
+      for (const ob of s.obs[side]) {
+        const oy = ob.y - back
+        const a = clamp((oy - HORIZON) / 160, 0, 1)
         if (a <= 0) continue
-        const x = LANE_X[o.lane] as number
-        const sc = 0.72 + 0.28 * clamp((o.y - HORIZON) / 520, 0, 1)
-        const body = OTHER_COLS[o.id % OTHER_COLS.length] as string
+        const x = LANE_X[ob.lane] as number
+        const sc = 0.72 + 0.28 * clamp((oy - HORIZON) / 520, 0, 1)
+        const body = OTHER_COLS[ob.id % OTHER_COLS.length] as string
         g.alpha(a, () => {
-          g.shadow(x + 8, o.y + 14, CAR_HW * 1.1 * sc, CAR_HH * 1.02 * sc, 0.38)
+          g.shadow(x + 8, oy + 14, CAR_HW * 1.1 * sc, CAR_HH * 1.02 * sc, 0.38)
           g.at(
             x,
-            o.y,
+            oy,
             Math.PI,
             () => {
               beams(g, 200, 0.18)
@@ -253,25 +253,38 @@ function bump(g: Draw, b: Bump, now: number): void {
 }
 
 /** The driver's own car: leans into turns, blinks while invulnerable, burns when out. */
-function ownCar(g: Draw, side: Side, d: Driver, rt: number, real: number): void {
+function ownCar(
+  g: Draw,
+  side: Side,
+  d: Driver,
+  rt: number,
+  real: number,
+  dx: number,
+  squash: number,
+): void {
   inFrame(g, side, () => {
     const ht = rt - d.hitT
     if (d.out) {
       const k = outBack(clamp(ht / 0.4, 0, 1))
-      g.shadow(d.x + 8, CAR_Y + 14, CAR_HW * 1.2, CAR_HH, 0.4)
-      g.at(d.x, CAR_Y, 0.5 * k, () => carBody(g, mix(SIDE[side].main, '#2b2733', 0.65), side))
+      g.shadow(dx + 8, CAR_Y + 14, CAR_HW * 1.2, CAR_HH, 0.4)
+      g.at(dx, CAR_Y, 0.5 * k, () => carBody(g, mix(SIDE[side].main, '#2b2733', 0.65), side))
       const f = 1 + 0.12 * Math.sin(real * 18)
-      g.emoji('🔥', d.x + 6, CAR_Y - 40, 70 * f)
-      g.emoji('🔥', d.x - 22, CAR_Y + 10, 48 * (2 - f))
+      g.emoji('🔥', dx + 6, CAR_Y - 40, 70 * f)
+      g.emoji('🔥', dx - 22, CAR_Y + 10, 48 * (2 - f))
       return
     }
     const shake = ht < 0.35 ? Math.sin(ht * 70) * 16 * (1 - ht / 0.35) : 0
     const lean = clamp((d.tx - d.x) / 260, -0.22, 0.22)
-    const x = d.x + shake
+    const x = dx + shake
+    // Idle life: the engine hums the body; a crash squashes it (springs).
+    const hum = 1 + Math.sin(real * 40) * 0.006
+    const sq = clamp(squash, 0.7, 1.3)
     g.shadow(x + 8, CAR_Y + 14, CAR_HW * 1.1, CAR_HH * 1.02, 0.4)
     g.at(x, CAR_Y, lean, () => beams(g, 520, 0.3))
     const blink = rt < d.invT && Math.floor(rt * 14) % 2 === 0
-    g.alpha(blink ? 0.35 : 1, () => g.at(x, CAR_Y, lean, () => carBody(g, SIDE[side].main, side)))
+    g.alpha(blink ? 0.35 : 1, () =>
+      g.at(x, CAR_Y, lean, () => carBody(g, SIDE[side].main, side), (2 - sq) * hum, sq * hum),
+    )
     if (ht < 0.16) g.alpha(0.7, () => g.rrect(x - 56, CAR_Y - 96, 112, 192, 30, '#ffffff'))
   })
 }
@@ -317,6 +330,7 @@ export function renderRoad(
   now: number,
   over: boolean,
   real: number,
+  look: { x: [number, number]; back: number; squash: [number, number] },
 ): void {
   g.fillView(NIGHT)
   for (const side of [0, 1] as Side[]) road(g, side, s)
@@ -324,9 +338,10 @@ export function renderRoad(
   const v = g.stage.view
   g.rect(v.x - 2, MID - 8, v.w + 4, 16, C.ink)
   g.rect(v.x - 2, MID - 2, v.w + 4, 4, alpha(C.yellow, 0.25))
-  for (const side of [0, 1] as Side[]) oncoming(g, side, s)
+  for (const side of [0, 1] as Side[]) oncoming(g, side, s, look.back)
   for (const b of s.bumps) bump(g, b, now)
-  for (const side of [0, 1] as Side[]) ownCar(g, side, s.drivers[side], s.rt, real)
+  for (const side of [0, 1] as Side[])
+    ownCar(g, side, s.drivers[side], s.rt, real, look.x[side], look.squash[side])
   for (const side of [0, 1] as Side[]) {
     const d = s.drivers[side]
     dashboard(g, side)

@@ -17,8 +17,10 @@ export const CAR_Y = 1560
 export const HORIZON = 900
 export const CAR_HW = 46
 export const CAR_HH = 84
-/** Lateral speed of a car following the finger / bot (units/s). */
+/** Default lateral speed of a car following its wanted x (units/s). */
 export const LATERAL = 1000
+/** A human's car follows the finger nearly at its own speed: a flick is a swerve. */
+export const HUMAN_LATERAL = 2600
 export const LIVES = 3
 /** Seconds of blinking invulnerability after a crash. */
 export const INVULN = 1.2
@@ -26,18 +28,22 @@ export const INVULN = 1.2
 const V0 = 470
 const RAMP = 14
 const VMAX = 900
+/** Past this round time the road keeps getting faster, slowly, so no round runs forever. */
+export const OVERTIME = 45
+const OVER_RAMP = 9
+export const VTOP = 1300
 
-/** Speed of oncoming traffic (units/s) at round time `rt`: ramps up, capped. */
+/** Speed of oncoming traffic (units/s) at round time `rt`: ramps up, then creeps on in overtime. */
 export function speedAt(rt: number): number {
-  return Math.min(VMAX, V0 + RAMP * rt)
+  return Math.min(VTOP, Math.min(VMAX, V0 + RAMP * rt) + Math.max(0, rt - OVERTIME) * OVER_RAMP)
 }
 
-/** Road covered by round time `rt` (the integral of `speedAt`): drives the scrolling scenery. */
-export function distAt(rt: number): number {
-  const tc = (VMAX - V0) / RAMP
-  if (rt <= tc) return V0 * rt + (RAMP / 2) * rt * rt
-  return V0 * tc + (RAMP / 2) * tc * tc + VMAX * (rt - tc)
+/** Chance that a car comes as a two-car row (one lane left open), rising over the round. */
+export function doubleChance(rt: number): number {
+  return Math.max(0, Math.min(0.35, (rt - 18) / 90))
 }
+/** A two-car row never comes sooner than this after the car before it, nor the next one after it. */
+export const ROW_GAP = 0.8
 
 /** Deterministic hash of (seed, a, b) → [0, 1). */
 export function hash01(seed: number, a: number, b: number): number {
@@ -63,6 +69,10 @@ export interface Obs {
   near: boolean
 }
 
+/** Half-width (x) and half-length (y) of the overlap box between two cars. */
+export const OVER_X = CAR_HW * 2 - 8
+export const OVER_Y = CAR_HH * 2 - 12
+
 export interface Driver {
   /** Lateral position (local x) and the position it is steering toward. */
   x: number
@@ -83,6 +93,10 @@ export interface World {
   /** Index of the next oncoming car, and the round time it appears at. */
   k: number
   nextAt: number
+  /** The next car comes as a two-car row. */
+  dbl: boolean
+  /** Road covered so far (drives the scrolling scenery). */
+  dist: number
   /** Oncoming cars on each driver's road (local coordinates). */
   obs: [Obs[], Obs[]]
   drivers: [Driver, Driver]
@@ -91,7 +105,7 @@ export interface World {
 
 export type Ev =
   | { k: 'hit'; side: Side; x: number; y: number; ox: number; oy: number; id: number }
-  | { k: 'near'; side: Side; x: number; y: number }
+  | { k: 'near'; side: Side; x: number; y: number; gap: number }
   | { k: 'out'; side: Side; x: number; y: number }
 
 export function newDriver(): Driver {
@@ -105,6 +119,8 @@ export function newWorld(seed: number): World {
     rt: 0,
     k: 0,
     nextAt: 1.2,
+    dbl: false,
+    dist: 0,
     obs: [[], []],
     drivers: [newDriver(), newDriver()],
     nextId: 1,
@@ -116,22 +132,36 @@ export function laneOf(seed: number, k: number): number {
   return Math.floor(hash01(seed, k, 1) * LANE_X.length)
 }
 
-/** Put the next oncoming car on both roads. */
+/** The other lane of a two-car row whose first car is in `lane`. */
+export function secondLane(seed: number, k: number, lane: number): number {
+  return (lane + 1 + Math.floor(hash01(seed, k, 4) * 2)) % LANE_X.length
+}
+
+/**
+ * Put the next oncoming car (or two-car row) on both roads. A row always
+ * leaves one lane open and gets room on both sides to reach it.
+ */
 function spawn(w: World): void {
   const lane = laneOf(w.seed, w.k)
-  for (const side of [0, 1] as Side[]) {
-    w.obs[side].push({ id: w.nextId, lane, y: HORIZON - 100, near: false })
+  const lanes = w.dbl ? [lane, secondLane(w.seed, w.k, lane)] : [lane]
+  for (const l of lanes) {
+    for (const side of [0, 1] as Side[]) {
+      w.obs[side].push({ id: w.nextId, lane: l, y: HORIZON - 100, near: false })
+    }
+    w.nextId++
   }
-  w.nextId++
+  const wasRow = w.dbl
   w.k++
-  w.nextAt += gapAt(w.seed, w.k, w.rt)
+  w.dbl = hash01(w.seed, w.k, 3) < doubleChance(w.rt)
+  const gap = gapAt(w.seed, w.k, w.rt)
+  w.nextAt += wasRow || w.dbl ? Math.max(ROW_GAP, gap) : gap
 }
 
 /** Do a car and an oncoming car overlap? (slightly forgiving box) */
 function overlaps(d: Driver, o: Obs): boolean {
   const dx = Math.abs(d.x - (LANE_X[o.lane] as number))
   const dy = Math.abs(CAR_Y - o.y)
-  return dx < CAR_HW * 2 - 8 && dy < CAR_HH * 2 - 12
+  return dx < OVER_X && dy < OVER_Y
 }
 
 /**
@@ -145,17 +175,20 @@ export function stepWorld(
   ev: Ev[],
   /** False once the match is decided: traffic keeps rolling but no longer hits anyone. */
   collide = true,
+  /** Each driver's lateral speed (units/s). */
+  lateral: readonly [number, number] = [LATERAL, LATERAL],
 ): void {
   w.rt += dt
   while (w.rt >= w.nextAt) spawn(w)
   const v = speedAt(w.rt)
+  w.dist += v * dt
   for (const side of [0, 1] as Side[]) {
     const d = w.drivers[side]
     if (d.out) continue
     const want = steer[side]
     if (want !== null) d.tx = Math.max(ROAD_L + CAR_HW, Math.min(ROAD_R - CAR_HW, want))
     const dx = d.tx - d.x
-    const step = LATERAL * dt
+    const step = lateral[side] * dt
     d.x += Math.max(-step, Math.min(step, dx))
 
     const list = w.obs[side]
@@ -169,10 +202,10 @@ export function stepWorld(
       }
       if (!collide) continue
       // Once past the car without touching it, a close pass counts as a near miss.
-      if (!o.near && o.y - CAR_Y > CAR_HH * 2 - 12) {
+      if (!o.near && o.y - CAR_Y > OVER_Y) {
         o.near = true
-        if (Math.abs(d.x - (LANE_X[o.lane] as number)) < CAR_HW * 2 + 36)
-          ev.push({ k: 'near', side, x: d.x, y: CAR_Y })
+        const gap = Math.abs(d.x - (LANE_X[o.lane] as number)) - OVER_X
+        if (gap < 44) ev.push({ k: 'near', side, x: d.x, y: CAR_Y, gap: Math.max(0, gap) })
       }
       if (w.rt >= d.invT && overlaps(d, o)) {
         list.splice(i, 1)
