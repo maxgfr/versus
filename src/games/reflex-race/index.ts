@@ -22,7 +22,6 @@ import {
   champion,
   INTRO_TIME,
   newRace,
-  PICTURE_TIME,
   type Tap,
   tapAll,
   TARGET,
@@ -80,7 +79,7 @@ class ReflexRaceGame extends BaseGame<State> {
     const first = s.phase === 'intro'
     // A match nobody caught before it flipped away: a little "too slow" for both.
     const lost = s.phase === 'play' && s.picMatch
-    const ev = advance(s, this.ctx.rng, this.time)
+    const ev = advance(s, this.ctx.rng, this.time, this.goal)
     if (ev === 'flip') {
       if (first) audio.play('go')
       if (lost && !first) {
@@ -137,7 +136,7 @@ class ReflexRaceGame extends BaseGame<State> {
     const card = cardCentre(side, this.ctx.mode === '2p')
     if (r === 'hit') {
       // k: how quick the reaction was (1 = lightning, 0 = at the last moment).
-      const k = Math.max(0, Math.min(1, 1 - (react - 0.25) / (PICTURE_TIME - 0.25)))
+      const k = Math.max(0, Math.min(1, 1 - (react - 0.25) / (s.picFor - 0.25)))
       fx.burst(b.x, b.y, SIDE[side].light, {
         count: Math.round(20 + k * 24),
         speed: 480 + k * 360,

@@ -5,8 +5,16 @@ import type { Rng } from '../../core/rng.ts'
 
 /** First to this many points takes the match. */
 export const TARGET = 7
-/** Seconds each picture stays up before the next one flips in. */
+/** Seconds each picture stays up before the next one flips in (at the start of a match). */
 export const PICTURE_TIME = 0.9
+/** As the leader nears the goal, pictures flip faster: down to this share of PICTURE_TIME. */
+export const FASTEST = 0.7
+
+/** How long the next picture stays up: shorter the closer the leader is to `goal`. */
+export function pictureTime(score: readonly number[], goal: number): number {
+  const k = Math.max(0, Math.min(1, Math.max(0, ...score) / Math.max(1, goal)))
+  return PICTURE_TIME * (1 - (1 - FASTEST) * k)
+}
 /** Seconds the rule card shows before the first picture. */
 export const INTRO_TIME = 2
 /** Seconds of celebration between rounds. */
@@ -93,6 +101,8 @@ export interface RaceState {
   picAt: number
   /** Whether the picture on show matches the rule (decided when it appears). */
   picMatch: boolean
+  /** How long the picture on show stays up (s). */
+  picFor: number
   /** Game time the card last turned over, for its flip animation. */
   flipAt: number
   /** Round winner, while the point is being celebrated. */
@@ -115,6 +125,7 @@ export function newRace(rng: Rng, now: number): RaceState {
     pic: null,
     picAt: -1,
     picMatch: false,
+    picFor: PICTURE_TIME,
     flipAt: -10,
     winner: null,
     round: 1,
@@ -126,27 +137,28 @@ export function newRace(rng: Rng, now: number): RaceState {
 
 export type Event = 'flip' | 'card-down' | null
 
-function showPicture(s: RaceState, rng: Rng, now: number): void {
+function showPicture(s: RaceState, rng: Rng, now: number, goal: number): void {
   const pic = makePicture(rng, s.rule)
   s.picMatch = matches(s.rule, pic)
   s.pic = pic
   s.picAt = now
+  s.picFor = pictureTime(s.score, goal)
 }
 
 /**
  * Advance the clock. Returns 'flip' when a picture appears (the card turns face
  * up on the first one), 'card-down' when a new round's card turns back, or null.
  */
-export function advance(s: RaceState, rng: Rng, now: number): Event {
+export function advance(s: RaceState, rng: Rng, now: number, goal = TARGET): Event {
   if (s.phase === 'intro' && now - s.phaseAt >= INTRO_TIME - EPS) {
     s.phase = 'play'
     s.phaseAt = now
-    showPicture(s, rng, now)
+    showPicture(s, rng, now, goal)
     s.flipAt = now
     return 'flip'
   }
-  if (s.phase === 'play' && now - s.picAt >= PICTURE_TIME - EPS) {
-    showPicture(s, rng, now)
+  if (s.phase === 'play' && now - s.picAt >= (s.picFor ?? PICTURE_TIME) - EPS) {
+    showPicture(s, rng, now, goal)
     return 'flip'
   }
   if (s.phase === 'point' && now - s.phaseAt >= POINT_TIME - EPS) {

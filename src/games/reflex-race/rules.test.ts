@@ -12,6 +12,7 @@ import {
   matches,
   newRace,
   PICTURE_TIME,
+  pictureTime,
   POINT_TIME,
   type Rule,
   type RaceState,
@@ -262,5 +263,48 @@ describe('reflex race bot', () => {
     const s = botsRaceTo('hard', 17, 3)
     expect(Math.max(...s.score)).toBeGreaterThanOrEqual(3)
     expect(Math.max(...s.score)).toBeLessThan(TARGET)
+  })
+
+  it('pictures flip faster as the leader nears the goal', () => {
+    expect(pictureTime([0, 0], 7)).toBeCloseTo(PICTURE_TIME, 9)
+    expect(pictureTime([3, 6], 7)).toBeLessThan(PICTURE_TIME)
+    expect(pictureTime([7, 2], 7)).toBeCloseTo(PICTURE_TIME * 0.7, 9)
+    // The flip uses it: a race at match point turns its pictures over sooner.
+    const rng = new Rng(4)
+    const s = newRace(rng, 0)
+    s.score = [6, 0]
+    advance(s, rng, INTRO_TIME, 7)
+    const first = s.picAt
+    expect(advance(s, rng, first + PICTURE_TIME * 0.8, 7)).toBe('flip')
+  })
+
+  it('hard wins a race against normal most of the time', () => {
+    let hard = 0
+    for (let seed = 1; seed <= 12; seed++) {
+      const rng = new Rng(seed)
+      const s = newRace(rng, 0)
+      const lv = seed % 2 ? (['hard', 'normal'] as const) : (['normal', 'hard'] as const)
+      let now = 0
+      let at: [number | null, number | null] = [null, null]
+      let picAt = -1
+      while (champion(s, 7) === null && now < 600) {
+        now += 1 / 60
+        const ev = advance(s, rng, now, 7)
+        if (ev === 'flip') {
+          picAt = s.picAt
+          at = [planReaction(lv[0], rng, s.picMatch), planReaction(lv[1], rng, s.picMatch)]
+        }
+        if (ev === 'card-down') at = [null, null]
+        if (s.phase !== 'play') continue
+        // Same step: random order, as the game does.
+        const due = ([0, 1] as const).filter(
+          (sd) => at[sd] !== null && now >= picAt + (at[sd] as number),
+        )
+        for (const sd of due) at[sd] = null
+        tapAll(s, due, now, rng)
+      }
+      if (champion(s, 7) === (lv[0] === 'hard' ? 0 : 1)) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(9)
   })
 })

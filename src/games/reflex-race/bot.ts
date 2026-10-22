@@ -4,8 +4,8 @@ import type { Rng } from '../../core/rng.ts'
 /** Seconds from a picture appearing to the computer's tap. */
 export const REACT: Record<Difficulty, [number, number]> = {
   easy: [0.55, 0.85],
-  normal: [0.4, 0.62],
-  hard: [0.26, 0.4],
+  normal: [0.34, 0.52],
+  hard: [0.22, 0.34],
 }
 
 /** Chance per non-matching picture that the computer taps anyway. */

@@ -183,7 +183,7 @@ function drawCountdown(g: Draw, age: number): void {
 /** A slim bar under the card: how long this picture stays up. */
 function drawTimer(g: Draw, s: State, now: number): void {
   if (s.phase !== 'play' || !s.pic) return
-  const left = 1 - prog(now - s.picAt, 0, PICTURE_TIME)
+  const left = 1 - prog(now - s.picAt, 0, s.picFor ?? PICTURE_TIME)
   const w = CARD.w - 80
   const y = CARD.h / 2 - 34
   g.rrect(-w / 2, y - 6, w, 12, 6, alpha(C.ink, 0.12))
