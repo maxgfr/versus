@@ -28,10 +28,18 @@ export const LUNGE_OUT = 0.12
 export const HOLD = 0.08
 export const BACK = 0.3
 const COOL = 0.22
-/** Seconds between marbles released into the pond. */
+/** Seconds between marbles released into the pond: brisk at first, quicker as the match goes on. */
 export const SPAWN_EVERY = 1.1
+export const SPAWN_FAST = 0.65
 /** After the last marble is released, the match ends after this long even if some are left. */
-export const END_GRACE = 15
+export const END_GRACE = 10
+/**
+ * Once every marble is out, the pond tilts toward the shores (units/s², growing
+ * over a few seconds): stragglers circling the far sides, out of both hippos'
+ * reach, slide back where they can be eaten instead of stalling the ending.
+ */
+export const TILT = 240
+export const TILT_RAMP = 4
 const DRAG = 0.42
 /** The pond is a low dome: marbles drift out toward the rim, where the hippos can reach them (negative = outward). */
 const BOWL = -0.35
@@ -157,7 +165,8 @@ export function lunge(w: World, side: Side, tx: number, ty: number, events: Even
   if (dy * h.fy < 0.15) return false
   h.dx = dx
   h.dy = dy
-  h.reach = clamp(len, MIN_REACH, REACH)
+  // Reach so the mouth (not the head's centre) lands on the tapped point.
+  h.reach = clamp(len - HEAD_R * MOUTH_AT, MIN_REACH, REACH)
   h.phase = 'out'
   h.t = 0
   events.push({ kind: 'lunge', side, x: h.bx + dx * h.reach, y: h.by + dy * h.reach })
@@ -236,11 +245,12 @@ export function step(w: World, dt: number, cmds: [Cmd, Cmd], rng: Rng): Event[] 
       })
       w.released++
       w.lastSpawn = w.t
-      w.spawnT = SPAWN_EVERY
+      w.spawnT = spawnGap(w)
       events.push({ kind: 'spawn', x: POND.x, y: POND.y, id })
     }
   }
 
+  const tilt = w.released >= w.target ? TILT * clamp((w.t - w.lastSpawn) / TILT_RAMP, 0, 1) : 0
   const h = dt / SUB
   for (let s = 0; s < SUB; s++) {
     const frac = (s + 1) / SUB
@@ -260,6 +270,7 @@ export function step(w: World, dt: number, cmds: [Cmd, Cmd], rng: Rng): Event[] 
       integrate(m, h, DRAG)
       m.vx -= BOWL * (m.x - POND.x) * h
       m.vy -= BOWL * (m.y - POND.y) * h
+      if (tilt > 0) m.vy += (m.y < POND.y ? -1 : 1) * tilt * h
       collidePond(m, events)
     }
     for (let i = 0; i < w.marbles.length; i++) {
@@ -270,6 +281,15 @@ export function step(w: World, dt: number, cmds: [Cmd, Cmd], rng: Rng): Event[] 
         const c = collideDynamic(a, b, 1, 1, 0.82)
         if (c && c.speed > 80) events.push({ kind: 'bump', x: c.x, y: c.y, speed: c.speed })
       }
+    }
+    // The jaws close before the head shoves: a marble the open mouth reaches is
+    // eaten, not batted away by the lunging head.
+    for (const side of [0, 1] as Side[]) {
+      const hp = w.hippos[side]
+      if (hp.phase !== 'out' && hp.phase !== 'hold') continue
+      const head = heads[side]
+      if (!head) continue
+      eatAt(w, side, head.x + hp.dx * HEAD_R * MOUTH_AT, head.y + hp.dy * HEAD_R * MOUTH_AT, events)
     }
     for (const m of w.marbles) {
       for (const head of heads) {
@@ -285,13 +305,7 @@ export function step(w: World, dt: number, cmds: [Cmd, Cmd], rng: Rng): Event[] 
     const hp = w.hippos[side]
     if (hp.phase !== 'out' && hp.phase !== 'hold') continue
     const mouth = mouthOf(hp)
-    w.marbles = w.marbles.filter((m) => {
-      if (Math.hypot(m.x - mouth.x, m.y - mouth.y) > MOUTH_R + m.r) return true
-      hp.eaten++
-      hp.ate.push(m.id)
-      events.push({ kind: 'eat', side, x: m.x, y: m.y, id: m.id })
-      return false
-    })
+    eatAt(w, side, mouth.x, mouth.y, events)
   }
 
   // A marble that has nearly stopped gets a nudge, so the pond never goes dead.
@@ -303,6 +317,24 @@ export function step(w: World, dt: number, cmds: [Cmd, Cmd], rng: Rng): Event[] 
     }
   }
   return events
+}
+
+/** Eat every marble within reach of an open mouth at (x, y). */
+function eatAt(w: World, side: Side, x: number, y: number, events: Event[]): void {
+  const hp = w.hippos[side]
+  w.marbles = w.marbles.filter((m) => {
+    if (Math.hypot(m.x - x, m.y - y) > MOUTH_R + m.r) return true
+    hp.eaten++
+    hp.ate.push(m.id)
+    events.push({ kind: 'eat', side, x: m.x, y: m.y, id: m.id })
+    return false
+  })
+}
+
+/** Seconds until the next release: the gap shrinks as more marbles have gone in. */
+export function spawnGap(w: World): number {
+  const k = w.target > 1 ? clamp(w.released / (w.target - 1), 0, 1) : 1
+  return SPAWN_EVERY + (SPAWN_FAST - SPAWN_EVERY) * k
 }
 
 /** The side that ate more, once the match is over; null while it is not. */

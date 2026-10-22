@@ -22,6 +22,8 @@ class HappyHippos extends BaseGame<State> {
   private chomp: [Spring, Spring] = [new Spring(1, 420, 14), new Spring(1, 420, 14)]
   private pulse: [Spring, Spring] = [new Spring(0, 260, 12), new Spring(0, 260, 12)]
   private gulp: [number, number] = [-1, -1]
+  /** Marbles in the current bite, per side. */
+  private bite: [number, number] = [0, 0]
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -94,16 +96,18 @@ class HappyHippos extends BaseGame<State> {
         })
         fx.sparks(e.x, e.y, C.yellow, 8)
         fx.ring(e.x, e.y, col, 110)
-        fx.shake(0.12)
-        fx.stop(2)
-        this.chomp[e.side].kick(-7)
+        // Several marbles in one bite hit harder each time.
+        const combo = this.time - this.gulp[e.side] < 0.25
+        const n = combo ? ++this.bite[e.side] : (this.bite[e.side] = 1)
+        fx.shake(0.1 + Math.min(3, n) * 0.06)
+        fx.stop(1 + Math.min(3, n))
+        this.chomp[e.side].kick(-6 - n * 2)
         this.pulse[e.side].kick(10)
         // Two marbles in one bite earn a shout.
-        const combo = this.time - this.gulp[e.side] < 0.25
         this.gulp[e.side] = this.time
-        floatFor(fx, e.side, combo ? 'DOUBLE!' : '+1', e.x, e.y)
-        if (combo) audio.play('coin', 1.3)
-        audio.buzz(10)
+        floatFor(fx, e.side, n >= 3 ? 'TRIPLE!' : combo ? 'DOUBLE!' : '+1', e.x, e.y)
+        if (combo) audio.play('coin', 1.2 + n * 0.1)
+        audio.buzz(8 + n * 6)
         break
       }
       case 'bump': {
@@ -131,7 +135,7 @@ class HappyHippos extends BaseGame<State> {
     }
   }
 
-  render(g: Draw, _alpha: number): void {
+  render(g: Draw, alpha: number): void {
     for (const sp of this.chomp) sp.update(1 / 60)
     for (const sp of this.pulse) sp.update(1 / 60)
     const look: Look = {
@@ -139,6 +143,7 @@ class HappyHippos extends BaseGame<State> {
       chomp: [Math.max(0.6, this.chomp[0].value), Math.max(0.6, this.chomp[1].value)],
       target: this.target,
       end: this.s.end,
+      back: this.s.end ? 0 : (1 - alpha) / 60,
     }
     render(g, this.s.w, look, [
       Math.max(0, this.pulse[0].value / 10),

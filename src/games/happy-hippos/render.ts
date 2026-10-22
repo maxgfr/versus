@@ -24,6 +24,8 @@ export interface Look {
   chomp: [number, number]
   /** Match length in marbles. */
   target: number
+  /** Seconds the frame sits before the last step (smooth marbles). */
+  back?: number
   /** The decided match (stamped in state), for the ending. */
   end: { at: number; winner: Side | 'draw' } | null
 }
@@ -151,8 +153,10 @@ function drawHopper(g: Draw, w: World): void {
   }
 }
 
-function drawMarbles(g: Draw, w: World): void {
-  for (const m of w.marbles) {
+function drawMarbles(g: Draw, w: World, back: number): void {
+  for (const m0 of w.marbles) {
+    // Drawn a fraction of a step back along its path: smooth at any refresh rate.
+    const m = back > 0 ? { id: m0.id, x: m0.x - m0.vx * back, y: m0.y - m0.vy * back } : m0
     // Fresh marbles pop out of the hopper.
     const age = w.t - w.lastSpawn
     const fresh = m.id === w.nextId - 1 && age < 0.3
@@ -358,7 +362,7 @@ function drawTray(g: Draw, side: Side, h: Hippo, pulse: number): void {
 export function render(g: Draw, w: World, look: Look, pulse: [number, number] = [0, 0]): void {
   drawPond(g, w)
   drawHopper(g, w)
-  drawMarbles(g, w)
+  drawMarbles(g, w, look.back ?? 0)
   for (const side of [0, 1] as Side[])
     drawHippo(g, side, w.hippos[side], look.chomp[side] ?? 1, look, w.t)
   // Pond rim over the marbles keeps them visually inside.

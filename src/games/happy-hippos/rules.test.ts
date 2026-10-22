@@ -4,6 +4,8 @@ import { Rng } from '../../core/rng.ts'
 import { H, MID, W } from '../../core/stage.ts'
 import { decide, newMemory } from './bot.ts'
 import {
+  spawnGap,
+  SPAWN_FAST,
   BACK,
   BASE_Y,
   END_GRACE,
@@ -113,7 +115,7 @@ describe('happy hippos rules', () => {
     }
   })
 
-  it('releases the match length of marbles, one every SPAWN_EVERY seconds', () => {
+  it('releases the match length of marbles, quicker and quicker', () => {
     const w = newWorld(4)
     const rng = new Rng(5)
     let t = 0
@@ -123,7 +125,45 @@ describe('happy hippos rules', () => {
     }
     expect(w.released).toBe(4)
     expect(w.nextId - 1).toBe(4)
-    expect(t).toBeGreaterThan(3 * SPAWN_EVERY)
+    expect(t).toBeGreaterThan(3 * SPAWN_FAST)
+    expect(t).toBeLessThan(3 * SPAWN_EVERY + 0.7)
+  })
+
+  it('the release gap shrinks from SPAWN_EVERY to SPAWN_FAST over the match', () => {
+    const w = newWorld(30)
+    w.released = 1
+    const early = spawnGap(w)
+    w.released = 29
+    const late = spawnGap(w)
+    expect(early).toBeGreaterThan(late)
+    expect(early).toBeLessThanOrEqual(SPAWN_EVERY)
+    expect(late).toBeCloseTo(SPAWN_FAST, 5)
+  })
+
+  it('a tap puts the mouth, not the head, on the tapped point', () => {
+    const w = newWorld(10)
+    const ev: Event[] = []
+    const h = w.hippos[0]
+    const tx = h.bx
+    const ty = h.by - 300
+    expect(lunge(w, 0, tx, ty, ev)).toBe(true)
+    h.phase = 'hold'
+    const m = mouthOf(h)
+    expect(Math.hypot(m.x - tx, m.y - ty)).toBeLessThan(2)
+  })
+
+  it('stragglers out of reach are tilted back toward the shores once all are released', () => {
+    const w = newWorld(1)
+    w.released = 1
+    w.lastSpawn = 0
+    w.t = 20
+    // A marble creeping along the side wall, level with the middle.
+    w.marbles = [
+      { id: 1, x: POND.x - POND.r + MARBLE_R + 5, y: POND.y + 40, vx: 0, vy: 0, r: MARBLE_R },
+    ]
+    const rng = new Rng(2)
+    for (let i = 0; i < 90; i++) step(w, STEP, [...NONE], rng)
+    expect((w.marbles[0]?.y ?? 0) - POND.y).toBeGreaterThan(200)
   })
 
   it('ends when all marbles are released and cleared, else after the grace period', () => {
@@ -180,13 +220,37 @@ describe('happy hippos bots', () => {
     expect(winner(w)).not.toBeNull()
   })
 
-  it('the harder bot usually eats more', () => {
-    let hard = 0
-    for (let s = 1; s <= 4; s++) {
-      const { w } = botMatch('hard', 'easy', s)
-      if (winner(w) === 0) hard++
+  it('the harder bot usually eats more: hard beats easy and normal, normal beats easy', () => {
+    const wins = (a: Difficulty, b: Difficulty): number => {
+      let n = 0
+      for (let s = 1; s <= 8; s++) if (winner(botMatch(a, b, s).w) === 0) n++
+      return n
     }
-    expect(hard).toBeGreaterThanOrEqual(2)
+    expect(wins('hard', 'easy')).toBeGreaterThanOrEqual(7)
+    expect(wins('normal', 'easy')).toBeGreaterThanOrEqual(6)
+    // Hard against normal is close (the pond is luck-heavy), but hard eats more overall,
+    // playing either shore.
+    let hard = 0
+    let normal = 0
+    for (let s = 1; s <= 8; s++) {
+      const a = botMatch('hard', 'normal', s).w
+      const b = botMatch('normal', 'hard', s).w
+      hard += a.hippos[0].eaten + b.hippos[1].eaten
+      normal += a.hippos[1].eaten + b.hippos[0].eaten
+    }
+    expect(hard).toBeGreaterThan(normal)
+  })
+
+  it('an open mouth eats the marble it reaches instead of the head batting it away', () => {
+    const w = newWorld(10)
+    const h = w.hippos[0]
+    // A marble resting right where the bite will land.
+    w.marbles = [{ id: 1, x: h.bx, y: h.by - 330, vx: 0, vy: 0, r: MARBLE_R }]
+    w.released = 10
+    const rng = new Rng(1)
+    step(w, STEP, [{ tap: { x: h.bx, y: h.by - 330 } }, { tap: null }], rng)
+    for (let i = 0; i < 20; i++) step(w, STEP, [...NONE], rng)
+    expect(h.eaten).toBe(1)
   })
 
   it('the bot plays the blue hippo as well', () => {
