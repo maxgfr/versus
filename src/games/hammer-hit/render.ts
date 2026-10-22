@@ -607,7 +607,9 @@ export function renderHammer(
   for (const side of [0, 1] as Side[]) {
     const sw = s.swings[side]
     gauge(g, side, sw, live, rt, now, needleAt(sw, ahead), ahead)
-    if (r.phase === 'play' && sw.height < 0 && !o.over && !o.bots[side]) {
+    // Online, each phone prompts only its own player; the rival's gauge still shows.
+    const mine = g.viewer === null || side === g.viewer
+    if (mine && r.phase === 'play' && sw.height < 0 && !o.over && !o.bots[side]) {
       const left = Math.ceil(timeLeft(sw, rt))
       const urgent = live && left <= COUNTDOWN
       hint(g, side, !live ? 'READY' : urgent ? `TAP! ${left}` : 'TAP!', now, live, urgent)
