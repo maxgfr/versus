@@ -160,9 +160,17 @@ function animal(g: Draw, h: Herd, i: number, t: number): void {
   g.emoji(ANIMALS[h.kind % ANIMALS.length] as string, p.x, p.y + bob, ANIMAL_SIZE, tilt, sx, 1)
 }
 
-function blob(g: Draw, side: Side, d: Driver, t: number, real: number): void {
+function blob(
+  g: Draw,
+  side: Side,
+  d: Driver,
+  t: number,
+  real: number,
+  at: [number, number],
+  spring: number,
+): void {
   const col = SIDE[side]
-  const { x, y } = d
+  const [x, y] = at
   const ht = t - d.hitT
   if (d.out) {
     // Trampled flat, with hoof prints.
@@ -180,9 +188,19 @@ function blob(g: Draw, side: Side, d: Driver, t: number, real: number): void {
   }
   const blink = t < d.invT && Math.floor(t * 12) % 2 === 0
   const hurt = ht < 0.4
-  const squash = hurt
-    ? 1 - 0.3 * Math.sin(clamp(ht / 0.4, 0, 1) * Math.PI) * Math.cos(ht * 30)
-    : 1 + 0.06 * Math.sin(real * 8 + side)
+  const squash =
+    (hurt
+      ? 1 - 0.3 * Math.sin(clamp(ht / 0.4, 0, 1) * Math.PI) * Math.cos(ht * 30)
+      : 1 + 0.06 * Math.sin(real * 8 + side)) * clamp(spring, 0.7, 1.4)
+  // A sprint leaves a dusty smear behind the blob.
+  const sprint = t - d.dashT
+  if (sprint >= 0 && sprint < 0.25) {
+    const a = 1 - sprint / 0.25
+    for (let i = 1; i <= 3; i++)
+      g.alpha(a * 0.2 * (4 - i), () =>
+        g.circle(x - d.dx * i * 30, y - d.dy * i * 30, BLOB_R * (1 - i * 0.12), col.light),
+      )
+  }
   g.alpha(blink ? 0.35 : 1, () => {
     g.shadow(x + 4, y + 28, 36, 12, 0.35)
     g.circle(x, y + 4, BLOB_R + 12, alpha(col.main, 0.18))
@@ -232,22 +250,28 @@ export function renderStampede(
   now: number,
   over: boolean,
   real: number,
+  look: { at: [number, number][]; squash: [number, number]; rt: number },
 ): void {
   ground(g)
   // Sticks sit under the herds and blobs: the action stays readable over a thumb.
-  for (const side of [0, 1] as Side[]) pad(g, side, s.pads[side])
+  // Online, each phone shows only its own player's stick.
+  for (const side of [0, 1] as Side[])
+    if (g.viewer === null || side === g.viewer) pad(g, side, s.pads[side])
   warnings(g, s)
+  const at = (side: Side): [number, number] =>
+    look.at[side] ?? [s.drivers[side].x, s.drivers[side].y]
   for (const side of [0, 1] as Side[]) {
     const d = s.drivers[side]
-    if (d.out) blob(g, side, d, s.rt, real)
+    if (d.out) blob(g, side, d, s.rt, real, at(side), look.squash[side])
   }
   // Draw back to front so lower animals overlap the ones behind them.
-  const herds = s.herds.filter((h) => s.rt >= h.t0)
-  for (const h of herds) for (let i = 0; i < h.n; i++) dust(g, h, i, s.rt)
-  for (const h of herds) for (let i = h.n - 1; i >= 0; i--) animal(g, h, i, s.rt)
+  const rt = look.rt
+  const herds = s.herds.filter((h) => rt >= h.t0)
+  for (const h of herds) for (let i = 0; i < h.n; i++) dust(g, h, i, rt)
+  for (const h of herds) for (let i = h.n - 1; i >= 0; i--) animal(g, h, i, rt)
   for (const side of [0, 1] as Side[]) {
     const d = s.drivers[side]
-    if (!d.out) blob(g, side, d, s.rt, real)
+    if (!d.out) blob(g, side, d, s.rt, real, at(side), look.squash[side])
   }
   for (const side of [0, 1] as Side[]) {
     const d = s.drivers[side]

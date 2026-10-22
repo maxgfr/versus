@@ -22,6 +22,12 @@ export const WARN = 1.3
 /** Seconds of blinking invulnerability after a hit. */
 export const INVULN = 1.2
 export const LIVES = 3
+/** A flick of the stick sprints: this speed for DASH_T s, then DASH_CD s to recharge. */
+export const DASH = 820
+export const DASH_T = 0.18
+export const DASH_CD = 1.3
+/** A sprint that runs into the rival knocks it back this fast (decaying). */
+export const SHOVE = 760
 /** Blobs keep this far from the side edges (clear of the pause button at the left). */
 export const EDGE_PAD = 110
 
@@ -47,6 +53,22 @@ export interface Driver {
   invT: number
   hitT: number
   out: boolean
+  /** Round time of the last sprint (-9 never) and its direction. */
+  dashT: number
+  dx: number
+  dy: number
+  /** Knock-back velocity from a shove (decays). */
+  kx: number
+  ky: number
+  /** The sprint (its dashT) that already shoved someone: one shove per sprint. */
+  shoveT: number
+}
+
+/** A joystick vector (|v| ≤ 1) and whether it was flicked this step. */
+export interface Drive {
+  x: number
+  y: number
+  dash?: boolean
 }
 
 export interface World {
@@ -68,7 +90,8 @@ export type Ev =
   | { k: 'warn'; axis: 0 | 1; lane: number; dir: 1 | -1 }
   | { k: 'enter'; axis: 0 | 1; lane: number; dir: 1 | -1 }
   | { k: 'dust'; x: number; y: number }
-  | { k: 'bump'; x: number; y: number }
+  | { k: 'bump'; x: number; y: number; speed: number }
+  | { k: 'dash'; side: Side; x: number; y: number; dx: number; dy: number }
 
 /** The start position of a side's blob: red at the bottom, blue at the top. */
 export const START: readonly { x: number; y: number }[] = [
@@ -78,7 +101,20 @@ export const START: readonly { x: number; y: number }[] = [
 
 export function newDriver(side: Side): Driver {
   const s = START[side] as { x: number; y: number }
-  return { x: s.x, y: s.y, lives: LIVES, invT: -1, hitT: -9, out: false }
+  return {
+    x: s.x,
+    y: s.y,
+    lives: LIVES,
+    invT: -1,
+    hitT: -9,
+    out: false,
+    dashT: -9,
+    dx: 0,
+    dy: 0,
+    kx: 0,
+    ky: 0,
+    shoveT: -9,
+  }
 }
 
 export function newWorld(): World {
@@ -157,7 +193,7 @@ function announce(w: World, rng: Rng, ev: Ev[]): void {
 export function stepWorld(
   w: World,
   dt: number,
-  drives: readonly [{ x: number; y: number } | null, { x: number; y: number } | null],
+  drives: readonly [Drive | null, Drive | null],
   rng: Rng,
   ev: Ev[],
   /** False once the match is decided: herds keep running but no longer hit anyone. */
@@ -176,12 +212,29 @@ export function stepWorld(
     const drive = drives[side]
     if (drive) {
       const m = Math.min(1, Math.hypot(drive.x, drive.y))
-      if (m > 0.06) {
-        const k = Math.hypot(drive.x, drive.y) || 1
+      const k = Math.hypot(drive.x, drive.y) || 1
+      if (drive.dash && m > 0.3 && w.rt - d.dashT >= DASH_CD) {
+        d.dashT = w.rt
+        d.dx = drive.x / k
+        d.dy = drive.y / k
+        ev.push({ k: 'dash', side, x: d.x, y: d.y, dx: d.dx, dy: d.dy })
+      }
+      if (m > 0.06 && w.rt - d.dashT >= DASH_T) {
         d.x += (drive.x / k) * SPEED * m * dt
         d.y += (drive.y / k) * SPEED * m * dt
       }
     }
+    // A sprint runs its course whatever the stick does.
+    if (w.rt - d.dashT < DASH_T) {
+      d.x += d.dx * DASH * dt
+      d.y += d.dy * DASH * dt
+    }
+    // A shove carries on for a moment.
+    d.x += d.kx * dt
+    d.y += d.ky * dt
+    const decay = Math.exp(-8 * dt)
+    d.kx *= decay
+    d.ky *= decay
     d.x = Math.max(EDGE_PAD, Math.min(W - EDGE_PAD, d.x))
     d.y = Math.max(40, Math.min(H - 40, d.y))
   }
@@ -204,9 +257,33 @@ export function stepWorld(
         d.x = Math.max(EDGE_PAD, Math.min(W - EDGE_PAD, d.x))
         d.y = Math.max(40, Math.min(H - 40, d.y))
       }
-      if (w.rt >= w.bumpT) {
+      // A sprinting blob shoves the other one back along the line of contact.
+      let speed = 0
+      // One shove per sprint.
+      const aDash = w.rt - a.dashT < DASH_T && a.dx * nx + a.dy * ny > 0.3 && a.shoveT !== a.dashT
+      const bDash =
+        w.rt - b.dashT < DASH_T && -(b.dx * nx + b.dy * ny) > 0.3 && b.shoveT !== b.dashT
+      if (aDash) a.shoveT = a.dashT
+      if (bDash) b.shoveT = b.dashT
+      if (aDash && !bDash) {
+        b.kx = nx * SHOVE
+        b.ky = ny * SHOVE
+        speed = DASH
+      } else if (bDash && !aDash) {
+        a.kx = -nx * SHOVE
+        a.ky = -ny * SHOVE
+        speed = DASH
+      } else if (aDash && bDash) {
+        // Head to head: both bounce off.
+        a.kx = -nx * SHOVE * 0.6
+        a.ky = -ny * SHOVE * 0.6
+        b.kx = nx * SHOVE * 0.6
+        b.ky = ny * SHOVE * 0.6
+        speed = DASH * 2
+      }
+      if (speed > 0 || w.rt >= w.bumpT) {
         w.bumpT = w.rt + 0.6
-        ev.push({ k: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+        ev.push({ k: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, speed })
       }
     }
   }

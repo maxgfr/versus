@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { StampedeBot } from './bot.ts'
+import { pathClearance, StampedeBot } from './bot.ts'
 import {
   along,
   animalAt,
   BLOB_R,
+  DASH,
+  DASH_CD,
+  DASH_T,
+  type Drive,
   type Ev,
   type Herd,
   HIT_D,
@@ -40,11 +44,7 @@ function quiet(herds: Herd[] = []): World {
   return w
 }
 
-function run(
-  w: World,
-  seconds: number,
-  drives: [{ x: number; y: number } | null, { x: number; y: number } | null] = NONE,
-): Ev[] {
+function run(w: World, seconds: number, drives: [Drive | null, Drive | null] = NONE): Ev[] {
   const ev: Ev[] = []
   for (let i = 0; i < Math.round(seconds / STEP); i++) stepWorld(w, STEP, drives, rng(), ev)
   return ev
@@ -162,7 +162,74 @@ describe('being hit', () => {
   })
 })
 
+describe('sprint', () => {
+  it('a flick sprints well past a walk, then recharges', () => {
+    const w = quiet()
+    const y0 = w.drivers[0].y
+    run(w, STEP, [{ x: 0, y: -1, dash: true }, null])
+    run(w, DASH_T, [{ x: 0, y: -1 }, null])
+    const sprint = y0 - w.drivers[0].y
+    expect(sprint).toBeGreaterThan(DASH * DASH_T * 0.9)
+    expect(sprint).toBeGreaterThan(SPEED * (DASH_T + STEP) * 2)
+    // A second flick straight away does nothing extra.
+    const ev = run(w, STEP, [{ x: 0, y: -1, dash: true }, null])
+    expect(ev.some((e) => e.k === 'dash')).toBe(false)
+    run(w, DASH_CD, NONE)
+    expect(run(w, STEP, [{ x: 0, y: -1, dash: true }, null]).some((e) => e.k === 'dash')).toBe(true)
+  })
+
+  it('sprinting into the rival shoves it back, once', () => {
+    const w = quiet()
+    w.drivers[0].x = 500
+    w.drivers[0].y = 1000
+    w.drivers[1].x = 500
+    w.drivers[1].y = 1000 - BLOB_R * 2 - 40
+    const y1 = w.drivers[1].y
+    const ev = run(w, STEP, [{ x: 0, y: -1, dash: true }, null])
+    ev.push(...run(w, 0.5, NONE))
+    const shoves = ev.filter((e) => e.k === 'bump' && e.speed > 0)
+    expect(shoves.length).toBe(1)
+    expect(y1 - w.drivers[1].y).toBeGreaterThan(90)
+  })
+})
+
 describe('bot', () => {
+  it('will not stroll through a herd to reach a quiet spot', () => {
+    // A herd sweeps along y = 900 right now; the far side is clear.
+    const w = quiet([herd({ t0: -0.8, lane: 900, n: 6, v: 450 })])
+    const from = { x: 500, y: 1100 }
+    const to = { x: 500, y: 600 }
+    expect(pathClearance(w, from, to, SPEED, 1.5)).toBeLessThan(HIT_D)
+    expect(pathClearance(w, from, from, SPEED, 1.5)).toBeGreaterThan(HIT_D)
+  })
+
+  it('hard outlasts easy most of the time', () => {
+    let hard = 0
+    const n = 8
+    for (let seed = 1; seed <= n; seed++) {
+      const w = newWorld()
+      const hs = (seed % 2) as 0 | 1
+      const bots =
+        hs === 0
+          ? [new StampedeBot(new Rng(seed), 'hard'), new StampedeBot(new Rng(seed + 50), 'easy')]
+          : [new StampedeBot(new Rng(seed), 'easy'), new StampedeBot(new Rng(seed + 50), 'hard')]
+      const r = new Rng(seed * 31)
+      let steps = 0
+      while (roundOver(w) === null && steps < 60 * 240) {
+        stepWorld(
+          w,
+          STEP,
+          [bots[0]?.drive(w, 0, STEP) ?? null, bots[1]?.drive(w, 1, STEP) ?? null],
+          r,
+          [],
+        )
+        steps++
+      }
+      if (roundOver(w) === hs) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(6)
+  })
+
   it('steps out of the way of a herd that is about to hit it', () => {
     const w = quiet([herd({ t0: 0.1, lane: 1000, n: 2, v: 500 })])
     w.drivers[0].x = 500
