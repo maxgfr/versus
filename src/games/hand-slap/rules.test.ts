@@ -9,17 +9,22 @@ import { SlapBot } from './bot.ts'
 import factory from './index.ts'
 import {
   A_REST,
+  BUFFER,
   COMMIT,
+  HOLD_FORCE,
+  REST,
   D_REST,
   IMPACT,
   LIFT,
   PULLED,
   STRIKE,
+  STRIKE_MIN,
   TARGET,
   duelNew,
   handTarget,
   matchWinner,
   stepDuel,
+  strikeTime,
   type Duel,
   type Ev,
   type Touch,
@@ -146,6 +151,79 @@ describe('hand slap rules', () => {
     expect(d.phase).toBe('rest')
   })
 
+  it('a flick commits the slap at once, and a harder flick lands sooner', () => {
+    const rng = new Rng(20)
+    const d = ready()
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    const evs = stepDuel(d, STEP, { ...HOLD, flick: 1 }, NONE, rng)
+    expect(evs).toContain('commit')
+    expect(d.phase).toBe('strike')
+    expect(d.force).toBe(1)
+    expect(d.strike).toBeCloseTo(STRIKE_MIN)
+    expect(strikeTime(HOLD_FORCE)).toBeCloseTo(STRIKE)
+    expect(strikeTime(0.7)).toBeLessThan(STRIKE)
+    expect(strikeTime(0.7)).toBeGreaterThan(STRIKE_MIN)
+    // It lands within the shorter window.
+    steps(d, Math.ceil(STRIKE_MIN / STEP) + 1, HOLD, NONE, rng)
+    expect(d.points).toEqual([1, 0])
+  })
+
+  it('a flick that ends with the finger lifting is still a real slap, not a fake', () => {
+    const rng = new Rng(21)
+    const d = ready()
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    const evs = stepDuel(d, STEP, { ...LET_GO, flick: 0.6 }, NONE, rng)
+    expect(evs).toContain('commit')
+    expect(evs).not.toContain('fake')
+    expect(d.force).toBeCloseTo(0.6)
+  })
+
+  it('a held slap keeps the standard force and window', () => {
+    const rng = new Rng(22)
+    const d = ready()
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    steps(d, Math.ceil(COMMIT / STEP) + 1, HOLD, NONE, rng)
+    expect(d.force).toBe(HOLD_FORCE)
+    expect(d.strike).toBe(STRIKE)
+  })
+
+  it('a press just before the rest ends is queued instead of swallowed', () => {
+    const rng = new Rng(23)
+    const d = duelNew(0)
+    d.cool = BUFFER - 0.05
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    expect(d.phase).toBe('rest')
+    steps(d, Math.ceil(BUFFER / STEP) + 1, HOLD, NONE, rng)
+    expect(d.phase).toBe('wind')
+  })
+
+  it('a queued press let go before the rest ends does nothing', () => {
+    const rng = new Rng(24)
+    const d = duelNew(0)
+    d.cool = BUFFER - 0.05
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    steps(d, Math.ceil(BUFFER / STEP) + 1, LET_GO, NONE, rng)
+    expect(d.phase).toBe('rest')
+  })
+
+  it('an early press long before the rest ends is still ignored', () => {
+    const rng = new Rng(25)
+    const d = duelNew(0)
+    d.cool = 0.6
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    steps(d, Math.ceil(0.6 / STEP) + 2, HOLD, NONE, rng)
+    expect(d.phase).toBe('rest')
+  })
+
+  it('a fake is followed by a shorter rest than a slap', () => {
+    const rng = new Rng(26)
+    const d = ready()
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    stepDuel(d, STEP, LET_GO, NONE, rng)
+    settle(d, rng, LET_GO)
+    expect(d.cool).toBeLessThan(REST)
+  })
+
   it('first to the target takes the match', () => {
     const d = ready()
     d.points = [TARGET - 1, 2]
@@ -206,7 +284,7 @@ function dodgeRate(difficulty: Difficulty): number {
     let whiffed = false
     while (!whiffed && n++ < 600) {
       const a: Touch = d.phase === 'rest' ? PRESS : HOLD
-      const b = bot.drive(STEP, 'def', { phase: d.phase, t: d.t })
+      const b = bot.drive(STEP, 'def', { phase: d.phase, t: d.t, strike: d.strike })
       const evs = stepDuel(d, STEP, a, b.tap ? PULL : NONE, rng)
       if (evs.includes('whiff')) whiffed = true
       if (evs.includes('connect')) break
@@ -223,6 +301,95 @@ describe('hand slap bots', () => {
     expect(hard).toBeGreaterThan(easy + 0.2)
     expect(hard).toBeGreaterThan(0.5)
     expect(easy).toBeLessThan(0.4)
+  })
+
+  it('difficulty orders the defence: easy < normal < hard (hard used to be slower than normal)', () => {
+    const [easy, normal, hard] = (['easy', 'normal', 'hard'] as const).map((d) => dodgeRate(d))
+    expect(normal).toBeGreaterThan((easy ?? 0) + 0.15)
+    expect(hard).toBeGreaterThan((normal ?? 0) + 0.1)
+    // Beatable: even hard gets caught now and then.
+    expect(hard).toBeLessThan(1)
+  })
+
+  it('a hard defender pulls early against an attacker who never fakes', () => {
+    const rng = new Rng(31)
+    const bot = new SlapBot(rng.fork(), 'hard')
+    let early = 0
+    for (let i = 0; i < 40; i++) {
+      const d = ready(0)
+      let n = 0
+      while (n++ < 600) {
+        const a: Touch = d.phase === 'rest' ? PRESS : HOLD
+        const b = bot.drive(STEP, 'def', { phase: d.phase, t: d.t, strike: d.strike })
+        const wasWind = d.phase === 'wind'
+        stepDuel(d, STEP, a, b.tap ? PULL : NONE, rng)
+        if (wasWind && d.pend) {
+          early++
+          break
+        }
+        if (d.phase === 'rest' && n > 2) break
+      }
+    }
+    expect(early).toBeGreaterThan(8)
+  })
+
+  it('a hard attacker fakes more against a jumpy defender than a patient one', () => {
+    const fakeShare = (jumpy: boolean): number => {
+      const rng = new Rng(12)
+      const bot = new SlapBot(rng.fork(), 'hard')
+      let fakes = 0
+      let total = 0
+      for (let i = 0; i < 200; i++) {
+        const d = ready(0)
+        let n = 0
+        let faked = false
+        let started = false
+        while (n++ < 600) {
+          const a = bot.drive(STEP, 'att', {
+            phase: d.phase,
+            t: d.t,
+            cool: d.cool,
+            pend: d.pend,
+            flinched: d.flinched,
+          })
+          const b = jumpy && d.phase === 'wind' && d.t > 0 ? PULL : NONE
+          stepDuel(d, STEP, a, b, rng)
+          if (d.phase !== 'rest') started = true
+          if (d.phase === 'fake') faked = true
+          if (d.phase === 'rest' && started) break
+        }
+        // One more look at rest so the bot books the outcome.
+        bot.drive(STEP, 'att', { phase: 'rest', t: 0, cool: 1 })
+        total++
+        if (faked) fakes++
+      }
+      return fakes / total
+    }
+    expect(fakeShare(true)).toBeGreaterThan(fakeShare(false) + 0.2)
+  })
+
+  it('a hard attacker flicks most real slaps, an easy one mostly holds', () => {
+    const flickShare = (difficulty: Difficulty): number => {
+      const rng = new Rng(5)
+      const bot = new SlapBot(rng.fork(), difficulty)
+      let flicks = 0
+      let reals = 0
+      for (let i = 0; i < 300; i++) {
+        const d = ready(0)
+        let n = 0
+        while (n++ < 600 && d.phase !== 'strike' && d.phase !== 'fake') {
+          stepDuel(d, STEP, bot.drive(STEP, 'att', { phase: d.phase, t: d.t, cool: 0 }), NONE, rng)
+        }
+        if (d.phase === 'strike') {
+          reals++
+          if (d.force > HOLD_FORCE) flicks++
+        }
+        bot.drive(STEP, 'att', { phase: 'rest', t: 0, cool: 1 })
+      }
+      return flicks / Math.max(1, reals)
+    }
+    expect(flickShare('hard')).toBeGreaterThan(0.6)
+    expect(flickShare('easy')).toBeLessThan(0.3)
   })
 
   it('a bot attacker mixes real slaps with fakes', () => {

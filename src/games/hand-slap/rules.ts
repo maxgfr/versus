@@ -6,19 +6,26 @@ import type { Rng } from '../../core/rng.ts'
  * lifts when they press. Holding past COMMIT makes the slap real: it lands
  * STRIKE seconds later unless the defender has pulled away. Letting go before
  * COMMIT is a fake: it comes back empty, and a defender who flinches gives the
- * attacker a point.
+ * attacker a point. Flicking the finger toward the midline commits at once,
+ * and the harder the flick, the faster (and harder) the slap lands.
  */
 
 /** Points to win the match. */
 export const TARGET = 5
 /** Seconds the attacker must keep holding before the slap is committed. */
 export const COMMIT = 0.2
-/** Seconds from commit to impact: the defender's window to pull away. */
+/** Seconds from commit to impact for a held slap: the defender's window to pull away. */
 export const STRIKE = 0.36
+/** Seconds from commit to impact for the hardest flick. */
+export const STRIKE_MIN = 0.28
+/** Force of a slap committed by holding (a flick is at least this hard). */
+export const HOLD_FORCE = 0.4
+/** A press this close to the end of the rest is queued instead of dropped. */
+export const BUFFER = 0.15
 /** Seconds a fake lasts (a defender can flinch during it). */
 export const FAKE = 0.42
 /** Rest before the attacker may press again: minimum and random spread. */
-export const REST = 0.9
+export const REST = 0.75
 export const REST_SPREAD = 0.6
 /** Seconds of rest before the first attack of a match. */
 export const FIRST = 1.2
@@ -48,6 +55,12 @@ export interface Duel {
   dodged: boolean
   /** The defender already flinched on this fake. */
   flinched: boolean
+  /** 0..1 force of the current (or last) slap: a hold is HOLD_FORCE, a flick up to 1. */
+  force: number
+  /** Seconds from commit to impact for the current slap (harder = faster). */
+  strike: number
+  /** The attacker pressed just before the rest ended and is still holding. */
+  queued: boolean
   points: [number, number]
 }
 
@@ -59,14 +72,29 @@ export const duelNew = (att: Side): Duel => ({
   pend: false,
   dodged: false,
   flinched: false,
+  force: HOLD_FORCE,
+  strike: STRIKE,
+  queued: false,
   points: [0, 0],
 })
 
-/** What one side did this step. `held` is still down; `press` went down this step; `tap` went down this step. */
+/** Seconds from commit to impact for a slap of `force` (0..1). */
+export const strikeTime = (force: number): number =>
+  STRIKE -
+  ((Math.max(HOLD_FORCE, Math.min(1, force)) - HOLD_FORCE) / (1 - HOLD_FORCE)) *
+    (STRIKE - STRIKE_MIN)
+
+/**
+ * What one side did this step. `held` is still down; `press` went down this
+ * step; `tap` went down this step. `flick` (attacker, 0..1) is how hard the
+ * finger is pushed toward the midline: any flick commits the slap at once,
+ * and a harder one lands faster.
+ */
 export interface Touch {
   press: boolean
   held: boolean
   tap: boolean
+  flick?: number
 }
 
 /**
@@ -85,12 +113,18 @@ export function stepDuel(d: Duel, dt: number, a: Touch, b: Touch, rng: Rng): Ev[
 
   if (d.phase === 'rest') {
     d.cool = Math.max(0, d.cool - dt)
-    if (press && d.cool <= 0) {
+    // A press a hair before the rest ends is queued, not swallowed.
+    if (press && d.cool > 0 && d.cool <= BUFFER) d.queued = true
+    if (!held) d.queued = false
+    if ((press || d.queued) && d.cool <= 0) {
       d.phase = 'wind'
       d.t = 0
       d.pend = false
       d.dodged = false
       d.flinched = false
+      d.queued = false
+      d.force = HOLD_FORCE
+      d.strike = STRIKE
       evs.push('wind')
     }
     return evs
@@ -98,6 +132,20 @@ export function stepDuel(d: Duel, dt: number, a: Touch, b: Touch, rng: Rng): Ev[
 
   if (d.phase === 'wind') {
     if (pull) d.pend = true
+    const flick = a.flick ?? 0
+    if (flick > 0 || (held && d.t >= COMMIT)) {
+      // Committed: by holding through the wind-up, or at once by a flick.
+      d.phase = 'strike'
+      d.t = 0
+      d.force = flick > 0 ? Math.max(HOLD_FORCE, Math.min(1, flick)) : HOLD_FORCE
+      d.strike = strikeTime(d.force)
+      evs.push('commit')
+      if (d.pend) {
+        d.dodged = true
+        evs.push('pull')
+      }
+      return evs
+    }
     if (!held) {
       // Let go before the commit point: a fake.
       d.phase = 'fake'
@@ -110,15 +158,6 @@ export function stepDuel(d: Duel, dt: number, a: Touch, b: Touch, rng: Rng): Ev[
       }
       return evs
     }
-    if (d.t >= COMMIT) {
-      d.phase = 'strike'
-      d.t = 0
-      evs.push('commit')
-      if (d.pend) {
-        d.dodged = true
-        evs.push('pull')
-      }
-    }
     return evs
   }
 
@@ -128,16 +167,17 @@ export function stepDuel(d: Duel, dt: number, a: Touch, b: Touch, rng: Rng): Ev[
       d.points[att]++
       evs.push('flinch')
     }
-    if (d.t >= FAKE) finish(d, rng)
+    // A fake costs no point, so it gets a shorter rest: keep the duel moving.
+    if (d.t >= FAKE) finish(d, rng, 0.6)
     return evs
   }
 
   // strike
-  if (pull && !d.dodged && d.t < STRIKE) {
+  if (pull && !d.dodged && d.t < d.strike) {
     d.dodged = true
     evs.push('pull')
   }
-  if (d.t >= STRIKE) {
+  if (d.t >= d.strike) {
     if (d.dodged) {
       evs.push('whiff')
       d.att = def
@@ -151,10 +191,10 @@ export function stepDuel(d: Duel, dt: number, a: Touch, b: Touch, rng: Rng): Ev[
   return evs
 }
 
-function finish(d: Duel, rng: Rng): void {
+function finish(d: Duel, rng: Rng, k = 1): void {
   d.phase = 'rest'
   d.t = 0
-  d.cool = REST + rng.range(0, REST_SPREAD)
+  d.cool = (REST + rng.range(0, REST_SPREAD)) * k
   d.pend = false
   d.dodged = false
   d.flinched = false

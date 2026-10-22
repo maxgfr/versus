@@ -1,7 +1,7 @@
 import { other, type Side } from '../../core/game.ts'
 import { outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import { frame, inFrame, textAngle } from '../../core/frame.ts'
-import { banner, namePill, pips } from '../../core/hud.ts'
+import { banner, hudY, namePill, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
@@ -113,7 +113,10 @@ function hand(
   dist: number,
   o: {
     lift: number
+    /** Spring value around 1: below flattens the palm (impact), above stretches it (lift / strike). */
     squash: number
+    /** 0..1 speed of the palm: streaks behind a flying slap. */
+    blur: number
     flash: number
     red: number
     pain: number
@@ -128,7 +131,17 @@ function hand(
     const x = W / 2 + Math.sin(o.now * 60) * o.tremble * 4
     const y = MID + dist
     const reach = H + 200 - y
-    const k = 1.22 + o.lift * 0.14
+    // Idle life: a slow breath, out of step between the two players.
+    const breath = 1 + Math.sin(o.now * 2.4 + side * 1.9) * 0.012
+    const k = (1.22 + o.lift * 0.14) * breath
+    const sq = Math.max(0.7, Math.min(1.3, o.squash))
+    // Speed streaks on the arm's side of the palm, trailing back to the player.
+    if (o.blur > 0.25)
+      for (let i = 0; i < 4; i++) {
+        const lx = x + (i - 1.5) * 64
+        const len = 90 + o.blur * 220 - Math.abs(i - 1.5) * 40
+        g.line(lx, y + 120, lx, y + 120 + len, alpha(C.white, (o.blur - 0.25) * 0.5), 8)
+      }
     // Contact shadow: drifts away and fades as the hand lifts.
     g.ellipse(
       x + 14 + o.lift * 40,
@@ -161,8 +174,8 @@ function hand(
         g.rect(-69, 94, 138, 14, SIDE[side].main)
         drawHand(g, col, { pain: o.pain, red: o.red, now: o.now })
       },
-      k * (1 + o.squash * 0.1),
-      k * (1 - o.squash * 0.14),
+      k * (1 + (1 - sq) * 0.6),
+      k * sq,
     )
   })
 }
@@ -176,9 +189,9 @@ function target(g: Draw, side: Side, dist: number, now: number, t: number): void
 }
 
 /** A comic "POW" star at the impact point. */
-function pow(g: Draw, x: number, y: number, k: number): void {
+function pow(g: Draw, x: number, y: number, k: number, force: number): void {
   if (k <= 0) return
-  const s = outBack(Math.min(1, (1 - k) * 4)) * (0.8 + k * 0.4)
+  const s = outBack(Math.min(1, (1 - k) * 4)) * (0.8 + k * 0.4) * (0.8 + force * 0.4)
   g.at(
     x,
     y,
@@ -240,37 +253,45 @@ function roleChip(g: Draw, side: Side, att: boolean, now: number, swapAge: numbe
 }
 
 /** How-to lines beside the arm, upright for their reader. */
-function prompt(g: Draw, side: Side, lines: [string, string], a: number): void {
+function prompt(g: Draw, side: Side, lines: readonly string[], a: number): void {
   if (a <= 0) return
   inFrame(g, side, () =>
     g.alpha(a, () => {
       const x = W / 2 - 280
       const y = MID + 290
-      g.text(lines[0], x, y, {
-        size: 44,
-        weight: 700,
-        color: C.white,
-        stroke: alpha(C.ink, 0.9),
-        strokeWidth: 10,
-        angle: textAngle(g, side),
-      })
-      g.text(lines[1], x, y + 62, {
-        size: 36,
-        weight: 600,
-        color: alpha(C.white, 0.75),
-        stroke: alpha(C.ink, 0.9),
-        strokeWidth: 9,
-        angle: textAngle(g, side),
-      })
+      lines.forEach((line, i) =>
+        g.text(line, x, y + (i === 0 ? 0 : 62 + (i - 1) * 52), {
+          size: i === 0 ? 44 : 36,
+          weight: i === 0 ? 700 : 600,
+          color: i === 0 ? C.white : alpha(C.white, 0.75),
+          stroke: alpha(C.ink, 0.9),
+          strokeWidth: i === 0 ? 10 : 9,
+          angle: textAngle(g, side),
+        }),
+      )
     }),
   )
 }
+
+const ATT_HELP = ['Hold to slap', 'Flick = faster!', 'Quick tap = fake'] as const
+const DEF_HELP = ['Tap to dodge', 'only a real slap!'] as const
 
 export function renderSlap(
   g: Draw,
   s: State,
   now: number,
-  o: { names: [string, string]; over: boolean; bots: [boolean, boolean] },
+  o: {
+    names: [string, string]
+    over: boolean
+    bots: [boolean, boolean]
+    /** Interpolated palm distances for this frame. */
+    hand: [number, number]
+    /** Squash springs (rest 1) and score pulses (0..1) per side. */
+    squash: [number, number]
+    pulse: [number, number]
+    /** 0..1 palm speed per side. */
+    blur: [number, number]
+  },
 ): void {
   const d = s.duel
   const def: Side = other(d.att)
@@ -285,7 +306,7 @@ export function renderSlap(
   const impact = m.kind === 'connect' ? Math.max(0, 1 - age / 0.3) : 0
   const flinch = m.kind === 'flinch' && age < 0.7 ? 1 - age / 0.7 : 0
 
-  if (d.phase === 'wind') target(g, def, s.hand[def], now, d.t)
+  if (d.phase === 'wind') target(g, def, o.hand[def], now, d.t)
 
   // The defender first, the attacker over them: the slap lands on top.
   for (const side of [def, d.att]) {
@@ -293,20 +314,22 @@ export function renderSlap(
     const lift = isAtt ? (d.phase === 'wind' ? 1 : d.phase === 'fake' ? 0.6 : 0) : flinch * 0.5
     const isHurt = hurt === side
     const won = s.winner === side
-    hand(g, side, s.hand[side], {
+    hand(g, side, o.hand[side], {
       lift: s.winner !== null ? (won ? 0.5 + 0.5 * Math.sin(now * 6) : 0) : lift,
-      squash: isHurt ? impact : isAtt ? impact * 0.6 : 0,
+      squash: o.squash[side],
+      blur: isAtt ? o.blur[side] : 0,
       flash: isHurt ? Math.max(0, impact - 0.1) * 1.4 : 0,
       red: isHurt ? Math.max(0, 1 - age / 0.9) : s.winner !== null && !won ? 0.6 : 0,
       pain: isHurt ? 1 - prog(age, 0.5, 0.9) : 0,
-      tremble: isAtt && d.phase === 'wind' ? 1 : 0,
+      // The attacker shakes with intent; the defender with nerves.
+      tremble: d.phase === 'wind' ? (isAtt ? 1 : 0.35) : 0,
       wave: won ? Math.sin(now * 9) * 0.18 : 0,
       now,
     })
   }
   if (impact > 0) {
     const p = frame(other(m.by), W / 2, MID + D_REST - 60)
-    pow(g, p.x, p.y, impact)
+    pow(g, p.x, p.y, impact, m.k)
   }
 
   const ready = d.phase === 'rest' && d.cool <= 0 && !o.over
@@ -319,7 +342,7 @@ export function renderSlap(
       prompt(
         g,
         side,
-        isAtt ? ['Hold to slap', 'Quick tap = fake'] : ['Tap to dodge', 'only a real slap!'],
+        isAtt ? ATT_HELP : DEF_HELP,
         isAtt ? (ready || d.phase === 'wind' ? 1 : 0.55) : a * 0.8,
       )
   }
@@ -341,6 +364,15 @@ export function renderSlap(
   for (const side of [0, 1] as Side[]) {
     const active = d.att === side && (d.phase === 'wind' || ready)
     namePill(g, side, o.names[side], { active, x: side === 0 ? 360 : W - 360 })
-    pips(g, side, d.points[side], s.target, { x: side === 0 ? W - 190 : 190 })
+    // The pips pop when a point lands.
+    const px = side === 0 ? W - 190 : 190
+    const py = hudY(g, side)
+    g.at(
+      px,
+      py,
+      0,
+      () => g.at(-px, -py, 0, () => pips(g, side, d.points[side], s.target, { x: px })),
+      1 + o.pulse[side] * 0.35,
+    )
   }
 }
