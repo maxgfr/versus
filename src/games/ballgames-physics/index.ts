@@ -1,4 +1,4 @@
-import { BaseGame, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { BaseGame, type Difficulty, type MatchSpec, other, type Side } from '../../core/game.ts'
 import { bigScore, namePill, pips } from '../../core/hud.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { lerp, Spring } from '../../core/fx/ease.ts'
@@ -21,7 +21,7 @@ import {
   capped,
   CHARGE_TIME,
   closingSpeed,
-  COOLDOWN,
+  cooldownFor,
   escaped,
   GOAL_PAUSE,
   GOAL_TOP,
@@ -38,6 +38,7 @@ import {
   MAX_BALL,
   matchOver,
   PITCH,
+  rampHeat,
   restCount,
   STALL_TIME,
 } from './rules.ts'
@@ -80,6 +81,10 @@ export interface State {
   rest: [number, number]
   /** Seconds the ball has been (nearly) motionless. */
   still: number
+  /** Seconds into the current point (since the last kick-off). */
+  pointT: number
+  /** How heated the match is, 0..1 (see rules `rampHeat`): kicks fly faster, hops recharge sooner. */
+  heat: number
   /** Physics snapshot: the ball, and each player's torso and head. */
   bodies: BodySnap[]
   /** Ball velocity per step, for the trail and the stretch. */
@@ -105,6 +110,7 @@ type Ev =
   | { kind: 'land'; side: Side; x: number; k: number }
   | { kind: 'goal'; side: Side; x: number; y: number; speed: number }
   | { kind: 'kickoff' | 'reset'; x: number; y: number }
+  | { kind: 'heat'; level: number }
 
 /** Seconds a tap made just before the player is ready is kept, so it is never lost. */
 const BUFFER = 0.22
@@ -117,10 +123,15 @@ const sideOf = (label: string): Side | null => {
   return null
 }
 
-class BallgamesPhysics extends BaseGame<State> {
+export class BallgamesPhysics extends BaseGame<State> {
   /** Goals that take the match. */
   private get goal(): number {
     return this.ctx.target || match.default
+  }
+
+  /** How well `side`'s computer player plays (tests pit two levels against each other). */
+  protected level(_side: Side): Difficulty {
+    return this.ctx.difficulty
   }
 
   private Mx: M | null = null
@@ -168,6 +179,8 @@ class BallgamesPhysics extends BaseGame<State> {
       power: [0, 0],
       rest: [0, 0],
       still: 0,
+      pointT: 0,
+      heat: 0,
       bodies: [],
       bv: [0, 0],
       tapAt: [-9, -9],
@@ -226,7 +239,7 @@ class BallgamesPhysics extends BaseGame<State> {
       const body = this.part(bodyId(side))
       if (!Mx || !ball || !body) continue
       const k = kickPower(s.charge[side], closing)
-      const v = capped(kickVelocity(body.position, ball.position, side, k))
+      const v = capped(kickVelocity(body.position, ball.position, side, k, s.heat))
       Mx.Body.setVelocity(ball, v)
       // A hard strike spins the ball over its top.
       Mx.Body.setAngularVelocity(ball, (v.x > 0 ? 1 : -1) * (0.08 + k * 0.22))
@@ -256,7 +269,7 @@ class BallgamesPhysics extends BaseGame<State> {
     Mx.Body.setVelocity(body, { x: vx, y: -HOP_V })
     Mx.Body.setVelocity(head, { x: vx, y: -HOP_V })
     s.kick[side] = KICK_TIME
-    s.cool[side] = COOLDOWN
+    s.cool[side] = cooldownFor(s.heat)
     s.hit[side] = false
     s.charge[side] = 0
     s.winding[side] = true
@@ -283,8 +296,9 @@ class BallgamesPhysics extends BaseGame<State> {
           standing,
           cool: s.cool[side],
           time: this.time,
+          heat: s.heat,
         },
-        this.ctx.difficulty,
+        this.level(side),
         this.ctx.rng,
         this.minds[side],
       )
@@ -418,6 +432,12 @@ class BallgamesPhysics extends BaseGame<State> {
       this.score(scorer, ball)
       return
     }
+    // The longer the point, the hotter the match.
+    s.pointT += dt
+    const heat = rampHeat(s.pointT, s.score, this.goal)
+    for (const level of [0.5, 0.9])
+      if (s.heat < level && heat >= level) this.events.push({ kind: 'heat', level })
+    s.heat = r2(heat)
     // Barely moving for a while (wedged on a crossbar, or behind everyone): put it back on the centre spot.
     s.still = ball.speed < 1.2 ? s.still + dt : 0
     if (s.still > STALL_TIME) {
@@ -473,6 +493,9 @@ class BallgamesPhysics extends BaseGame<State> {
     s.winding = [false, false]
     s.rest = [0, 0]
     s.still = 0
+    s.pointT = 0
+    // The pressure of the score carries into the new point; the rally part starts cold.
+    s.heat = r2(rampHeat(0, s.score, this.goal))
     this.minds = [newMind(), newMind()]
     this.wantAt = [-9, -9]
     this.wasUp = [false, false]
@@ -620,6 +643,12 @@ class BallgamesPhysics extends BaseGame<State> {
         audio.play('go')
         fx.ring(e.x, e.y, C.yellow, 110)
         break
+      case 'heat':
+        // The crowd feels it: the ball catches fire, everyone is told.
+        audio.play('powerup', e.level > 0.7 ? 1.25 : 1)
+        fx.float(e.level > 0.7 ? 'On fire!' : 'Heating up!', W / 2, PITCH.ceil + 90, C.orange, 52)
+        fx.flash(C.orange, 0.12)
+        break
       case 'reset':
         fx.puff(e.x, e.y, 'rgba(255,255,255,0.6)', 8)
         audio.play('pop')
@@ -746,6 +775,7 @@ class BallgamesPhysics extends BaseGame<State> {
       squash: this.ballSquash.value,
       trail: this.trail,
       bv: s.bv,
+      heat: s.heat,
       time: t,
       loading: this.world === null && this.ctx.mode !== 'online',
       winner: s.champ,
@@ -761,7 +791,10 @@ class BallgamesPhysics extends BaseGame<State> {
           ? 0
           : standing && s.cool[side] <= 0
             ? 1
-            : Math.max(0, 1 - Math.max(s.cool[side] / COOLDOWN, s.kick[side] / KICK_TIME))
+            : Math.max(
+                0,
+                1 - Math.max(s.cool[side] / cooldownFor(s.heat), s.kick[side] / KICK_TIME),
+              )
       // Online, each phone shows only its own player's pad, never the rival's button.
       if (g.viewer === null || side === g.viewer)
         drawPad(g, {

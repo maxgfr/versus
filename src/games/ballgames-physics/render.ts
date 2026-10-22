@@ -35,6 +35,8 @@ export interface SceneView {
   trail: readonly { x: number; y: number }[]
   /** Ball velocity, per step. */
   bv: [number, number]
+  /** How heated the match is, 0..1: the ball glows and its trail burns. */
+  heat: number
   time: number
   loading: boolean
   /** The match is decided: the winner (if any) celebrates. */
@@ -345,12 +347,28 @@ function ball(g: Draw, b: BodySnap, v: SceneView): void {
       )
   }
   // Motion trail: fading ghosts along the real path, wider and brighter the faster it flies.
+  // A heated match sets the trail and the ball's halo burning orange.
   const fast = clamp((speed - 9) / 14, 0, 1)
+  const hot = clamp((v.heat - 0.2) / 0.8, 0, 1)
+  const tint = hot > 0.5 ? C.orange : hot > 0 ? C.yellow : '#fff8ef'
   const tr = v.trail
   for (let i = 0; i < tr.length; i++) {
     const p = tr[i] as { x: number; y: number }
     const f = (i + 1) / (tr.length + 1)
-    g.alpha(0.32 * f * fast, () => g.circle(p.x, p.y, BALL_R * (0.55 + 0.4 * f), '#fff8ef'))
+    g.alpha(0.32 * f * fast, () => g.circle(p.x, p.y, BALL_R * (0.55 + 0.4 * f), tint))
+  }
+  if (hot > 0) {
+    const flick = 0.85 + 0.15 * Math.sin(v.time * 18)
+    const hr = BALL_R * (1.5 + hot * 0.5) * flick
+    g.circle(
+      x,
+      y,
+      hr,
+      g.rad(x, y, BALL_R * 0.8, hr, [
+        [0, alpha(C.orange, 0.5 * hot)],
+        [1, alpha(C.orange, 0)],
+      ]),
+    )
   }
   // Stretched along its flight, squashed by the last knock (spring).
   const stretch = (1 + clamp((speed - 6) / 30, 0, 0.18)) * v.squash

@@ -8,8 +8,18 @@ import { Rng } from '../../core/rng.ts'
 import type { Stage } from '../../core/stage.ts'
 import { W } from '../../core/stage.ts'
 import { loadMatter, PhysicsWorld } from '../../engines/ragdoll/index.ts'
-import factory, { match, type State } from './index.ts'
-import { botHop, type BotMind, type BotView, chance, hopMeets, newMind, type Plan } from './bot.ts'
+import factory, { BallgamesPhysics, match, type State } from './index.ts'
+import {
+  botHop,
+  type BotMind,
+  type BotView,
+  chance,
+  guardSpot,
+  hopMeets,
+  kickValue,
+  newMind,
+  type Plan,
+} from './bot.ts'
 import {
   attackDir,
   BALL_R,
@@ -27,7 +37,11 @@ import {
   leadX,
   MAX_BALL,
   REST_STEPS,
+  rampHeat,
   restCount,
+  cooldownFor,
+  kickOutcome,
+  HEAT_KICK,
   COOLDOWN,
   GOAL_TOP,
   goalBy,
@@ -159,14 +173,20 @@ describe('ballgames bot', () => {
     expect(botHop(view({ time: 10.5 }), 'hard', rng, mind)).not.toBeNull()
   })
 
-  it('never hops for a ball on the other side, or while cooling down', () => {
-    const rng = new Rng(2)
-    const mind = newMind()
-    for (let t = 0; t < 3; t += 0.1) {
-      expect(
-        botHop(view({ ball: { x: 200, y: PITCH.ground - 30 }, time: t }), 'hard', rng, mind),
-      ).toBeNull()
+  it('never kicks at a ball out of reach up the other end, nor hops while cooling down', () => {
+    for (const d of ['easy', 'normal', 'hard'] as Difficulty[]) {
+      const rng = new Rng(2)
+      const mind = newMind()
+      for (let t = 0; t < 3; t += 0.1) {
+        const plan = botHop(view({ ball: { x: 200, y: PITCH.ground - 30 }, time: t }), d, rng, mind)
+        // At most it drops back toward its guard spot, between the ball and its goal.
+        if (plan) {
+          expect(plan.kind, d).toBe('move')
+          expect(plan.aimX, d).toBeCloseTo(guardSpot(1, 200), 0)
+        }
+      }
     }
+    const rng = new Rng(2)
     const m2 = newMind()
     for (let t = 0; t < 3; t += 0.1) {
       expect(botHop(view({ cool: COOLDOWN, time: t }), 'hard', rng, m2)).toBeNull()
@@ -215,9 +235,9 @@ describe('ballgames bot', () => {
         )
       }
       expect(plan, d).not.toBeNull()
-      // It heads for the ball, landing between it and its own (right) goal.
-      expect(plan!.aimX, d).toBeGreaterThan(520)
+      // It heads for the ball: hopping over to it, or straight into a kick.
       expect(plan!.aimX, d).toBeLessThan(860)
+      if (plan!.kind === 'move') expect(plan!.aimX, d).toBeGreaterThan(520)
     }
   })
 
@@ -228,8 +248,28 @@ describe('ballgames bot', () => {
     expect(
       chance(view({ ball: { x: 700, y: PITCH.ceil + 60 }, bv: { x: 0, y: 6 } }), 'hard'),
     ).not.toBeNull()
-    // A ball far up the other end is nobody's business.
-    expect(chance(view({ ball: { x: 150, y: PITCH.ceil + 60 } }), 'hard')).toBeNull()
+    // A ball far up the other end is out of reach: no kick at it (at most a drop back on guard).
+    expect(chance(view({ ball: { x: 150, y: PITCH.ceil + 60 } }), 'hard')?.kind).not.toBe('kick')
+  })
+
+  it('weighs where a kick ends: a shot into the open goal beats a poke, never an own goal', () => {
+    // Red at the right edge of the box, ball flying straight in: a goal for red.
+    const shot = kickValue(0, PITCH.right - 200, PITCH.ground - 80, 20, 0)
+    expect(shot.scores).toBe(true)
+    // The same ball sent the other way into red's own goal is ruled out.
+    expect(kickValue(0, PITCH.left + 200, PITCH.ground - 80, -20, 0).value).toBeLessThan(-1000)
+    // A ball over the crossbar does not score.
+    const over = kickOutcome(PITCH.right - 200, GOAL_TOP - 120, 20, -2, 60)
+    expect(over.scorer).toBeNull()
+    const soft = kickValue(0, W / 2, PITCH.ground - 80, 4, -6)
+    expect(shot.value).toBeGreaterThan(soft.value)
+  })
+
+  it('hard picks a scoring kick when one is there', () => {
+    // Ball resting just in front of red, two strides from blue's goal.
+    const ball = { x: PITCH.right - 330, y: PITCH.ground - BALL_R }
+    const plan = chance(view({ side: 0, ball, me: { x: ball.x - 150, y: STAND_Y } }), 'hard')
+    expect(plan?.kind).toBe('kick')
   })
 
   it('hard reacts faster and winds up harder than easy', () => {
@@ -472,5 +512,58 @@ describe('ballgames end to end', () => {
     for (let i = 0; i < 12; i++) tick()
     expect(g.s.charge[0]).toBeLessThanOrEqual(held + 0.05)
     expect(g.s.winding[0]).toBe(false)
+  }, 30000)
+})
+
+describe('ballgames heat', () => {
+  it('a point heats up the longer it lasts, and the closing stages add pressure', () => {
+    expect(rampHeat(0, [0, 0], 5)).toBe(0)
+    expect(rampHeat(4, [0, 0], 5)).toBe(0)
+    expect(rampHeat(15, [0, 0], 5)).toBeGreaterThan(0.3)
+    expect(rampHeat(30, [0, 0], 5)).toBe(1)
+    expect(rampHeat(99, [0, 0], 5)).toBe(1)
+    // Level at 1–1 or more: a little pressure from the kick-off.
+    expect(rampHeat(0, [2, 2], 5)).toBeGreaterThan(0)
+    expect(rampHeat(0, [2, 1], 5)).toBe(0)
+    // Match point: more.
+    expect(rampHeat(0, [4, 1], 5)).toBeGreaterThan(rampHeat(0, [2, 2], 5))
+    // A one-goal match has no match point to build up to.
+    expect(rampHeat(0, [0, 0], 1)).toBe(0)
+  })
+
+  it('heat makes kicks faster and hops recharge sooner, within the speed cap', () => {
+    expect(kickSpeed(0.5, 1)).toBeCloseTo(KICK_SPEED * (1 + HEAT_KICK))
+    expect(kickSpeed(1, 1)).toBeLessThanOrEqual(MAX_BALL)
+    expect(kickSpeed(0.5, 0)).toBeCloseTo(KICK_SPEED)
+    expect(cooldownFor(1)).toBeLessThan(cooldownFor(0))
+    expect(cooldownFor(0)).toBe(COOLDOWN)
+  })
+})
+
+/** The real game with each side's computer player at its own level. */
+class Duel extends BallgamesPhysics {
+  constructor(private levels: [Difficulty, Difficulty]) {
+    super()
+  }
+  protected override level(side: 0 | 1): Difficulty {
+    return this.levels[side]
+  }
+}
+
+describe('ballgames difficulty spread', () => {
+  it('hard beats easy in most seeded matches, on either side', async () => {
+    await loadMatter()
+    let hardWins = 0
+    const n = 6
+    for (let seed = 1; seed <= n; seed++) {
+      const hardSide = (seed % 2) as 0 | 1
+      const levels: [Difficulty, Difficulty] = hardSide === 0 ? ['hard', 'easy'] : ['easy', 'hard']
+      const game = new Duel(levels)
+      game.init(fakeCtx(seed, 'normal', 3))
+      await new Promise((r) => setTimeout(r, 0))
+      for (let i = 0; i < 60 * 600 && !game.result; i++) game.update(1 / 60)
+      if (game.result?.winner === hardSide) hardWins++
+    }
+    expect(hardWins).toBeGreaterThanOrEqual(5)
   }, 30000)
 })

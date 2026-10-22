@@ -158,27 +158,58 @@ export function kickPower(charge: number, closing: number): number {
   return Math.max(0, Math.min(1, 0.2 + c * 0.5 + m * 0.4))
 }
 
-/** Ball speed per step for a kick of `power` 0..1. */
-export const kickSpeed = (power: number): number =>
-  KICK_MIN + (KICK_MAX - KICK_MIN) * Math.max(0, Math.min(1, power))
+/**
+ * Ball speed per step for a kick of `power` 0..1, made livelier by the match's
+ * `heat` 0..1 (see `rampHeat`), never past the speed cap.
+ */
+export const kickSpeed = (power: number, heat = 0): number =>
+  Math.min(
+    MAX_BALL,
+    (KICK_MIN + (KICK_MAX - KICK_MIN) * Math.max(0, Math.min(1, power))) *
+      (1 + HEAT_KICK * Math.max(0, Math.min(1, heat))),
+  )
 
 /**
  * Velocity a connecting kick gives the ball. It is aimed from the kicker
  * toward the ball, biased toward the goal the kicker attacks and up a little;
- * its speed grows with `power`.
+ * its speed grows with `power` and the match's `heat`.
  */
 export function kickVelocity(
   from: { x: number; y: number },
   ball: { x: number; y: number },
   side: Side,
   power = 0.5,
+  heat = 0,
 ): { x: number; y: number } {
   const dx = ball.x - from.x + attackDir(side) * 160
   const dy = ball.y - from.y - 110
   const m = Math.hypot(dx, dy) || 1
-  const v = kickSpeed(power)
+  const v = kickSpeed(power, heat)
   return { x: (dx / m) * v, y: (dy / m) * v }
 }
+
+/** At full heat kicks fly this much faster… */
+export const HEAT_KICK = 0.22
+/** …and players are back on their feet this much sooner. */
+export const HEAT_COOL = 0.35
+
+/**
+ * How heated the match is, 0..1, the same for both players. A point heats up
+ * the longer it lasts (from 5 s in, full at 30 s), and the closing stages add
+ * pressure: a level score from 1–1 on, and more again at match point.
+ */
+export function rampHeat(pointT: number, score: readonly [number, number], goal: number): number {
+  const time = Math.max(0, Math.min(1, (pointT - 5) / 25))
+  const lead = Math.max(score[0], score[1])
+  let pressure = 0
+  if (goal > 1 && lead >= goal - 1) pressure = 0.4
+  else if (score[0] === score[1] && lead >= 1) pressure = 0.15
+  return Math.min(1, pressure + time * (1 - pressure))
+}
+
+/** Seconds before a player may hop again, shorter as the match heats up. */
+export const cooldownFor = (heat: number): number =>
+  COOLDOWN * (1 - HEAT_COOL * Math.max(0, Math.min(1, heat)))
 
 /** Scale a velocity down to at most `max` per step. */
 export function capped(v: { x: number; y: number }, max = MAX_BALL): { x: number; y: number } {
@@ -244,6 +275,32 @@ export function ballPath(
   }
   return out
 }
+
+/**
+ * Where a ball sent from (x, y) at (vx, vy) ends up within `n` steps: into a
+ * goal (and which side scores, and when), off a crossbar, or just where it is
+ * after `n` steps. Players are ignored. Bots weigh their kicks with it.
+ */
+export function kickOutcome(
+  x: number,
+  y: number,
+  vx: number,
+  vy: number,
+  n: number,
+): { scorer: Side | null; step: number; x: number; bar: boolean } {
+  const pts = ballPath(x, y, vx, vy, n, outcomePath)
+  for (let i = 0; i < n; i++) {
+    const px = pts[i * 2] as number
+    const py = pts[i * 2 + 1] as number
+    const scorer = goalBy(px, py)
+    if (scorer !== null) return { scorer, step: i, x: px, bar: false }
+    // Over the goal box but not under the bar: the crossbar stops it.
+    const inBox = px < PITCH.left + PITCH.goalD || px > PITCH.right - PITCH.goalD
+    if (inBox && py > GOAL_TOP - BALL_R - 12) return { scorer: null, step: i, x: px, bar: true }
+  }
+  return { scorer: null, step: n, x: pts[(n - 1) * 2] as number, bar: false }
+}
+const outcomePath: number[] = []
 
 /** Steps a hop's aim leads the ball by: about when a hop meets it. */
 export const LEAD_STEPS = 18
