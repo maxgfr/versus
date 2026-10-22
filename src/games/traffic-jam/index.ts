@@ -64,16 +64,22 @@ class TrafficJam extends BaseGame<State> {
     const s = this.s
     const { ctx } = this
     const presses: [boolean, boolean] = [false, false]
+    // Holding Go is the gas pedal for the cars already on the street.
+    const gas: [boolean, boolean] = [false, false]
     for (const side of [0, 1] as Side[]) {
       const btn = this.buttons[side] as Button
-      if (this.bots[side]?.decide(s, side, dt)) btn.press(1)
+      const bot = this.bots[side]
+      if (bot?.decide(s, side, dt)) btn.press(1)
+      if (bot?.gas(s, side)) btn.press(1)
       btn.update(ctx.input.player(side))
       presses[side] = btn.hit
+      gas[side] = btn.pressed
+      if (btn.pressed && !s.pressed[side] && s.racers[side].cars.length) ctx.audio.play('zap', 0.7)
       s.pressed[side] = btn.pressed
     }
     const before = Math.ceil(this.total - s.t)
     this.ev.length = 0
-    stepWorld(s, dt, presses, this.ev)
+    stepWorld(s, dt, presses, this.ev, true, gas)
     for (const e of this.ev) this.feedback(e)
     s.wrecks = s.wrecks.filter((w) => s.t - w.at < 1.4)
     // Last seconds tick down out loud.
@@ -162,6 +168,12 @@ class TrafficJam extends BaseGame<State> {
         fx.stop(5)
         fx.float('Crash!', e.x, e.y + (e.side === 0 ? -70 : 70), C.orange, 58, e.side)
         break
+      case 'close':
+        audio.play('whoosh', 1.4)
+        audio.buzz(12)
+        fx.sparks(e.x, e.y, C.yellow, 10)
+        fx.float('Close one!', e.x, e.y + (e.side === 0 ? -80 : 80), C.yellow, 46, e.side)
+        break
       case 'refuse':
         this.s.refusedAt[e.side] = this.s.t
         audio.play('error')
@@ -170,8 +182,8 @@ class TrafficJam extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderJam(g, this.s, this.total - this.s.t, this.ctx.names, g.t)
+  render(g: Draw, alpha: number): void {
+    renderJam(g, this.s, this.total - this.s.t, this.ctx.names, g.t, (1 - alpha) / 60)
   }
 }
 

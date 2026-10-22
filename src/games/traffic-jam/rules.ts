@@ -21,6 +21,9 @@ export const ROAD_X: readonly [number, number] = [280, W - 280]
 export const LAUNCH_Y: readonly [number, number] = [1430, H - 1430]
 /** Cruise speed of a launched car (world units / s). */
 export const SPEED = 430
+/** Holding Go is the gas pedal: cars on your street speed up to FAST, at GAS_ACCEL. */
+export const FAST = 640
+export const GAS_ACCEL = 1500
 /** Seconds a crash keeps the side from launching. */
 export const STALL = 1
 /** Cars per side at the start (more than any match can use). */
@@ -41,6 +44,10 @@ const PERIOD = 2.2
 const JITTER = 0.8
 const V_MIN = 300
 const V_MAX = 380
+/** Ramp: over the first RAMP_CARS cross cars of an avenue the gaps shrink to (1 - RAMP_GAP) and they speed up by RAMP_V. */
+const RAMP_CARS = 25
+const RAMP_GAP = 0.3
+const RAMP_V = 50
 
 /** Deterministic hash of (seed, a, b) → [0, 1). Same on every device. */
 export function hash01(seed: number, a: number, b: number): number {
@@ -65,7 +72,14 @@ export interface Car {
   id: number
   y: number
   prog: number
+  /** Current speed (SPEED when absent). */
+  v?: number
+  /** Avenues (bit per avenue) where it already had a close shave. */
+  close?: number
 }
+
+/** A cross car passing this close to a car (beyond touching) is a close shave. */
+export const CLOSE = 70
 
 export interface Racer {
   queue: number
@@ -98,6 +112,7 @@ export type Ev =
   | { k: 'across'; side: Side; x: number; y: number }
   | { k: 'crash'; side: Side; x: number; y: number; dir: 1 | -1 }
   | { k: 'refuse'; side: Side; x: number; y: number }
+  | { k: 'close'; side: Side; x: number; y: number }
 
 export function newRacer(): Racer {
   return { queue: QUEUE, cars: [], across: 0, crashes: 0, stallUntil: -1, buf: -1, lastLaunch: -9 }
@@ -118,9 +133,12 @@ export function newWorld(seed: number): World {
 export function crossAt(seed: number, lane: number, k: number): { t0: number; v: number } {
   const h1 = hash01(seed, lane, 2 * k)
   const h2 = hash01(seed, lane, 2 * k + 1)
+  // The gaps close up as the match goes on: spacing falls from PERIOD to (1 - RAMP_GAP) PERIOD.
+  const r = Math.min(1, k / RAMP_CARS)
+  const base = k * PERIOD * (1 - RAMP_GAP * r)
   return {
-    t0: 0.8 + k * PERIOD + lane * (PERIOD / 3) + (h1 - 0.5) * JITTER,
-    v: V_MIN + (V_MAX - V_MIN) * h2,
+    t0: 0.8 + base + lane * (PERIOD / 3) + (h1 - 0.5) * JITTER * (1 - 0.4 * r),
+    v: V_MIN + (V_MAX - V_MIN) * h2 + RAMP_V * r,
   }
 }
 
@@ -142,10 +160,15 @@ export function crossWindow(c: Cross, x: number): [number, number] {
  * Time window in which a car launched at `launchT` from `side` overlaps the
  * avenue at `laneY`.
  */
-export function carWindow(side: Side, laneY: number, launchT: number): [number, number] {
+export function carWindow(
+  side: Side,
+  laneY: number,
+  launchT: number,
+  speed = SPEED,
+): [number, number] {
   const d = side === 0 ? -1 : 1
-  const u1 = ((laneY - LANE_BAND - LAUNCH_Y[side]) * d) / SPEED
-  const u2 = ((laneY + LANE_BAND - LAUNCH_Y[side]) * d) / SPEED
+  const u1 = ((laneY - LANE_BAND - LAUNCH_Y[side]) * d) / speed
+  const u2 = ((laneY + LANE_BAND - LAUNCH_Y[side]) * d) / speed
   return u1 < u2 ? [launchT + u1, launchT + u2] : [launchT + u2, launchT + u1]
 }
 
@@ -163,14 +186,24 @@ export function crossUpTo(w: World, lane: number, until: number): Cross[] {
 /**
  * Would a car launched at `launchT` make it across every avenue? `margin` (s)
  * widens the timing windows; a negative margin accepts near misses (the bot's
- * timing error).
+ * timing error). `speed` is the speed it crosses at (FAST with the gas held).
+ * With `seen`, only cross cars already on the road count, as a player sees
+ * them; otherwise the whole schedule does.
  */
-export function launchSafe(w: World, side: Side, launchT: number, margin = 0.1): boolean {
+export function launchSafe(
+  w: World,
+  side: Side,
+  launchT: number,
+  margin = 0.1,
+  speed = SPEED,
+  seen = false,
+): boolean {
   for (let j = 0; j < AVENUES.length; j++) {
     const laneY = AVENUES[j] as number
-    const [a, b] = carWindow(side, laneY, launchT)
+    const [a, b] = carWindow(side, laneY, launchT, speed)
     const until = b + 0.5
-    for (const c of crossUpTo(w, j, until)) {
+    const traffic = seen ? w.cross.filter((c) => c.lane === j) : crossUpTo(w, j, until)
+    for (const c of traffic) {
       const [ca, cb] = crossWindow(c, ROAD_X[side])
       if (ca - margin < b && a < cb + margin) return false
     }
@@ -219,6 +252,8 @@ export function stepWorld(
   ev: Ev[],
   /** False once the whistle has blown: everything keeps driving, but nothing scores, crashes or launches. */
   racers = true,
+  /** Gas pedal per side: while held, that side's cars speed up toward FAST. */
+  gas: readonly [boolean, boolean] = [false, false],
 ): void {
   w.t += dt
   for (let j = 0; j < AVENUES.length; j++) {
@@ -242,8 +277,13 @@ export function stepWorld(
     if (presses[side]) r.buf = w.t + BUFFER
 
     for (const c of r.cars) {
-      c.y += d * SPEED * dt
-      c.prog += SPEED * dt
+      const want = gas[side] && racers ? FAST : SPEED
+      const v0 = c.v ?? SPEED
+      const v =
+        v0 < want ? Math.min(want, v0 + GAS_ACCEL * dt) : Math.max(want, v0 - GAS_ACCEL * 0.6 * dt)
+      c.v = v
+      c.y += d * v * dt
+      c.prog += v * dt
     }
     if (!racers) {
       r.cars = r.cars.filter((c) => !gone(side, c.y))
@@ -258,7 +298,18 @@ export function stepWorld(
         ev.push({ k: 'across', side, x, y: side === 0 ? 260 : H - 260 })
       } else {
         const hit = hits(w, x, car.y)
-        if (!hit) continue
+        if (!hit) {
+          // A cross car just missing it: a close shave, cheered once per avenue.
+          for (const c of w.cross) {
+            const bit = 1 << c.lane
+            if ((car.close ?? 0) & bit) continue
+            if (Math.abs(car.y - (AVENUES[c.lane] as number)) >= LANE_BAND) continue
+            if (Math.abs(x - crossX(c, w.t)) >= COL_BAND + CLOSE) continue
+            car.close = (car.close ?? 0) | bit
+            ev.push({ k: 'close', side, x, y: car.y })
+          }
+          continue
+        }
         r.cars.splice(i, 1)
         r.crashes++
         r.stallUntil = w.t + STALL
@@ -269,7 +320,7 @@ export function stepWorld(
     if (r.buf >= 0) {
       if (canLaunch(w, side)) {
         const y = LAUNCH_Y[side]
-        r.cars.push({ id: w.nextId++, y, prog: 0 })
+        r.cars.push({ id: w.nextId++, y, prog: 0, v: SPEED })
         r.queue--
         r.lastLaunch = w.t
         r.buf = -1

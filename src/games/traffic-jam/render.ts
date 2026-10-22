@@ -13,10 +13,12 @@ import {
   CAR_W,
   type Cross,
   crossX,
+  FAST,
   hash01,
   LAUNCH_Y,
   type Racer,
   ROAD_X,
+  SPEED,
   STALL,
 } from './rules.ts'
 
@@ -435,6 +437,8 @@ export function renderJam(
   left: number,
   names: [string, string],
   now: number,
+  /** Seconds since the last fixed step: moving cars are drawn that far back. */
+  lag = 0,
 ): void {
   sidewalks(g)
   roads(g)
@@ -447,13 +451,29 @@ export function renderJam(
     g.dashed(x, LAUNCH_Y[side], x, far, alpha(SIDE[side].main, 0.3), 8, [18, 22])
     queueBay(g, side, canLaunch(s, side) && s.endAt < 0, now)
   }
-  for (const c of s.cross) crossCar(g, c, s.t, s.seed)
+  for (const c of s.cross) crossCar(g, c, s.t - lag, s.seed)
   for (const side of [0, 1] as Side[]) {
     const r = s.racers[side]
+    const d = side === 0 ? -1 : 1
     for (const c of r.cars) {
-      // A quick stretch as it pulls away from the line.
-      const sy = 1 + 0.12 * Math.max(0, 1 - c.prog / 140)
-      car(g, ROAD_X[side], c.y, side === 0 ? 0 : Math.PI, SIDE[side].main, {
+      const v = c.v ?? SPEED
+      const y = c.y - d * v * lag
+      // A quick stretch as it pulls away from the line, and more of it on the gas.
+      const boost = Math.max(0, (v - SPEED) / (FAST - SPEED))
+      const sy = 1 + 0.12 * Math.max(0, 1 - c.prog / 140) + 0.1 * boost
+      if (boost > 0.15) {
+        const x = ROAD_X[side]
+        for (const sx of [-24, 0, 24])
+          g.line(
+            x + sx,
+            y - d * 70,
+            x + sx,
+            y - d * (70 + 90 * boost),
+            alpha(C.white, 0.3 * boost),
+            4,
+          )
+      }
+      car(g, ROAD_X[side], y, side === 0 ? 0 : Math.PI, SIDE[side].main, {
         marker: side,
         lights: true,
         sy,
@@ -462,7 +482,9 @@ export function renderJam(
     queue(g, side, r, s.t, s.t < r.stallUntil)
   }
   for (const w of s.wrecks) wreck(g, w, s.t)
-  for (const side of [0, 1] as Side[]) goButton(g, s, side, now)
+  // Online, each phone shows only its own player's Go button.
+  for (const side of [0, 1] as Side[])
+    if (g.viewer === null || g.viewer === side) goButton(g, s, side, now)
   for (const side of [0, 1] as Side[]) {
     const r = s.racers[side]
     const stalled = s.t < r.stallUntil

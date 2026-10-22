@@ -5,16 +5,19 @@ import {
   AVENUES,
   BUFFER,
   canLaunch,
+  COL_BAND,
   carWindow,
   crossAt,
   crossWindow,
   crossX,
   type Ev,
+  FAST,
   GO_GAP,
   LAUNCH_Y,
   launchSafe,
   newWorld,
   ROAD_X,
+  SPEED,
   STALL,
   stepWorld,
   winnerOf,
@@ -49,11 +52,15 @@ describe('cross traffic', () => {
         expect(crossAt(42, lane, k)).toEqual(a)
         expect(a.t0).toBeGreaterThan(prev)
         expect(a.v).toBeGreaterThanOrEqual(300)
-        expect(a.v).toBeLessThanOrEqual(380)
+        // The traffic speeds up over the match, by at most 50.
+        expect(a.v).toBeLessThanOrEqual(430)
         prev = a.t0
       }
     }
     expect(crossAt(1, 0, 3)).not.toEqual(crossAt(2, 0, 3))
+    // And the gaps close up: the last ten cars come closer together than the first ten.
+    const gap = (k: number) => crossAt(42, 0, k + 10).t0 - crossAt(42, 0, k).t0
+    expect(gap(30)).toBeLessThan(gap(0) * 0.85)
   })
 
   it('moves straight along its avenue from just off the edge', () => {
@@ -225,5 +232,76 @@ describe('bot', () => {
       return total
     }
     expect(count('hard')).toBeGreaterThanOrEqual(count('easy'))
+  })
+
+  it('hard beats normal and easy head to head from either street', () => {
+    for (const weak of ['easy', 'normal'] as const) {
+      let wins = 0
+      for (let seed = 1; seed <= 6; seed++) {
+        const hs = seed % 2 ? 0 : 1
+        const w = newWorld(seed * 5)
+        const bots = [
+          new CrossBot(new Rng(seed), hs === 0 ? 'hard' : weak),
+          new CrossBot(new Rng(seed + 7), hs === 1 ? 'hard' : weak),
+        ]
+        while (w.t < 45) {
+          const presses: [boolean, boolean] = [
+            bots[0]!.decide(w, 0, STEP),
+            bots[1]!.decide(w, 1, STEP),
+          ]
+          const gas: [boolean, boolean] = [bots[0]!.gas(w, 0), bots[1]!.gas(w, 1)]
+          stepWorld(w, STEP, presses, [], true, gas)
+        }
+        if (winnerOf(w) === hs) wins++
+      }
+      expect(wins).toBeGreaterThanOrEqual(weak === 'easy' ? 5 : 4)
+    }
+  })
+})
+
+describe('the gas pedal', () => {
+  it('holding Go speeds your cars up to FAST; letting go eases them back', () => {
+    const w = emptyRoad()
+    run(w, 0.05, [true, false])
+    const car = w.racers[0].cars[0]!
+    for (let i = 0; i < 40; i++) stepWorld(w, STEP, NONE, [], true, [true, false])
+    expect(car.v).toBeCloseTo(FAST, 0)
+    for (let i = 0; i < 60; i++) stepWorld(w, STEP, NONE, [], true, [false, false])
+    expect(car.v).toBeCloseTo(SPEED, 0)
+  })
+
+  it('a gap too tight at cruising speed can be open at full throttle', () => {
+    const w = emptyRoad()
+    const v = 300
+    // A cross car that reaches red's street just as a cruising car would reach the far avenue.
+    const lane = 0
+    const reach = carWindow(0, AVENUES[lane] as number, 0)[0]
+    const enters = crossWindow({ lane, t0: 0, v, dir: 1 }, ROAD_X[0])[0]
+    w.cross.push({ lane, t0: reach + 0.05 - enters, v, dir: 1 })
+    expect(launchSafe(w, 0, 0, 0.05)).toBe(false)
+    expect(launchSafe(w, 0, 0, 0.05, FAST)).toBe(true)
+  })
+
+  it('the bot judges only traffic already on the road', () => {
+    const w = newWorld(3)
+    // Nothing has spawned yet: the schedule says otherwise, but nobody can see it.
+    expect(w.cross).toHaveLength(0)
+    expect(launchSafe(w, 0, 0, 0.1, SPEED, true)).toBe(true)
+  })
+
+  it('a cross car that only just misses is a close shave, cheered once', () => {
+    const w = emptyRoad()
+    run(w, 0.05, [true, false])
+    const car = w.racers[0].cars[0]!
+    // Park the car on the middle avenue with a cross car right beside it, not touching.
+    car.y = AVENUES[1] as number
+    w.cross.push({ lane: 1, t0: w.t - 1, v: 0.0001, dir: 1 })
+    const c = w.cross[0]!
+    c.t0 = w.t - (ROAD_X[0] - (COL_BAND + 30) + 124) / c.v
+    const ev: Ev[] = []
+    stepWorld(w, 1e-6, NONE, ev)
+    stepWorld(w, 1e-6, NONE, ev)
+    expect(ev.filter((e) => e.k === 'close')).toHaveLength(1)
+    expect(ev.some((e) => e.k === 'crash')).toBe(false)
   })
 })
