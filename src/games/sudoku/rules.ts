@@ -159,3 +159,94 @@ export function completedUnits(grid: readonly number[], i: number): number[][] {
 
 export const sameUnit = (a: number, b: number) =>
   ROW(a) === ROW(b) || COL(a) === COL(b) || BOX(a) === BOX(b)
+
+/** The 27 units: rows, then columns, then boxes. */
+export const UNITS: readonly (readonly number[])[] = [
+  ...Array.from({ length: 9 }, (_, r) => Array.from({ length: 9 }, (_, c) => r * 9 + c)),
+  ...Array.from({ length: 9 }, (_, c) => Array.from({ length: 9 }, (_, r) => r * 9 + c)),
+  ...Array.from({ length: 9 }, (_, b) =>
+    Array.from(
+      { length: 9 },
+      (_, k) => (Math.floor(b / 3) * 3 + Math.floor(k / 3)) * 9 + (b % 3) * 3 + (k % 3),
+    ),
+  ),
+]
+
+/**
+ * What typing `d` into the selected cell does: nothing (no cell selected, a
+ * filled cell, or a digit already placed nine times), a mistake, or a fill.
+ * A finished digit can never be right, so its key is inert rather than a
+ * free penalty.
+ */
+export function entry(
+  cells: readonly number[],
+  solution: readonly number[],
+  sel: number,
+  d: number,
+): 'none' | 'wrong' | 'right' {
+  if (sel < 0 || sel > 80 || cells[sel] !== 0 || d < 1 || d > 9) return 'none'
+  let n = 0
+  for (const v of cells) if (v === d) n++
+  if (n >= 9) return 'none'
+  return solution[sel] === d ? 'right' : 'wrong'
+}
+
+export interface Clock {
+  /** Solved this round. */
+  done: boolean
+  /** Seconds on the clock, penalties included (frozen once done). */
+  clock: number
+}
+
+/**
+ * The race goes to the lowest time, penalties included: finishing first is
+ * not enough when your mistakes cost more than the gap. A solver wins as soon
+ * as the rival's running clock reaches its time; two solvers compare times
+ * (equal is a draw). Null while it can still go either way.
+ */
+export function raceWinner(a: Clock, b: Clock): Side | 'draw' | null {
+  if (a.done && b.done) return a.clock < b.clock ? 0 : b.clock < a.clock ? 1 : 'draw'
+  if (a.done && b.clock >= a.clock) return 0
+  if (b.done && a.clock >= b.clock) return 1
+  return null
+}
+
+/** Cells with a single candidate, each with its digit (reading order). */
+export function nakedSingles(grid: readonly number[]): { cell: number; digit: number }[] {
+  const out: { cell: number; digit: number }[] = []
+  for (let i = 0; i < 81; i++) {
+    if (grid[i] !== 0) continue
+    const m = candidates(grid, i)
+    if (m && !(m & (m - 1))) out.push({ cell: i, digit: Math.log2(m) })
+  }
+  return out
+}
+
+/** Digits that fit in only one cell of some unit (a cell may appear more than once). */
+export function hiddenSingles(grid: readonly number[]): { cell: number; digit: number }[] {
+  const out: { cell: number; digit: number }[] = []
+  for (const unit of UNITS) {
+    let present = 0
+    for (const j of unit) present |= 1 << (grid[j] as number)
+    for (let d = 1; d <= 9; d++) {
+      if (present & (1 << d)) continue
+      let at = -1
+      let n = 0
+      for (const j of unit) {
+        if (grid[j] !== 0 || !(candidates(grid, j) & (1 << d))) continue
+        at = j
+        if (++n > 1) break
+      }
+      if (n === 1) out.push({ cell: at, digit: d })
+    }
+  }
+  return out
+}
+
+/** The digits a cell may still take, as a list. */
+export function candidateList(grid: readonly number[], i: number): number[] {
+  const m = candidates(grid, i)
+  const out: number[] = []
+  for (let d = 1; d <= 9; d++) if (m & (1 << d)) out.push(d)
+  return out
+}

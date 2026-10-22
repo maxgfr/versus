@@ -2,16 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
 import { nextMove } from './bot.ts'
 import {
+  candidateList,
   completedUnits,
   countSolutions,
   digitCounts,
+  entry,
   generate,
   GIVENS,
+  hiddenSingles,
   isSolved,
   matchWinner,
+  nakedSingles,
   PEERS,
   progress,
+  raceWinner,
   roundSeed,
+  UNITS,
 } from './rules.ts'
 
 function valid(grid: number[]): boolean {
@@ -91,5 +97,111 @@ describe('sudoku helpers', () => {
     }
     expect(isSolved(grid, solution)).toBe(true)
     expect(mistakes).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('sudoku entries', () => {
+  const { puzzle, solution } = generate(6, GIVENS.normal)
+  const blank = puzzle.findIndex((v) => v === 0)
+
+  it('fills the right digit, flags a wrong one, ignores no selection and filled cells', () => {
+    const right = solution[blank] as number
+    expect(entry(puzzle, solution, blank, right)).toBe('right')
+    expect(entry(puzzle, solution, blank, (right % 9) + 1)).toBe('wrong')
+    expect(entry(puzzle, solution, -1, right)).toBe('none')
+    const given = puzzle.findIndex((v) => v !== 0)
+    expect(entry(puzzle, solution, given, 1)).toBe('none')
+  })
+
+  it('a digit already placed nine times is inert, not a free penalty', () => {
+    // Fill every cell of one digit, leave another cell blank: typing that digit there does nothing.
+    const grid = solution.slice()
+    const d = solution[blank] === 1 ? 2 : 1
+    const other = grid.findIndex((v, i) => v !== d && i !== blank)
+    grid[other] = 0
+    expect(digitCounts(grid)[d]).toBe(9)
+    expect(entry(grid, solution, other, d)).toBe('none')
+    expect(entry(grid, solution, other, solution[other] as number)).toBe('right')
+  })
+})
+
+describe('sudoku race', () => {
+  it('waits while the rival can still beat the solver', () => {
+    expect(raceWinner({ done: true, clock: 120 }, { done: false, clock: 100 })).toBeNull()
+    expect(raceWinner({ done: false, clock: 90 }, { done: false, clock: 100 })).toBeNull()
+  })
+
+  it('gives the round to the solver once the rival clock reaches its time', () => {
+    expect(raceWinner({ done: true, clock: 120 }, { done: false, clock: 120 })).toBe(0)
+    expect(raceWinner({ done: false, clock: 200 }, { done: true, clock: 130 })).toBe(1)
+  })
+
+  it('counts penalties: a later but cleaner finish wins', () => {
+    // Red finished first but its mistakes put it at 140; blue finishes clean at 135.
+    expect(raceWinner({ done: true, clock: 140 }, { done: true, clock: 135 })).toBe(1)
+    expect(raceWinner({ done: true, clock: 100 }, { done: true, clock: 100 })).toBe('draw')
+  })
+})
+
+describe('sudoku deductions', () => {
+  const { puzzle, solution } = generate(8, GIVENS.easy)
+
+  it('lists units of nine distinct cells covering the board three times', () => {
+    expect(UNITS).toHaveLength(27)
+    const seen = Array<number>(81).fill(0)
+    for (const u of UNITS) {
+      expect(new Set(u).size).toBe(9)
+      for (const i of u) seen[i] = (seen[i] ?? 0) + 1
+    }
+    expect(seen.every((n) => n === 3)).toBe(true)
+  })
+
+  it('naked and hidden singles are always the solution digit', () => {
+    const naked = nakedSingles(puzzle)
+    const hidden = hiddenSingles(puzzle)
+    expect(naked.length + hidden.length).toBeGreaterThan(0)
+    for (const m of [...naked, ...hidden]) expect(m.digit).toBe(solution[m.cell])
+    for (const m of naked) expect(candidateList(puzzle, m.cell)).toEqual([m.digit])
+  })
+})
+
+describe('sudoku bot', () => {
+  function solve(d: 'easy' | 'normal' | 'hard', seed: number): { moves: number; mistakes: number } {
+    const { puzzle, solution } = generate(seed, GIVENS[d])
+    const grid = puzzle.slice()
+    const rng = new Rng(seed)
+    let mistakes = 0
+    let moves = 0
+    let avoid: { cell: number; digit: number } | null = null
+    while (!isSolved(grid, solution) && moves < 400) {
+      const m = nextMove(grid, solution, d, rng, avoid)
+      if (!m) break
+      moves++
+      expect(m.cell === avoid?.cell && m.digit === avoid.digit).toBe(false)
+      if (m.digit === solution[m.cell]) {
+        grid[m.cell] = m.digit
+        avoid = null
+      } else {
+        mistakes++
+        avoid = { cell: m.cell, digit: m.digit }
+      }
+    }
+    expect(isSolved(grid, solution)).toBe(true)
+    return { moves, mistakes }
+  }
+
+  it('hard never makes a mistake; easy makes clearly more than hard', () => {
+    let easy = 0
+    let hard = 0
+    for (const seed of [11, 12, 13, 14]) {
+      easy += solve('easy', seed).mistakes
+      hard += solve('hard', seed).mistakes
+    }
+    expect(hard).toBe(0)
+    expect(easy).toBeGreaterThan(hard)
+  })
+
+  it('normal finishes every puzzle', () => {
+    for (const seed of [21, 22]) solve('normal', seed)
   })
 })
