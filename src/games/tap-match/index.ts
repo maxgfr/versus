@@ -407,7 +407,10 @@ class TapMatch extends PuzzleRace<State> {
     backdrop(g, side, geo)
     drawStack(g, this.lay, b.taken, b.takenAt, geo, this.emoji, this.time, b.nudge, b.nudgeAt)
     drawTray(g, geo, side, b.tray, b.clear, this.emoji, this.time, b.lostAt)
+    // Online, the how-to hint is only for the player on this phone.
+    const mine = g.viewer === null || side === g.viewer
     if (
+      mine &&
       b.tray.length === 0 &&
       this.time - this.s.roundAt < 7 &&
       !this.isBot(side) &&
