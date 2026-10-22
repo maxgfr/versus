@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { choose } from './bot.ts'
+import { choose, trial } from './bot.ts'
 import {
   frameComplete,
   frameScores,
@@ -16,6 +16,8 @@ import {
   slotPos,
   stepRoll,
   SETTLE,
+  START_X,
+  swipeThrow,
   throwBall,
   winnerOf,
   type Lane,
@@ -124,8 +126,8 @@ describe('bowling lane', () => {
           if (laneDone(lane)) continue
           if (lane.phase === 'ready' || lane.phase === 'settle') {
             if (lane.phase === 'settle') prepare(lane)
-            const t = choose('hard', rng)
-            throwBall(lane, t.dx, t.dy, t.speed, t.curve, 0)
+            const t = choose('hard', rng, lane)
+            throwBall(lane, t.dx, t.dy, t.speed, t.curve, 0, t.x)
             let clock = 0
             while (!rollOver(lane, clock) && clock < 10) {
               stepRoll(lane, FRAME)
@@ -142,5 +144,87 @@ describe('bowling lane', () => {
       // A computer that aims at the pocket should not be hopeless.
       for (const lane of lanes) expect(laneTotal(lane.frames)).toBeGreaterThan(10)
     }
+  })
+
+  it('a ball that drops into the gutter stays there, whatever its hook, and knocks nothing', () => {
+    const lane = newLane(5)
+    // From the left edge, angled out, with a full hook back toward the pins.
+    throwBall(lane, -0.35, -1, 1300, 0.9, 0, START_X[0])
+    let gutter = false
+    let t = 0
+    while (!rollOver(lane, t) && t < 10) {
+      const ev: { kind: string }[] = []
+      stepRoll(lane, FRAME, ev as never)
+      if (ev.some((e) => e.kind === 'gutter')) gutter = true
+      t += FRAME
+    }
+    expect(gutter).toBe(true)
+    expect(lane.ball.gutter).toBe(true)
+    expect(t).toBeLessThan(6)
+    expect(resolve(lane)).toBe(0)
+  })
+
+  it('the release point is where the player picks the ball up, kept on the lane', () => {
+    const lane = newLane(5)
+    throwBall(lane, 0, -1, 1500, 0, 0, -500)
+    expect(lane.ball.x).toBe(START_X[0])
+    throwBall(lane, 0, -1, 1500, 0, 0, 5000)
+    expect(lane.ball.x).toBe(START_X[1])
+    throwBall(lane, 0, -1, 1500, 0, 0, 450)
+    expect(lane.ball.x).toBe(450)
+  })
+
+  it('the flick at release sets the speed, not the slow wind-up before it', () => {
+    // Slow 0.5 s push, then a quick 0.1 s snap.
+    const pts = [
+      { x: 500, y: 1700, t: 0 },
+      { x: 500, y: 1660, t: 0.25 },
+      { x: 500, y: 1620, t: 0.5 },
+      { x: 500, y: 1520, t: 0.55 },
+      { x: 500, y: 1420, t: 0.6 },
+    ]
+    const snap = swipeThrow(pts)
+    const lazy = swipeThrow(pts.map((p, i) => ({ x: p.x, y: p.y, t: i * 0.3 })))
+    expect(snap).not.toBeNull()
+    expect(lazy).not.toBeNull()
+    expect(snap?.speed ?? 0).toBeGreaterThan(lazy?.speed ?? 0)
+  })
+
+  it('a slow gutter ball still rolls off into the pit', () => {
+    const lane = newLane(5)
+    throwBall(lane, -1, -0.3, 700, 0, 0, START_X[0])
+    let t = 0
+    while (!rollOver(lane, t) && t < 10) {
+      stepRoll(lane, FRAME)
+      t += FRAME
+    }
+    expect(lane.ball.gutter).toBe(true)
+    expect(lane.ball.y).toBeLessThan(LANE.pitY)
+  })
+
+  it('the bot practises on the real lane: hard knocks more than easy and picks up a corner spare', () => {
+    let hard = 0
+    let easy = 0
+    for (let seed = 1; seed <= 6; seed++) {
+      for (const [d, add] of [
+        ['hard', (n: number) => (hard += n)],
+        ['easy', (n: number) => (easy += n)],
+      ] as const) {
+        const lane = newLane(5)
+        const t = choose(d, new Rng(seed), lane)
+        add(trial(lane, t))
+      }
+    }
+    expect(hard).toBeGreaterThan(easy)
+    // Only the back-left corner pin standing.
+    let picked = 0
+    for (let seed = 1; seed <= 5; seed++) {
+      const lane = newLane(5)
+      lane.frames = [[9]]
+      lane.pins = rack().filter((p) => p.slot === 6)
+      const t = choose('hard', new Rng(seed), lane)
+      if (trial(lane, t) === 1) picked++
+    }
+    expect(picked).toBeGreaterThanOrEqual(3)
   })
 })

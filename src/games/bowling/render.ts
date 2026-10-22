@@ -21,6 +21,8 @@ export interface Trail {
   pts: { x: number; y: number }[]
   /** Where the ball would go with the swipe as it stands. */
   path: { x: number; y: number }[]
+  /** 0..1 how hard the swipe as it stands would bowl. */
+  power: number
 }
 
 /** A callout over the pins (strike, spare…), stamped with the game time it was called. */
@@ -40,6 +42,9 @@ export interface LaneLook {
   call: Call | null
   /** Recent ball positions, lane coordinates, newest last. */
   ballTrail: { x: number; y: number }[]
+  /** Ball squash (1 = round) and each rack slot's wobble (radians-ish), cosmetic. */
+  squash: number
+  wobble: number[]
 }
 
 const TOP = LANE.pitY - 40
@@ -179,9 +184,13 @@ function drawBoard(g: Draw, side: Side): void {
 }
 
 /** A bowling pin seen from a high camera, along the lane. Knocked pins tip over and slide. */
-function drawPin(g: Draw, p: Pin, side: Side): void {
+function drawPin(g: Draw, p: Pin, side: Side, wobble = 0): void {
   const sp = Math.hypot(p.vx, p.vy)
-  const angle = p.down ? (sp > 5 ? Math.atan2(p.vy, p.vx) + Math.PI / 2 : 1.2) : 0
+  const angle = p.down
+    ? sp > 5
+      ? Math.atan2(p.vy, p.vx) + Math.PI / 2
+      : 1.2
+    : Math.max(-0.35, Math.min(0.35, wobble * 0.06))
   const sx = p.down ? 0.86 : 1
   const stripe = SIDE[side].main
   g.alpha(p.down ? 0.85 : 1, () => {
@@ -216,7 +225,14 @@ function drawPin(g: Draw, p: Pin, side: Side): void {
   })
 }
 
-function drawBall(g: Draw, b: Ball, side: Side, live: boolean, trail: { x: number; y: number }[]) {
+function drawBall(
+  g: Draw,
+  b: Ball,
+  side: Side,
+  live: boolean,
+  trail: { x: number; y: number }[],
+  squash = 1,
+) {
   const col = SIDE[side].main
   for (let i = 0; i < trail.length; i++) {
     const p = trail[i] as { x: number; y: number }
@@ -224,8 +240,10 @@ function drawBall(g: Draw, b: Ball, side: Side, live: boolean, trail: { x: numbe
     g.alpha(f * 0.3, () => g.circle(p.x, p.y, BALL_R * (0.5 + 0.45 * f), SIDE[side].light))
   }
   const { x, y } = b
+  // Squash along the lane: > 1 stretches the ball toward the pins (release), < 1 flattens it (impact).
+  const q = Math.max(0.7, Math.min(1.3, squash))
   g.shadow(x + 8, y + 18, BALL_R * 1.05, BALL_R * 0.75, 0.5)
-  g.ball(x, y, BALL_R, col, 1)
+  g.at(x, y, 0, () => g.ball(0, 0, BALL_R, col, 1), 2 - q, q)
   // Finger holes roll with the ball: their phase follows the distance travelled.
   const roll = (LANE.ballY - y) / BALL_R
   const hole = (a: number, dx: number, r: number) => {
@@ -347,7 +365,7 @@ export function drawLane(g: Draw, look: LaneLook): void {
   // Anything that flies into the pit disappears behind the curtain.
   const clipTop = TOP + 12
   g.clip(LANE.gutter0 - 40, clipTop, LANE.gutter1 - LANE.gutter0 + 80, 1800 - clipTop, 0, () => {
-    for (const p of pins) drawPin(g, p, side)
+    for (const p of pins) drawPin(g, p, side, look.wobble[p.slot] ?? 0)
   })
   const trail = look.trail
   if (trail && trail.path.length > 1) {
@@ -357,6 +375,21 @@ export function drawLane(g: Draw, look: LaneLook): void {
       g.circle(p.x, p.y, 12, alpha(C.ink, 0.25))
       g.circle(p.x, p.y, 9, alpha(C.yellow, 0.35 + 0.6 * (i / pts.length)))
     }
+  }
+  if (trail && trail.path.length > 1) {
+    // Power gauge around the ball in hand: it fills and heats up with the flick.
+    const k = trail.power
+    const col = k > 0.75 ? C.orange : k > 0.4 ? C.yellow : C.white
+    g.ring(lane.ball.x, lane.ball.y, BALL_R + 22, alpha('#000000', 0.35), 12)
+    g.arc(
+      lane.ball.x,
+      lane.ball.y,
+      BALL_R + 22,
+      -Math.PI / 2,
+      -Math.PI / 2 + Math.PI * 2 * Math.max(0.04, k),
+      col,
+      10,
+    )
   }
   if (trail && trail.pts.length > 1) {
     const pts = trail.pts
@@ -372,11 +405,20 @@ export function drawLane(g: Draw, look: LaneLook): void {
       const p = 0.5 + 0.5 * Math.sin(look.time * 6)
       g.ring(lane.ball.x, lane.ball.y, BALL_R + 14 + p * 6, alpha(C.yellow, 0.85), 6)
     }
+    // Idle life: a ball in hand breathes gently.
+    const breathe = ready && !trail ? 1 + 0.025 * Math.sin(look.time * 3.5) : 1
     // A ball that reached the pit has dropped out of sight.
     const gone = !ready && !lane.ball.live && lane.ball.y < LANE.pitY + 2
     if (!gone)
       g.clip(LANE.gutter0 - 40, clipTop, LANE.gutter1 - LANE.gutter0 + 80, 1800 - clipTop, 0, () =>
-        drawBall(g, lane.ball, side, ready || lane.ball.live, look.ballTrail),
+        drawBall(
+          g,
+          lane.ball,
+          side,
+          ready || lane.ball.live,
+          look.ballTrail,
+          look.squash * breathe,
+        ),
       )
   }
   if (look.hint && lane.phase === 'ready' && !trail) drawHint(g, side, look.time)

@@ -1,5 +1,7 @@
 import { collideDynamic, type Disc } from '../../engines/puck/index.ts'
 
+const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v)
+
 /**
  * Bowling: one lane per player, simulated in red's frame (the bottom half,
  * pins toward the midline). Blue's lane is the same lane turned 180° about the
@@ -46,7 +48,20 @@ export interface Ball extends Disc {
   /** Hook: heading change rate (rad / s) at full speed. */
   curve: number
   live: boolean
+  /** Dropped into a gutter: it runs down the channel and can no longer reach the pins. */
+  gutter?: boolean
 }
+
+/** Centre line of each gutter channel. */
+export const GUTTER_X: [number, number] = [
+  (LANE.gutter0 + LANE.x0) / 2,
+  (LANE.x1 + LANE.gutter1) / 2,
+]
+/** Where on the foul line a ball may be released (its centre stays on the lane). */
+export const START_X: [number, number] = [LANE.x0 + BALL_R + 6, LANE.x1 - BALL_R - 6]
+/** Throw speeds a swipe maps to (world units / s). */
+export const MIN_SPEED = 700
+export const MAX_SPEED = 2300
 
 export interface Lane {
   /** Frames in the match. */
@@ -66,7 +81,7 @@ export interface Lane {
 export type Event =
   | { kind: 'hit'; speed: number; x: number; y: number }
   | { kind: 'knock'; speed: number; x: number; y: number }
-  | { kind: 'wall'; speed: number; x: number; y: number }
+  | { kind: 'gutter'; speed: number; x: number; y: number }
   | { kind: 'pit'; x: number; y: number }
 
 /** Row of each rack slot: 0 holds one pin, row r holds r + 1. */
@@ -127,7 +142,13 @@ export function prepare(lane: Lane): void {
   }
 }
 
-/** Launch the ball: `dx, dy` a unit direction (up the lane is negative y), `speed` world units / s, `curve` the hook. */
+/** Clamp a release point onto the foul line. */
+export const startX = (x: number): number => clamp(x, START_X[0], START_X[1])
+
+/**
+ * Launch the ball from `x` on the foul line: `dx, dy` a unit direction (up the
+ * lane is negative y), `speed` world units / s, `curve` the hook.
+ */
 export function throwBall(
   lane: Lane,
   dx: number,
@@ -135,11 +156,12 @@ export function throwBall(
   speed: number,
   curve: number,
   t: number,
+  x = LANE.cx,
 ): void {
   const len = Math.hypot(dx, dy) || 1
   const sp = Math.min(BALL_CAP, Math.max(0, speed))
   lane.ball = {
-    x: LANE.cx,
+    x: startX(x),
     y: LANE.ballY,
     vx: (dx / len) * sp,
     vy: (dy / len) * sp,
@@ -151,8 +173,6 @@ export function throwBall(
   lane.rollAt = t
 }
 
-const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v)
-
 /**
  * Advance the roll by `dt`: the ball hooks and rolls, struck pins fly, and the
  * pins go down for good once they are hit hard enough or leave the lane.
@@ -163,7 +183,7 @@ export function stepRoll(lane: Lane, dt: number, ev?: Event[]): void {
   for (let i = 0; i < SUB; i++) {
     if (b.live) {
       const sp = Math.hypot(b.vx, b.vy)
-      if (sp > 1) {
+      if (sp > 1 && !b.gutter) {
         const a = b.curve * h * Math.min(1.2, sp / 1400)
         const c = Math.cos(a)
         const s = Math.sin(a)
@@ -176,19 +196,21 @@ export function stepRoll(lane: Lane, dt: number, ev?: Event[]): void {
       const k = Math.exp(-BALL_DRAG * h)
       b.vx *= k
       b.vy *= k
-      // The gutters: a ball that drifts there rolls off the lane and bounces softly.
-      if (b.x < LANE.gutter0) {
-        if (b.vx < 0) {
-          ev?.push({ kind: 'wall', speed: -b.vx, x: b.x, y: b.y })
-          b.vx = -b.vx * 0.25
-        }
-        b.x = LANE.gutter0
-      } else if (b.x > LANE.gutter1) {
-        if (b.vx > 0) {
-          ev?.push({ kind: 'wall', speed: b.vx, x: b.x, y: b.y })
-          b.vx = -b.vx * 0.25
-        }
-        b.x = LANE.gutter1
+      // Off the edge of the lane the ball drops into the gutter and runs down
+      // the channel to the pit: no hook brings it back to the pins.
+      if (!b.gutter && (b.x < LANE.x0 || b.x > LANE.x1)) {
+        b.gutter = true
+        const speed = Math.abs(b.vx)
+        b.vy = -Math.hypot(b.vx, b.vy) * 0.9
+        b.vx = 0
+        ev?.push({ kind: 'gutter', speed, x: b.x, y: b.y })
+      }
+      if (b.gutter) {
+        const gx = GUTTER_X[b.x < LANE.cx ? 0 : 1]
+        b.x += (gx - b.x) * Math.min(1, 14 * h)
+        b.vx = 0
+        // A dead slow gutter ball would never leave: the channel keeps it rolling.
+        if (b.vy > -260) b.vy = -260
       }
       if (b.y < LANE.pitY) {
         b.live = false
@@ -208,8 +230,10 @@ export function stepRoll(lane: Lane, dt: number, ev?: Event[]): void {
       p.vy *= k
     }
     // Ball against standing pins (the ball is much heavier).
+    // A gutter ball or one in the pit is out of play.
+    const inPlay = !b.gutter && b.y >= LANE.pitY
     for (const p of lane.pins) {
-      if (p.down) continue
+      if (p.down || !inPlay) continue
       const c = collideDynamic(b, p, 4, 1, 0.55)
       if (c) {
         ev?.push({ kind: 'hit', speed: c.speed, x: c.x, y: c.y })
@@ -310,8 +334,15 @@ export function swipeThrow(
   const dy = b.y - a.y
   const len = Math.hypot(dx, dy)
   if (len < 60 || dy > -len * 0.25) return null
-  // A frame can carry several moves at once: never read a flick faster than 80 ms.
+  // Speed is the flick at release: the track over its last 0.12 s, so a slow
+  // wind-up followed by a snap still bowls fast. A frame can carry several
+  // moves at once: never read a flick faster than 80 ms.
+  let r = pts.length - 1
+  while (r > 0 && b.t - (pts[r - 1] as Swipe).t <= 0.12) r--
+  const rs = pts[r] as Swipe
+  const recent = Math.hypot(b.x - rs.x, b.y - rs.y) / Math.max(0.08, b.t - rs.t)
   const T = Math.max(0.08, b.t - a.t)
+  const flick = Math.max(len / T, recent)
   // The hook is how the track bends: the second half turning against the first.
   const m = pts[Math.floor(pts.length / 2)] as Swipe
   const v1x = m.x - a.x
@@ -327,7 +358,7 @@ export function swipeThrow(
   return {
     dx,
     dy,
-    speed: clamp((len / T) * 0.75, 700, 2300),
+    speed: clamp(flick * 0.75, MIN_SPEED, MAX_SPEED),
     curve: clamp(turn * 2.5, -0.9, 0.9),
   }
 }
@@ -340,11 +371,12 @@ export function trajectory(
   curve: number,
   seconds = 0.9,
   n = 26,
+  from = LANE.cx,
 ): { x: number; y: number }[] {
   const len = Math.hypot(dx, dy) || 1
   let vx = (dx / len) * Math.min(BALL_CAP, speed)
   let vy = (dy / len) * Math.min(BALL_CAP, speed)
-  let x = LANE.cx
+  let x = startX(from)
   let y = LANE.ballY
   const h = seconds / n
   const out = [{ x, y }]
@@ -361,9 +393,9 @@ export function trajectory(
     const k = Math.exp(-BALL_DRAG * h)
     vx *= k
     vy *= k
-    x = clamp(x, LANE.gutter0, LANE.gutter1)
     out.push({ x, y })
-    if (y < LANE.pitY) break
+    // Past the lane edge it is a gutter ball: show it dropping in and stop.
+    if (y < LANE.pitY || x < LANE.x0 || x > LANE.x1) break
   }
   return out
 }
