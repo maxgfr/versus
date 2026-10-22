@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type GameContext, STEP } from '../../core/game.ts'
-import { PlayerInput } from '../../core/input.ts'
+import { Input, PlayerInput } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
 import createGame, { match } from './index.ts'
 
@@ -27,6 +27,64 @@ function botContext(target?: number): GameContext {
     target,
   }
 }
+
+describe('snakes: swipes steer', () => {
+  it('a drag across your half turns your bike that way, a reverse is ignored', () => {
+    const input = new Input({} as GameContext['stage'], '2p', 0)
+    const ctx = {
+      ...botContext(),
+      input,
+      mode: '2p' as const,
+      bots: [false, false] as [boolean, boolean],
+    }
+    const game = createGame() as unknown as {
+      init: (c: GameContext) => void
+      update: (dt: number) => void
+      time: number
+      s: { b: { bikes: { dir: number; q: number[] }[] } }
+    }
+    game.init(ctx)
+    const step = () => {
+      input.setNow(game.time)
+      game.update(STEP)
+      input.endStep()
+    }
+    // Red heads north. Swipe right on the board (not on a button).
+    input.player(0).press(1, 400, 1200)
+    step()
+    input.player(0).move(1, 520, 1200)
+    step()
+    expect(game.s.b.bikes[0]?.dir === 1 || game.s.b.bikes[0]?.q[0] === 1).toBe(true)
+    input.player(0).release(1)
+    step()
+    // Blue reads the board turned around: its "right" is the world's left.
+    // Blue heads south (its own "up"); a swipe to its right is a world drag to the left.
+    input.player(1).press(2, 600, 500)
+    step()
+    input.player(1).move(2, 480, 500)
+    step()
+    const blue = game.s.b.bikes[1]
+    expect(blue?.dir === 3 || blue?.q[0] === 1).toBe(true)
+    input.player(1).release(2)
+    step()
+    // Straight back toward its own trail: no turn queued.
+    for (let i = 0; i < 30; i++) step()
+    const red = game.s.b.bikes[0]
+    const q = red?.q.length ?? 0
+    const back = ((red?.dir ?? 0) + 2) % 4
+    const v: [number, number] = [
+      [0, -1],
+      [1, 0],
+      [0, 1],
+      [-1, 0],
+    ][back] as [number, number]
+    input.player(0).press(3, 400, 1200)
+    step()
+    input.player(0).move(3, 400 + v[0] * 120, 1200 + v[1] * 120)
+    step()
+    expect(red?.q.length ?? 0).toBeLessThanOrEqual(q)
+  })
+})
 
 /** Plays a whole match between two bots and returns the game. */
 function play(target?: number) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { type Difficulty, STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { SnakeBot } from './bot.ts'
+import { SnakeBot, territory } from './bot.ts'
 import {
   type Bike,
   type Board,
@@ -16,7 +16,9 @@ import {
   ROWS,
   roundWinner,
   TICK,
+  TICK_MIN,
   tick,
+  tickLen,
   WALL,
 } from './rules.ts'
 
@@ -189,7 +191,78 @@ describe('moving and turning', () => {
   })
 })
 
+describe('pace', () => {
+  it('the bikes speed up as the round goes on, down to a floor', () => {
+    expect(tickLen(0)).toBe(TICK)
+    expect(tickLen(100)).toBeLessThan(TICK)
+    expect(tickLen(100000)).toBe(TICK_MIN)
+    const b = empty()
+    put(b, 0, 5, 20, 0)
+    put(b, 1, 15, 5, 2)
+    tick(b, 0, [])
+    expect(b.ticks).toBe(1)
+  })
+})
+
+/** A whole round between two bots; returns the winner. */
+function duel(red: Difficulty, blue: Difficulty, seed: number) {
+  const b = newBoard(false, 0)
+  const rng = new Rng(seed)
+  const bots = [SnakeBot.of(rng.fork(), red), SnakeBot.of(rng.fork(), blue)]
+  let winner: ReturnType<typeof tick> = null
+  for (let i = 0; i < 3000 && winner === null; i++) {
+    for (const k of b.bikes) {
+      if (!k.alive) continue
+      const turn = (bots[k.id] as SnakeBot).choose(b, k.id)
+      if (turn !== 0) queueTurn(k, turn as 1 | -1)
+    }
+    winner = tick(b, i * TICK, [])
+  }
+  return winner
+}
+
 describe('bots', () => {
+  it('territory counts the cells a bike reaches before its rival', () => {
+    const b = empty()
+    put(b, 0, 2, 15, 0)
+    put(b, 1, 21, 15, 0)
+    // Red near the left wall owns roughly the left part, blue the right part.
+    const left = territory(b, 0, 2, 14)
+    expect(left.contested).toBe(true)
+    expect(left.mine).toBeGreaterThan(150)
+    expect(left.mine).toBeLessThan(500)
+    // Walled apart: everything reachable is its own.
+    for (let y = 0; y < ROWS; y++) b.cells[idx(12, y)] = WALL
+    const apart = territory(b, 0, 2, 14)
+    expect(apart.contested).toBe(false)
+    expect(apart.mine).toBe(floodFrom(b, 2, 14, 10000))
+  })
+
+  it('hard beats easy most of the time, and normal more often than not', () => {
+    let hard = 0
+    let normal = 0
+    const n = 12
+    for (let seed = 1; seed <= n; seed++) {
+      // Swap sides every other game so the board layout cannot favour one.
+      const a = seed % 2 === 0
+      const w = duel(a ? 'hard' : 'easy', a ? 'easy' : 'hard', seed)
+      if (w === (a ? 0 : 1)) hard++
+      const v = duel(a ? 'normal' : 'easy', a ? 'easy' : 'normal', seed + 100)
+      if (v === (a ? 0 : 1)) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(9)
+    expect(normal).toBeGreaterThanOrEqual(7)
+  })
+
+  it('a hard bot is not walked into a head-on crash it could avoid', () => {
+    const b = empty()
+    // Blue's head is two cells in front of red; red going straight meets it.
+    put(b, 0, 10, 20, 0)
+    put(b, 1, 10, 18, 2)
+    const bot = SnakeBot.of(new Rng(2), 'hard')
+    expect(bot.choose(b, 0)).not.toBe(0)
+  })
+
   it('will not turn into a dead end when open space is one turn away', () => {
     const b = empty()
     // Everything taken except a big open room on the left and a 2-cell dead-end corridor on the right.

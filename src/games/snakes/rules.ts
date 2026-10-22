@@ -17,8 +17,17 @@ export const CELL = 40
 /** Top-left of the board in world units (centred horizontally, strips above and below). */
 export const X0 = (1000 - COLS * CELL) / 2
 export const Y0 = 300
-/** Seconds between two moves of every bike. */
+/** Seconds between two moves of every bike at the start of a round. */
 export const TICK = 0.125
+/** The bikes speed up as a round goes on, down to this many seconds a move. */
+export const TICK_MIN = 0.075
+/** Seconds shaved off the move time per move made. */
+const TICK_RAMP = 0.00022
+
+/** Seconds per move after `ticks` moves this round: the round gets faster and tenser. */
+export function tickLen(ticks: number): number {
+  return Math.max(TICK_MIN, TICK - ticks * TICK_RAMP)
+}
 /** Countdown before the bikes start riding in each round (s). */
 export const COUNT = 2.4
 /** A bike can queue this many turns ahead. */
@@ -62,8 +71,10 @@ export interface Board {
   /** Per cell: 0 free, otherwise bike id + 1 (heads included). Row-major. */
   cells: number[]
   bikes: Bike[]
-  /** Seconds since the bikes last moved, 0..TICK (for the drawing). */
+  /** Seconds since the bikes last moved, 0..tickLen(ticks) (for the drawing). */
   acc: number
+  /** Moves made this round (the pace ramps with it). */
+  ticks: number
   /** Time when the bikes start riding (s). */
   go: number
 }
@@ -115,7 +126,7 @@ export function newBoard(teams: boolean, now: number): Board {
       diedT: -1,
     }
   })
-  return { cells, bikes, acc: 0, go: now + COUNT }
+  return { cells, bikes, acc: 0, ticks: 0, go: now + COUNT }
 }
 
 /** Queue a turn for a bike (+1 right, -1 left); ignored when the queue is full. */
@@ -171,6 +182,7 @@ export function roundWinner(b: Board): Side | 'draw' | null {
  * that runs into any trail, wall or head. Events are appended to `ev`.
  */
 export function tick(b: Board, now: number, ev: Ev[]): Side | 'draw' | null {
+  b.ticks++
   for (const k of b.bikes) {
     if (!k.alive) continue
     const t = k.q.shift()

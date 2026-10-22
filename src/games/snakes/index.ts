@@ -1,6 +1,7 @@
 import { Button } from '../../core/controls.ts'
-import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
-import { frame } from '../../core/frame.ts'
+import { BaseGame, STEP, type MatchSpec, type Side } from '../../core/game.ts'
+import { frame, toLocal } from '../../core/frame.ts'
+import { Spring } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -16,10 +17,14 @@ import {
   DY,
   type Ev,
   newBoard,
+  free,
   queueTurn,
-  TICK,
   tick,
+  tickLen,
 } from './rules.ts'
+
+/** A drag this long (world units) on your half is a swipe: it steers the bike that way. */
+const SWIPE = 56
 
 export interface State {
   b: Board
@@ -68,6 +73,12 @@ class Snakes extends BaseGame<State> {
   private ev: Ev[] = []
   private beat = -1
   private went = false
+  /** Swipe anchors per pointer id (host-side input reading only). */
+  private anchors = new Map<number, { x: number; y: number }>()
+  // Cosmetic only (not synced): a lean on each turn, seen through the heading.
+  private lean: Spring[] = []
+  private dirs: number[] = []
+  private grazeAt: number[] = []
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -116,6 +127,7 @@ class Snakes extends BaseGame<State> {
     if (roundsStep(s.rounds, this.time, PAUSE)) {
       s.b = newBoard(ctx.teams, this.time)
       this.went = false
+      this.anchors.clear()
       ctx.audio.play('whoosh')
       return
     }
@@ -140,6 +152,7 @@ class Snakes extends BaseGame<State> {
         })
       } else for (const btn of pair) btn.update(ctx.input.player(k.side))
     })
+    if (playing) this.swipes()
     const started = playing && this.time >= s.b.go
     if (started && !this.went) {
       this.went = true
@@ -161,8 +174,8 @@ class Snakes extends BaseGame<State> {
     if (started) {
       s.b.acc += dt
       let winner: Side | 'draw' | null = null
-      while (s.b.acc >= TICK && winner === null) {
-        s.b.acc -= TICK
+      while (s.b.acc >= tickLen(s.b.ticks) && winner === null) {
+        s.b.acc -= tickLen(s.b.ticks)
         for (const k of s.b.bikes) {
           const bot = this.bots[k.id]
           if (!bot || !k.alive) continue
@@ -172,9 +185,84 @@ class Snakes extends BaseGame<State> {
         winner = tick(s.b, this.time, this.ev)
       }
       for (const e of this.ev) this.feedback(e)
+      if (winner === null) this.graze()
       if (winner !== null) this.roundOver(winner)
     }
     s.ctl = this.looks(s.b)
+  }
+
+  /**
+   * Swipes: a drag across your half steers your bike in that direction (as you
+   * see it), turning left or right of its heading. A drag starting on a turn
+   * button is a button press, not a swipe; reversing is impossible and ignored.
+   */
+  private swipes(): void {
+    const { ctx } = this
+    const s = this.s
+    for (const side of [0, 1] as Side[]) {
+      if (this.isBot(side)) continue
+      const inp = ctx.input.player(side)
+      for (const p of inp.ups) this.anchors.delete(p.id)
+      for (const p of inp.held.values()) {
+        let a = this.anchors.get(p.id)
+        if (!a) {
+          const onBtn = s.ctl.some(
+            (t) => t.side === side && (p.x0 - t.x) ** 2 + (p.y0 - t.y) ** 2 <= (t.r * 1.25) ** 2,
+          )
+          a = onBtn ? { x: NaN, y: NaN } : { x: p.x0, y: p.y0 }
+          this.anchors.set(p.id, a)
+        }
+        if (Number.isNaN(a.x)) continue
+        const dx = p.x - a.x
+        const dy = p.y - a.y
+        if (dx * dx + dy * dy < SWIPE * SWIPE) continue
+        a.x = p.x
+        a.y = p.y
+        // Direction in the board's frame (blue's half is read turned around).
+        const l0 = toLocal(side, 0, 0)
+        const l1 = toLocal(side, dx, dy)
+        const lx = l1.x - l0.x
+        const ly = l1.y - l0.y
+        const want = Math.abs(lx) > Math.abs(ly) ? (lx > 0 ? 1 : 3) : ly > 0 ? 2 : 0
+        const world = side === 0 ? want : (want + 2) % 4
+        // 2 vs 2: the swipe steers the bike of the lane it started in.
+        const k = s.b.bikes.find(
+          (b) => b.side === side && b.alive && (!ctx.teams || b.lane === laneOf(side, p.x0)),
+        )
+        if (!k) continue
+        // Relative to where the bike will be heading once its queue has run.
+        let dir = k.dir
+        for (const t of k.q) dir = (dir + t + 4) % 4
+        const turn = (world - dir + 4) % 4
+        if (turn === 1) queueTurn(k, 1)
+        else if (turn === 3) queueTurn(k, -1)
+      }
+    }
+  }
+
+  /** Riding right alongside a wall or trail throws sparks off that side. */
+  private graze(): void {
+    const { ctx } = this
+    for (const k of this.s.b.bikes) {
+      if (!k.alive || this.time - (this.grazeAt[k.id] ?? -9) < 0.12) continue
+      for (const t of [-1, 1]) {
+        const d = (k.dir + t + 4) % 4
+        if (free(this.s.b, k.x + (DX[d] ?? 0), k.y + (DY[d] ?? 0))) continue
+        this.grazeAt[k.id] = this.time
+        const c = cellCentre(k.x, k.y)
+        ctx.fx.burst(c.x + (DX[d] ?? 0) * CELL * 0.45, c.y + (DY[d] ?? 0) * CELL * 0.45, C.yellow, {
+          count: 3,
+          speed: 240,
+          size: 5,
+          life: 0.22,
+          gravity: 0,
+          kind: 'spark',
+          spread: 1.2,
+          dir: Math.atan2(-(DY[k.dir] ?? 0), -(DX[k.dir] ?? 0)),
+        })
+        break
+      }
+    }
   }
 
   private roundOver(w: Side | 'draw'): void {
@@ -197,10 +285,10 @@ class Snakes extends BaseGame<State> {
   }
 
   private feedback(e: Ev): void {
-    const { fx, audio, rng } = this.ctx
+    const { fx, audio } = this.ctx
     switch (e.k) {
       case 'turn':
-        audio.play('tap', 1.1 + rng.next() * 0.2)
+        audio.play('tap', 1.1 + Math.random() * 0.2)
         fx.burst(e.x, e.y, SIDE[e.side].light, {
           count: 5,
           speed: 160,
@@ -210,7 +298,7 @@ class Snakes extends BaseGame<State> {
         })
         break
       case 'crash':
-        audio.play('explode', 0.9 + rng.next() * 0.2)
+        audio.play('explode', 0.9 + Math.random() * 0.2)
         fx.flash(SIDE[e.side].main, 0.2)
         audio.buzz(60)
         fx.burst(e.x, e.y, C.orange, {
@@ -236,9 +324,36 @@ class Snakes extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderSnakes(g, this.s, this.time, this.ctx.names, this.over)
+  render(g: Draw, alpha: number): void {
+    const s = this.s
+    // Each turn (seen through the synced heading) leans the bike into it.
+    s.b.bikes.forEach((k, i) => {
+      const sp = (this.lean[i] ??= new Spring(0, 260, 13))
+      const was = this.dirs[i]
+      // Start from (most of) the old heading and swing into the new one.
+      if (was !== undefined && was !== k.dir) sp.set(((k.dir - was + 4) % 4 === 1 ? 1 : -1) * 1.1)
+      this.dirs[i] = k.dir
+      sp.update(1 / 60)
+    })
+    // Between fixed steps the bikes keep rolling: draw them where they are.
+    const running = s.rounds.phase === 'play' && this.time >= s.b.go && !this.over
+    const p = (s.b.acc + (running ? alpha * STEP : 0)) / tickLen(s.b.ticks)
+    renderSnakes(g, s, this.time, this.ctx.names, this.over, {
+      p: Math.min(1, p),
+      lean: this.lean.map((l) => l.value),
+    })
   }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.dirs = []
+  }
+}
+
+/** The lane (2 vs 2 teammate) a touch at world x belongs to, as `side` sees it. */
+function laneOf(side: Side, x: number): 0 | 1 {
+  const lx = side === 0 ? x : 1000 - x
+  return lx < 500 ? 0 : 1
 }
 
 export default () => new Snakes()

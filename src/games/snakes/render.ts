@@ -6,20 +6,7 @@ import { alpha, C, mix, SIDE, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
 import { drawRounds } from '../../engines/reflex/index.ts'
 import type { State } from './index.ts'
-import {
-  type Bike,
-  BLOCKS,
-  CELL,
-  COLS,
-  COUNT,
-  cellCentre,
-  DX,
-  DY,
-  ROWS,
-  TICK,
-  X0,
-  Y0,
-} from './rules.ts'
+import { type Bike, BLOCKS, CELL, COLS, COUNT, cellCentre, DX, DY, ROWS, X0, Y0 } from './rules.ts'
 
 /** A turn button's look, copied into the state so the online guest can draw it. */
 export interface TurnLook {
@@ -232,9 +219,8 @@ function trailSegments(cells: readonly number[], k: Bike): [number, number, numb
  * a soft halo, the solid wall, and a bright core. A bike that crashed when the
  * round ends dissolves (derezzes) to a faint ghost.
  */
-function trails(g: Draw, s: State, now: number): void {
+function trails(g: Draw, s: State, now: number, p: number): void {
   const { cells, bikes } = s.b
-  const p = clamp(s.b.acc / TICK, 0, 1)
   const r = s.rounds
   const c = g.ctx
   for (const k of bikes) {
@@ -322,14 +308,13 @@ function wreck(g: Draw, x: number, y: number, angle: number, col: string): void 
   })
 }
 
-function bikes(g: Draw, s: State, now: number): void {
-  const p = clamp(s.b.acc / TICK, 0, 1)
+function bikes(g: Draw, s: State, now: number, p: number, lean: number[]): void {
   for (const k of s.b.bikes) {
     const at = bikePos(k, p)
     const angle = Math.atan2(DY[k.dir] ?? 0, DX[k.dir] ?? 0)
     const col = bikeColour(k)
     if (!k.alive) wreck(g, at.x, at.y, angle, col)
-    else cycle(g, at.x, at.y, angle, col, now, k.id)
+    else cycle(g, at.x, at.y, angle - (lean[k.id] ?? 0), col, now, k.id)
   }
   // Each bike's marker (red circle, blue square) rides above it, upright for its player.
   for (const k of s.b.bikes) {
@@ -402,12 +387,15 @@ export function renderSnakes(
   now: number,
   names: [string, string],
   over: boolean,
+  look: { p: number; lean: number[] },
 ): void {
   table(g, now)
   blocks(g)
-  trails(g, s, now)
-  bikes(g, s, now)
-  for (const t of s.ctl) turn(g, t)
+  const p = clamp(look.p, 0, 1)
+  trails(g, s, now, p)
+  bikes(g, s, now, p, look.lean)
+  // Online, each phone shows only its own player's buttons.
+  for (const t of s.ctl) if (g.viewer === null || t.side === g.viewer) turn(g, t)
   const alive = (side: Side) => s.b.bikes.some((k) => k.side === side && k.alive)
   namePill(g, 0, names[0], { active: alive(0), text: alive(0) ? undefined : 'Crashed' })
   namePill(g, 1, names[1], { active: alive(1), text: alive(1) ? undefined : 'Crashed' })
