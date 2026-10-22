@@ -3,6 +3,8 @@ import { frame } from '../../core/frame.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
+import { floatFor } from '../../core/fx/fx.ts'
+import { lerp } from '../../core/fx/ease.ts'
 import { TaxiBot } from './bot.ts'
 import { renderCity } from './render.ts'
 import {
@@ -61,6 +63,8 @@ class TaxiRace extends BaseGame<State> {
   private bots: (TaxiBot | null)[] = [null, null]
   private ev: Ev[] = []
   private lastTick = -1
+  // Cosmetic only (not synced): last step's taxi spots, for interpolation.
+  private prev: { x: number; y: number }[] | null = null
 
   private get total(): number {
     return this.ctx.target || match.default
@@ -77,7 +81,7 @@ class TaxiRace extends BaseGame<State> {
       ctx.bots[side] ? new TaxiBot(ctx.rng.fork(), ctx.difficulty) : null,
     )
     return {
-      ...newWorld(map),
+      ...newWorld(map, this.total),
       pads: this.looks(),
       hops: [],
       scoredAt: [-9, -9],
@@ -114,6 +118,7 @@ class TaxiRace extends BaseGame<State> {
     }
 
     this.ev.length = 0
+    this.prev = s.taxis.map((t) => ({ x: t.x, y: t.y }))
     stepWorld(s, dt, drives, ctx.rng, this.ev)
     for (const e of this.ev) this.feedback(e)
     s.pads = this.looks()
@@ -198,18 +203,40 @@ class TaxiRace extends BaseGame<State> {
           fx.float('Dropped!', inX(e.x + (dx / d) * 110), e.y + (dy / d) * 90, C.orange, 58, e.side)
         }
         break
-      case 'bump':
-        audio.play('thud', 1.15)
-        audio.buzz(24)
-        fx.sparks(e.x, e.y, C.yellow, 14)
-        fx.shake(0.22)
-        fx.stop(3)
+      case 'bump': {
+        // A ram at full tilt hits harder than a nudge.
+        const k = Math.min(1, e.speed / 600)
+        audio.play('thud', 0.95 + k * 0.4)
+        audio.buzz(Math.round(10 + k * 24))
+        fx.sparks(e.x, e.y, C.yellow, Math.round(6 + k * 14))
+        fx.ring(e.x, e.y, C.white, 60 + k * 70)
+        fx.shake(0.1 + k * 0.2)
+        fx.stop(Math.round(1 + k * 3))
+        break
+      }
+      case 'rush':
+        audio.play('powerup', 0.9)
+        audio.play('whoosh', 0.8)
+        audio.buzz(30)
+        fx.flash(C.yellow, 0.15)
+        for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Rush hour! Fares pay more')
         break
     }
   }
 
-  render(g: Draw): void {
-    renderCity(g, this.s, gridOf(this.s.map), this.ctx.names, this.total - this.s.t, this.time)
+  render(g: Draw, alpha: number): void {
+    const s = this.s
+    const prev = this.prev
+    const at = s.taxis.map((t, i) => {
+      const p = prev?.[i]
+      return p ? { x: lerp(p.x, t.x, alpha), y: lerp(p.y, t.y, alpha) } : { x: t.x, y: t.y }
+    })
+    renderCity(g, s, gridOf(s.map), this.ctx.names, this.total - s.t, this.time, at)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = null
   }
 }
 

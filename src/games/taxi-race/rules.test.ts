@@ -12,6 +12,8 @@ import {
   MIN_STEPS,
   newWorld,
   type Pt,
+  RUSH_WAITING,
+  rushing,
   stepWorld,
   stepsBetween,
   winnerOf,
@@ -214,6 +216,31 @@ describe('bot', () => {
     })
   }
 
+  it('the hard bot beats normal and easy head to head over seeded cities', () => {
+    for (const weak of ['easy', 'normal'] as const) {
+      let wins = 0
+      for (let seed = 1; seed <= 6; seed++) {
+        const hs = seed % 2 ? 0 : 1
+        const w = newWorld(seed % MAPS.length, 60)
+        const g = gridOf(w.map)
+        const bots = [
+          new TaxiBot(new Rng(seed), hs === 0 ? 'hard' : weak),
+          new TaxiBot(new Rng(seed + 9), hs === 1 ? 'hard' : weak),
+        ]
+        const rng = new Rng(seed * 3)
+        while (w.t < 60) {
+          const drives: [Pt, Pt] = [
+            bots[0]?.drive(w, g, 0, STEP) ?? { x: 0, y: 0 },
+            bots[1]?.drive(w, g, 1, STEP) ?? { x: 0, y: 0 },
+          ]
+          stepWorld(w, STEP, drives, rng, [])
+        }
+        if (winnerOf(w) === hs) wins++
+      }
+      expect(wins).toBeGreaterThanOrEqual(weak === 'easy' ? 5 : 4)
+    }
+  })
+
   it('the hard bot earns more fares than the easy one', () => {
     const run = (d: 'easy' | 'hard') => {
       let total = 0
@@ -228,5 +255,39 @@ describe('bot', () => {
       return total
     }
     expect(run('hard')).toBeGreaterThanOrEqual(run('easy'))
+  })
+})
+
+describe('rush hour and drops', () => {
+  it('the last stretch is rush hour: more passengers wait and fares pay more', () => {
+    const w = newWorld(1, 60)
+    const rng = new Rng(8)
+    const ev: Ev[] = []
+    for (let i = 0; i < 60 * 41; i++) stepWorld(w, STEP, NONE, rng, ev)
+    expect(rushing(w)).toBe(false)
+    for (let i = 0; i < 60 * 19; i++) stepWorld(w, STEP, NONE, rng, ev)
+    expect(rushing(w)).toBe(true)
+    expect(ev.filter((e) => e.k === 'rush')).toHaveLength(1)
+    const waiting = w.fares.filter((f) => f.carried < 0)
+    expect(waiting.length).toBeGreaterThan(3)
+    expect(waiting.length).toBeLessThanOrEqual(RUSH_WAITING)
+    const g = gridOf(w.map)
+    const late = waiting[waiting.length - 1] as Fare
+    const steps = stepsBetween(g, { x: late.fx, y: late.fy }, { x: late.tx, y: late.ty })
+    expect(late.value).toBeGreaterThan(fareValue(steps))
+  })
+
+  it('a dropped passenger never lands on its own flag', () => {
+    const w = newWorld(0)
+    const f = addFare(w, 50)
+    f.carried = 0
+    w.taxis[0].carry = f.id
+    // Red is parked right at the flag when blue rams it.
+    move(w, 0, f.tx, f.ty)
+    move(w, 1, f.tx - 60, f.ty)
+    const ev: Ev[] = []
+    stepWorld(w, STEP, [null, { x: 1, y: 0 }], new Rng(3), ev)
+    expect(ev.some((e) => e.k === 'drop')).toBe(true)
+    expect(Math.hypot(f.fx - f.tx, f.fy - f.ty)).toBeGreaterThan(56)
   })
 })

@@ -337,6 +337,8 @@ export function renderCity(
   names: [string, string],
   left: number,
   now: number,
+  /** Interpolated taxi spots. */
+  at?: { x: number; y: number }[],
 ): void {
   g.fillView(PLOT)
   drawStrip(g, grid.y0, grid.y0 + grid.rows * grid.cell)
@@ -355,7 +357,9 @@ export function renderCity(
     waiting(g, f, p.x, p.y, now, p.scale)
   }
   for (const side of [0, 1] as Side[]) {
-    const t = s.taxis[side]
+    const t0 = s.taxis[side]
+    const p = at?.[side]
+    const t = p ? { ...t0, x: p.x, y: p.y } : t0
     taxi(
       g,
       t,
@@ -365,7 +369,9 @@ export function renderCity(
     )
   }
   for (const h of s.hops) hop(g, h, s, now)
-  for (const side of [0, 1] as Side[]) pad(g, side, s.pads[side])
+  // Online, each phone shows only its own player's stick.
+  for (const side of [0, 1] as Side[])
+    if (g.viewer === null || g.viewer === side) pad(g, side, s.pads[side])
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, names[side], { inset: 52 })
     score(g, s, side, now)

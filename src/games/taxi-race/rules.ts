@@ -32,6 +32,11 @@ export const SPAWN_MAX = 3.6
 export const MIN_STEPS = 4
 /** Points per street cell of a trip. */
 export const POINTS_PER_CELL = 10
+/** Rush hour: the last share of the match, when passengers come faster, more of them wait, and fares pay more. */
+export const RUSH = 0.3
+export const RUSH_GAP = 0.55
+export const RUSH_WAITING = 4
+export const RUSH_PAY = 1.5
 /** Closing speed that counts as a bump, and the pause before a bumped taxi can pick up again. */
 export const BUMP_SPEED = 60
 export const COOLDOWN = 1.6
@@ -103,13 +108,16 @@ export interface World {
   /** World time of the next passenger, and of the next allowed bump sound / drop. */
   spawnT: number
   bumpT: number
+  /** World time rush hour starts (-1: never). */
+  rush: number
 }
 
 export type Ev =
   | { k: 'pick'; side: Side; x: number; y: number; id: number }
   | { k: 'deliver'; side: Side; x: number; y: number; value: number; id: number }
   | { k: 'drop'; side: Side; x: number; y: number; id: number }
-  | { k: 'bump'; side: Side; x: number; y: number }
+  | { k: 'bump'; side: Side; x: number; y: number; speed: number }
+  | { k: 'rush' }
 
 /** Taxi spawn for a side: the letter in the map for that side's colour. */
 function startOf(grid: Grid, side: Side): Pt {
@@ -133,7 +141,8 @@ function taxiAt(grid: Grid, side: Side): Taxi {
   }
 }
 
-export function newWorld(map: number): World {
+/** A fresh city. With the match length (`total` seconds) its last stretch is rush hour. */
+export function newWorld(map: number, total = 0): World {
   const grid = gridOf(map)
   return {
     map,
@@ -143,8 +152,12 @@ export function newWorld(map: number): World {
     nextId: 1,
     spawnT: 1.2,
     bumpT: 0,
+    rush: total > 0 ? total * (1 - RUSH) : -1,
   }
 }
+
+/** Is it rush hour? */
+export const rushing = (w: World): boolean => (w.rush ?? -1) >= 0 && w.t >= w.rush
 
 /** Open neighbours of a street cell (4-connected). */
 function openNeighbours(g: Grid, c: number, r: number): [boolean, boolean, boolean, boolean] {
@@ -215,7 +228,7 @@ export function fareValue(steps: number): number {
 }
 
 /** Try to add a passenger on a free corner with a far enough destination. */
-function spawnFare(w: World, grid: Grid, rng: Rng): void {
+function spawnFare(w: World, grid: Grid, rng: Rng, pay = 1): void {
   const corners = cornersOf(grid)
   if (corners.length < 2) return
   const busy = (p: Pt) =>
@@ -233,7 +246,7 @@ function spawnFare(w: World, grid: Grid, rng: Rng): void {
       fy: from.y,
       tx: to.x,
       ty: to.y,
-      value: fareValue(steps),
+      value: Math.round(fareValue(steps) * pay),
       carried: -1,
     })
     return
@@ -254,10 +267,15 @@ export function stepWorld(
   const grid = gridOf(w.map)
   w.t += dt
 
+  const rush = rushing(w)
+  if (rush && w.t - dt < w.rush) {
+    ev.push({ k: 'rush' })
+    w.spawnT = Math.min(w.spawnT, w.t + 0.3)
+  }
   const waiting = w.fares.filter((f) => f.carried < 0).length
   if (w.t >= w.spawnT) {
-    if (waiting < MAX_WAITING) spawnFare(w, grid, rng)
-    w.spawnT = w.t + rng.range(SPAWN_MIN, SPAWN_MAX)
+    if (waiting < (rush ? RUSH_WAITING : MAX_WAITING)) spawnFare(w, grid, rng, rush ? RUSH_PAY : 1)
+    w.spawnT = w.t + rng.range(SPAWN_MIN, SPAWN_MAX) * (rush ? RUSH_GAP : 1)
   }
 
   for (const side of [0, 1] as Side[]) {
@@ -291,7 +309,7 @@ export function stepWorld(
       w.bumpT = w.t + 0.5
       const mx = (a.x + b.x) / 2
       const my = (a.y + b.y) / 2
-      ev.push({ k: 'bump', side: a.side, x: mx, y: my })
+      ev.push({ k: 'bump', side: a.side, x: mx, y: my, speed: Math.abs(closing) })
       for (const [hit, other] of [
         [a, b],
         [b, a],
@@ -300,8 +318,10 @@ export function stepWorld(
         if (hit.carry < 0 || Math.abs(other.vx) + Math.abs(other.vy) < 40) continue
         const f = w.fares.find((x) => x.id === hit.carry)
         if (f) {
-          const corners = cornersOf(grid)
-          const at = nearestCorner(corners, hit)
+          // Back on the nearest corner, but never on its own flag (a free fare).
+          const dest = { x: f.tx, y: f.ty }
+          const corners = cornersOf(grid).filter((c) => dist(c, dest) > DROP_R * 2)
+          const at = nearestCorner(corners.length ? corners : cornersOf(grid), hit)
           f.fx = at.x
           f.fy = at.y
           f.carried = -1

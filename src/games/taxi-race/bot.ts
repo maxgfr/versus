@@ -8,14 +8,18 @@ interface Skill {
   react: number
   /** Drive speed multiplier. */
   pace: number
-  /** Chance to pick a worse fare than the nearest one (a human-ish slip). */
+  /** Chance to pick a worse fare than the best one (a human-ish slip). */
   slip: number
+  /** Weighs a fare's pay against the whole trip (pick-up and ride), not just how near it is. */
+  value: boolean
+  /** Rams a rival carrying a passenger when it is close and nothing better is on. */
+  ram: boolean
 }
 
 const SKILL: Record<Difficulty, Skill> = {
-  easy: { react: 0.7, pace: 0.7, slip: 0.35 },
-  normal: { react: 0.4, pace: 0.9, slip: 0.12 },
-  hard: { react: 0.2, pace: 1, slip: 0 },
+  easy: { react: 0.7, pace: 0.7, slip: 0.35, value: false, ram: false },
+  normal: { react: 0.3, pace: 0.95, slip: 0.06, value: true, ram: false },
+  hard: { react: 0.12, pace: 1, slip: 0, value: true, ram: true },
 }
 
 /**
@@ -71,17 +75,32 @@ export class TaxiBot {
     }
     this.goalCarry = false
     // Waiting passengers, ranked by how soon I get there (and whether the rival gets there first).
+    const free = rival.carry < 0
     const ranked = w.fares
       .filter((f) => f.carried < 0)
       .map((f) => {
         const p = { x: f.fx, y: f.fy }
         const mine = stepsBetween(grid, { x: me.x, y: me.y }, p)
-        const theirs = stepsBetween(grid, { x: rival.x, y: rival.y }, p)
+        const theirs = free ? stepsBetween(grid, { x: rival.x, y: rival.y }, p) : -1
         const ours = mine < 0 ? 999 : mine
         const contested = theirs >= 0 && theirs < ours
-        return { f, score: ours + (contested ? 6 : 0) }
+        if (!this.sk.value) return { f, score: ours + (contested ? 6 : 0) }
+        // Fares per minute: pay over the whole job (get there, then ride), a lost race is worthless.
+        const ride = Math.max(1, f.value / 10)
+        return { f, score: contested ? 1e3 + ours : -(f.value / (ours + ride + 2)) }
       })
       .sort((a, b) => a.score - b.score)
+    // A rival with a fare aboard close by: a bump makes them drop it.
+    if (this.sk.ram && rival.carry >= 0 && me.carry < 0) {
+      const gap = stepsBetween(grid, { x: me.x, y: me.y }, { x: rival.x, y: rival.y })
+      const best = ranked[0]
+      if (gap >= 0 && gap <= 3 && (!best || best.score >= 1e3 || gap * 2 < -best.score * 10)) {
+        this.goal = { x: rival.x, y: rival.y }
+        this.goalFare = -1
+        this.left = Math.min(this.left, 0.15)
+        return
+      }
+    }
     if (!ranked.length) {
       this.goal = null
       this.goalFare = -1
