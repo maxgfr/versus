@@ -17,7 +17,6 @@ import {
 } from './render.ts'
 import {
   addRest,
-  ADDS,
   anyPair,
   CAPACITY,
   canAdd,
@@ -26,7 +25,7 @@ import {
   cross,
   isStuck,
   left,
-  START,
+  LEVELS,
   startNumbers,
 } from './rules.ts'
 
@@ -72,9 +71,17 @@ export const match: MatchSpec = { unit: 'seconds', default: 180, min: 60, max: 6
 class NumberMatch extends PuzzleRace<State> {
   protected recordId = 'number-match'
 
+  /** Adds per game and numbers on the opening board, from the level. */
+  private get adds(): number {
+    return LEVELS[this.ctx.difficulty].adds
+  }
+  private get start(): number {
+    return LEVELS[this.ctx.difficulty].rows * COLS
+  }
+
   protected setup(): State {
     this.cap = this.ctx.target || match.default
-    const start = startNumbers(this.ctx.seed)
+    const start = startNumbers(this.ctx.seed, LEVELS[this.ctx.difficulty].rows)
     const noPair = !anyPair(start)
     const board = (): Board => ({
       vals: start.slice(),
@@ -105,7 +112,8 @@ class NumberMatch extends PuzzleRace<State> {
    */
   protected progressOf(side: Side): number {
     const n = left(this.s.boards[side].vals)
-    return n <= START ? (START - n) / START : -(n - START) / CAPACITY
+    const start = this.start
+    return n <= start ? (start - n) / start : -(n - start) / CAPACITY
   }
 
   protected override step(dt: number): void {
@@ -160,7 +168,7 @@ class NumberMatch extends PuzzleRace<State> {
       b.botT += dt
       if (b.botT < PACE[this.ctx.difficulty]) return
       b.botT = 0
-      const m = nextMove(b.vals, ADDS - b.adds, this.ctx.difficulty, this.ctx.rng)
+      const m = nextMove(b.vals, this.adds - b.adds, this.ctx.difficulty, this.ctx.rng)
       if (!m) return
       if (m.kind === 'add') this.add(side)
       else this.cross(side, m.i, m.j)
@@ -240,7 +248,7 @@ class NumberMatch extends PuzzleRace<State> {
     b.shift = r.rows ? { rows: r.removed, p: geo.p, at: now } : b.shift
     // Rows that collapsed move the newest copy up with them.
     b.addFrom = Math.max(0, b.addFrom - r.rows * COLS)
-    const cleared = Math.max(0, START - left(b.vals)) / START
+    const cleared = Math.max(0, this.start - left(b.vals)) / this.start
     audio.play('pop', 0.9 + k * 0.5 + cleared * 0.2)
     if (b.streak >= 2) audio.play('coin', 0.9 + k * 0.6)
     const n = Math.round(8 + k * 14)
@@ -278,7 +286,7 @@ class NumberMatch extends PuzzleRace<State> {
     b.noPair = left(b.vals) > 0 && !anyPair(b.vals)
     const wasStuck = b.stuck
     // No pair and no Add that would put a number down: nothing left to do.
-    b.stuck = isStuck(b.vals, ADDS - b.adds)
+    b.stuck = isStuck(b.vals, this.adds - b.adds)
     if (b.stuck && !wasStuck) {
       b.stuckAt = this.time
       this.ctx.audio.play('lose', 1.1)
@@ -287,10 +295,10 @@ class NumberMatch extends PuzzleRace<State> {
     }
   }
 
-  /** Copy the numbers left after the last one (up to ADDS times, and only if one fits). */
+  /** Copy the numbers left after the last one (a few times per game, and only if one fits). */
   private add(side: Side): void {
     const b = this.s.boards[side]
-    if (this.over || !canAdd(b.vals, ADDS - b.adds)) {
+    if (this.over || !canAdd(b.vals, this.adds - b.adds)) {
       b.pressAt = this.time
       this.ctx.audio.play('error')
       return
@@ -344,9 +352,9 @@ class NumberMatch extends PuzzleRace<State> {
     // Online, each phone shows only its own player's controls (the Add button, the hint).
     const mine = g.viewer === null || side === g.viewer
     if (mine)
-      drawAdd(g, geo, side, b.adds, {
+      drawAdd(g, geo, side, b.adds, this.adds, {
         stuck: b.noPair,
-        can: canAdd(b.vals, ADDS - b.adds),
+        can: canAdd(b.vals, this.adds - b.adds),
         now: this.time,
         pressAt: b.pressAt,
       })

@@ -14,6 +14,7 @@ import {
   inSight,
   isStuck,
   left,
+  LEVELS,
   pairs,
   START,
   START_ROWS,
@@ -243,6 +244,45 @@ describe('number match bot', () => {
     for (const d of ['normal', 'hard'] as const) {
       expect(nextMove(vals, ADDS, d, new Rng(2))).toEqual({ kind: 'pair', i: 0, j: 8 })
     }
+  })
+
+  it('levels: easy opens shorter with more Adds, hard longer with fewer', () => {
+    expect(LEVELS.easy.rows).toBeLessThan(LEVELS.normal.rows)
+    expect(LEVELS.normal.rows).toBeLessThan(LEVELS.hard.rows)
+    expect(LEVELS.easy.adds).toBeGreaterThan(LEVELS.normal.adds)
+    expect(LEVELS.normal.adds).toBeGreaterThan(LEVELS.hard.adds)
+    expect(startNumbers(3, LEVELS.hard.rows)).toHaveLength(LEVELS.hard.rows * COLS)
+    // The first rows are the same digits whatever the length: one seed, one deal.
+    expect(startNumbers(3, 5).slice(0, 27)).toEqual(startNumbers(3, 3))
+  })
+
+  it('in a race on the same board, hard beats easy most of the time', () => {
+    const CAP = 180
+    /** When the board clears (s), or the numbers left at the cap. */
+    const race = (d: 'easy' | 'normal' | 'hard', seed: number) => {
+      const level = LEVELS.normal
+      let vals = startNumbers(seed, level.rows)
+      let adds = 0
+      const rng = new Rng(seed * 13 + 1)
+      for (let t = PACE[d]; t <= CAP; t += PACE[d]) {
+        const m = nextMove(vals, level.adds - adds, d, rng)
+        if (!m) break
+        if (m.kind === 'add') {
+          vals = addRest(vals).vals
+          adds++
+        } else vals = cross(vals, m.i, m.j).vals
+        if (left(vals) === 0) return { at: t, left: 0 }
+      }
+      return { at: Infinity, left: left(vals) }
+    }
+    let wins = 0
+    const runs = 12
+    for (let seed = 1; seed <= runs; seed++) {
+      const h = race('hard', seed)
+      const e = race('easy', seed)
+      if (h.at < e.at || (h.at === e.at && h.left < e.left)) wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(Math.ceil(runs * 0.75))
   })
 
   it('hard leaves fewer numbers than easy over many boards', () => {

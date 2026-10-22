@@ -1,3 +1,4 @@
+import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 
 /**
@@ -6,8 +7,8 @@ import { Rng } from '../../core/rng.ts'
  * see each other: they touch (including diagonally), or only crossed-out cells
  * lie between them along a row, a column or a diagonal, or in reading order
  * (the end of a row runs on to the start of the next). A row that is entirely
- * crossed out collapses. Add (three per game) copies every number still on the
- * board after the last one.
+ * crossed out collapses. Add (a few per game, fewer on harder levels) copies
+ * every number still on the board after the last one.
  */
 
 export const COLS = 9
@@ -18,10 +19,20 @@ export const START = START_ROWS * COLS
 /** The most cells a board may hold: an Add stops copying once the board is this long. */
 export const CAPACITY = 10 * COLS
 
+/**
+ * Per level: rows on the opening board and Adds per game. Easy is a short board
+ * with plenty of Adds; hard opens longer with only two to fall back on.
+ */
+export const LEVELS: Record<Difficulty, { rows: number; adds: number }> = {
+  easy: { rows: 3, adds: 4 },
+  normal: { rows: START_ROWS, adds: ADDS },
+  hard: { rows: 5, adds: 2 },
+}
+
 /** The opening digits: the same for both halves, from the seed. */
-export function startNumbers(seed: number): number[] {
+export function startNumbers(seed: number, rows = START_ROWS): number[] {
   const rng = new Rng(seed)
-  return Array.from({ length: START }, () => rng.int(1, 9))
+  return Array.from({ length: rows * COLS }, () => rng.int(1, 9))
 }
 
 /**

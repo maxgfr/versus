@@ -4,7 +4,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { HEADER } from '../../engines/puzzle/index.ts'
 import { floodlight } from './ending.ts'
-import { ADDS, COLS } from './rules.ts'
+import { COLS } from './rules.ts'
 
 /** Board and Add button in a panel of w × h (a half: 1000 × 900, or the whole stage in solo). */
 export interface Geo {
@@ -270,11 +270,12 @@ export function drawAdd(
   geo: Geo,
   side: Side,
   adds: number,
+  max: number,
   o: { stuck: boolean; can: boolean; now: number; pressAt: number },
 ): void {
   const b = geo.btn
   const col = SIDE[side]
-  const left = ADDS - adds
+  const left = max - adds
   const on = left > 0 && o.can
   const call = on && o.stuck
   const pulse = call ? 0.5 + 0.5 * Math.sin(o.now * 7) : 0
@@ -293,8 +294,8 @@ export function drawAdd(
     color: ink,
   })
   if (!on) return
-  for (let k = 0; k < ADDS; k++) {
-    const x = b.x + b.w - 116 + k * 36
+  for (let k = 0; k < max; k++) {
+    const x = b.x + b.w - 44 - (max - 1) * 36 + k * 36
     const full = k < left
     g.circle(x, ty, 12, full ? (call ? C.ink : C.white) : alpha(call ? C.ink : C.white, 0.25))
   }
