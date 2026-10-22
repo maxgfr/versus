@@ -5,14 +5,14 @@ import { BEAT } from './rules.ts'
 /** Grid the bot taps on: eighth notes. Even grid points are on the beat. */
 const GRID = BEAT / 2
 /** Chance to tap each grid point. */
-const CADENCE: Record<Difficulty, number> = { easy: 0.55, normal: 0.8, hard: 0.95 }
+const CADENCE: Record<Difficulty, number> = { easy: 0.55, normal: 0.88, hard: 1 }
 /** Timing error (s, one standard deviation about the grid point). */
-const JITTER: Record<Difficulty, number> = { easy: 0.08, normal: 0.04, hard: 0.02 }
+const JITTER: Record<Difficulty, number> = { easy: 0.08, normal: 0.032, hard: 0.016 }
 /**
  * Chance of an extra sixteenth-note tap between grid points when it matters
  * (behind, or on the final lap). Stays well under the mash limit.
  */
-const FILL: Record<Difficulty, number> = { easy: 0, normal: 0.3, hard: 0.65 }
+const FILL: Record<Difficulty, number> = { easy: 0, normal: 0.45, hard: 0.85 }
 
 /**
  * Computer runner: taps the eighth-note grid at a difficulty cadence, with
