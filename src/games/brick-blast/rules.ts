@@ -25,7 +25,12 @@ export const BRICK_H = CELL_H - 12
 export const PADDLE_Y = 1640
 export const PADDLE_H = 28
 export const PADDLE_HALF = 110
-export const PADDLE_SPEED = 2600
+/** Top paddle speed: fast enough to stay under a finger. */
+export const PADDLE_SPEED = 4200
+/** How much of the paddle's sideways speed turns into angle (english) on a hit. */
+export const ENGLISH = 0.4
+/** Extra ball speed a paddle swung at full speed adds (it fades back over ~1 s). */
+export const DRIVE = 0.35
 export const BALL_R = 22
 export const LIVES = 3
 /** Seconds between junk bricks dropping into a wall. */
@@ -53,11 +58,15 @@ export interface Ball {
   vy: number
   speed: number
   stuck: boolean
+  /** Speed multiplier from a driven paddle hit, decaying back to 1. */
+  boost: number
 }
 
 export interface Board {
   /** Paddle centre x (red frame). */
   px: number
+  /** Paddle velocity (world units / s) over the last step: a swing puts english on the ball. */
+  pvx: number
   ball: Ball
   bricks: Brick[]
   /** Junk bricks sent by the rival and not yet dropped into this wall. */
@@ -86,11 +95,11 @@ export interface Cmd {
 
 export type Event =
   | { kind: 'brick'; side: Side; x: number; y: number; row: number; junk: boolean; sent: boolean }
-  | { kind: 'paddle'; side: Side; x: number; y: number; off: number }
+  | { kind: 'paddle'; side: Side; x: number; y: number; off: number; drive: number }
   | { kind: 'wall'; side: Side; x: number; y: number }
   | { kind: 'junk'; side: Side; c: number; r: number }
   | { kind: 'lost'; side: Side; x: number; y: number; lives: number }
-  | { kind: 'launch'; side: Side }
+  | { kind: 'launch'; side: Side; drive: number }
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v)
 
@@ -109,12 +118,21 @@ export function startBricks(now = 0): Brick[] {
 }
 
 export function serveBall(px: number): Ball {
-  return { x: px, y: PADDLE_Y - PADDLE_H / 2 - BALL_R, vx: 0, vy: 0, speed: SPEED0, stuck: true }
+  return {
+    x: px,
+    y: PADDLE_Y - PADDLE_H / 2 - BALL_R,
+    vx: 0,
+    vy: 0,
+    speed: SPEED0,
+    stuck: true,
+    boost: 1,
+  }
 }
 
 export function newBoard(): Board {
   return {
     px: W / 2,
+    pvx: 0,
     ball: serveBall(W / 2),
     bricks: startBricks(),
     queue: 0,
@@ -153,12 +171,17 @@ export function predictX(
 }
 
 function stepPaddle(b: Board, cmd: Cmd, dt: number): void {
+  const was = b.px
   if (cmd.x !== null) {
     const max = PADDLE_SPEED * dt
     b.px += clamp(cmd.x - b.px, -max, max)
   }
   b.px = clamp(b.px, PADDLE_HALF, W - PADDLE_HALF)
+  b.pvx = (b.px - was) / dt
 }
+
+/** 0..1 how hard the paddle is being swung. */
+const swing = (b: Board): number => Math.min(1, Math.abs(b.pvx) / PADDLE_SPEED)
 
 /** The first brick the ball overlaps: bounces it and removes the brick. */
 function hitBrick(b: Board, ball: Ball): { brick: Brick; cx: number; cy: number } | null {
@@ -235,12 +258,16 @@ export function stepBoard(
     ball.y = PADDLE_Y - PADDLE_H / 2 - BALL_R
     b.serveT += dt
     if (cmd.launch || b.serveT >= AUTO_LAUNCH) {
-      const a = (rng.next() - 0.5) * 0.7
+      // A moving paddle serves the way it is going; a still one serves at a slight random angle.
+      const k = swing(b)
+      const a =
+        Math.abs(b.pvx) > 300 ? Math.sign(b.pvx) * (0.2 + 0.45 * k) : (rng.next() - 0.5) * 0.7
       ball.vx = Math.sin(a) * ball.speed
       ball.vy = -Math.cos(a) * ball.speed
+      ball.boost = 1 + DRIVE * k * 0.5
       ball.stuck = false
       b.serveT = 0
-      out.push({ kind: 'launch', side })
+      out.push({ kind: 'launch', side, drive: k })
     }
     return 0
   }
@@ -248,6 +275,15 @@ export function stepBoard(
   const h = dt / SUB
   const top = PADDLE_Y - PADDLE_H / 2
   for (let i = 0; i < SUB; i++) {
+    // A driven ball eases back to its rally speed.
+    if (ball.boost !== 1) {
+      ball.boost = 1 + (ball.boost - 1) * Math.exp(-1.6 * h)
+      if (ball.boost < 1.002) ball.boost = 1
+      const s = Math.hypot(ball.vx, ball.vy) || 1
+      const v = ball.speed * ball.boost
+      ball.vx = (ball.vx / s) * v
+      ball.vy = (ball.vy / s) * v
+    }
     ball.x += ball.vx * h
     ball.y += ball.vy * h
     if (ball.x < BALL_R) {
@@ -270,13 +306,17 @@ export function stepBoard(
       ball.y - BALL_R <= PADDLE_Y + PADDLE_H / 2 &&
       Math.abs(ball.x - b.px) <= PADDLE_HALF + BALL_R
     ) {
-      // Off-centre hits angle the ball; the speed stays the same.
+      // Off-centre hits angle the ball; a swinging paddle adds english
+      // (more angle the way it moves) and drives the ball faster.
       const off = clamp((ball.x - b.px) / PADDLE_HALF, -1, 1)
-      const a = off * 1.05
+      const k = swing(b)
+      const a = clamp(off * 1.05 + Math.sign(b.pvx) * k * ENGLISH, -1.2, 1.2)
+      ball.boost = Math.max(ball.boost, 1 + DRIVE * k)
+      const v = ball.speed * ball.boost
       ball.y = top - BALL_R
-      ball.vx = Math.sin(a) * ball.speed
-      ball.vy = -Math.cos(a) * ball.speed
-      out.push({ kind: 'paddle', side, x: ball.x, y: top, off })
+      ball.vx = Math.sin(a) * v
+      ball.vy = -Math.cos(a) * v
+      out.push({ kind: 'paddle', side, x: ball.x, y: top, off, drive: k })
     }
     const hit = hitBrick(b, ball)
     if (hit) {
@@ -284,8 +324,8 @@ export function stepBoard(
       b.broken++
       ball.speed = Math.min(SPEED_MAX, ball.speed * SPEED_UP)
       const s = Math.hypot(ball.vx, ball.vy) || 1
-      ball.vx = (ball.vx / s) * ball.speed
-      ball.vy = (ball.vy / s) * ball.speed
+      ball.vx = (ball.vx / s) * ball.speed * ball.boost
+      ball.vy = (ball.vy / s) * ball.speed * ball.boost
       if (!brick.junk) sent++
       out.push({
         kind: 'brick',
@@ -298,9 +338,10 @@ export function stepBoard(
       })
     }
     // A ball stuck in a near-horizontal loop would never reach the bricks.
-    if (Math.abs(ball.vy) < ball.speed * 0.2) {
-      ball.vy = (ball.vy < 0 ? -1 : 1) * ball.speed * 0.2
-      ball.vx = (ball.vx < 0 ? -1 : 1) * Math.sqrt(ball.speed * ball.speed - ball.vy * ball.vy)
+    const v = ball.speed * ball.boost
+    if (Math.abs(ball.vy) < v * 0.2) {
+      ball.vy = (ball.vy < 0 ? -1 : 1) * v * 0.2
+      ball.vx = (ball.vx < 0 ? -1 : 1) * Math.sqrt(v * v - ball.vy * ball.vy)
     }
     if (ball.y > H + BALL_R) {
       b.lives = Math.max(0, b.lives - 1)
@@ -323,8 +364,16 @@ function dropJunk(b: Board, side: Side, dt: number, rng: Rng, now: number, out: 
   if (b.junkT > 0) return
   const taken = new Set(b.bricks.map((k) => k.c + k.r * COLS))
   const free: [number, number][] = []
+  // Never drop a brick on top of the ball: it would be swallowed or break at once.
+  const ball = b.ball
+  const clear = (c: number, r: number): boolean => {
+    const rc = brickRect(c, r)
+    const px = clamp(ball.x, rc.x - 8, rc.x + rc.w + 8)
+    const py = clamp(ball.y, rc.y - 8, rc.y + rc.h + 8)
+    return (ball.x - px) ** 2 + (ball.y - py) ** 2 > (BALL_R + 4) ** 2
+  }
   for (let r = 0; r < MAX_ROWS; r++)
-    for (let c = 0; c < COLS; c++) if (!taken.has(c + r * COLS)) free.push([c, r])
+    for (let c = 0; c < COLS; c++) if (!taken.has(c + r * COLS) && clear(c, r)) free.push([c, r])
   if (free.length === 0) return
   const [c, r] = rng.pick(free)
   b.bricks.push({ c, r, junk: true, at: now })

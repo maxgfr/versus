@@ -24,6 +24,11 @@ import {
 
 export interface Look {
   names: [string, string]
+  /** Interpolated ball position and paddle x per side (that side's frame). */
+  smooth: [{ x: number; y: number; px: number }, { x: number; y: number; px: number }]
+  /** Ball squash per side (1 = round) and score plate punch (0..1+). */
+  ballSq: [number, number]
+  pulse: [number, number]
   /** Recent ball positions per side, in that side's frame. Cosmetic. */
   trails: { x: number; y: number }[][]
   /** Paddle squash per side (1 = rest). */
@@ -62,25 +67,41 @@ function drawBrick(g: Draw, br: Brick, now: number): void {
   }
 }
 
-function drawBall(g: Draw, ball: Ball, trail: { x: number; y: number }[]): void {
+function drawBall(
+  g: Draw,
+  ball: Ball,
+  trail: { x: number; y: number }[],
+  at: { x: number; y: number },
+  squash = 1,
+): void {
+  const hot = ball.boost > 1.08
   for (let i = 0; i < trail.length; i++) {
     const t = trail[i]
     if (!t) continue
     const k = (i + 1) / (trail.length + 1)
-    g.alpha(k * 0.35, () => g.circle(t.x, t.y, BALL_R * (0.4 + 0.6 * k), C.yellow))
+    g.alpha(k * (hot ? 0.5 : 0.35), () =>
+      g.circle(t.x, t.y, BALL_R * (0.4 + 0.6 * k), hot ? C.orange : C.yellow),
+    )
   }
+  const x = at.x
+  const y = at.y
+  // Stretched along its flight when fast, squashed by an impact.
+  const sp = Math.hypot(ball.vx, ball.vy)
+  const stretch = ball.stuck ? 1 : 1 + Math.min(0.25, Math.max(0, (sp - 900) / 2400))
+  const q = Math.max(0.65, Math.min(1.35, squash)) * stretch
+  const ang = ball.stuck ? 0 : Math.atan2(ball.vy, ball.vx) - Math.PI / 2
   // A soft glow: the ball is the one bright thing on the board.
   g.circle(
-    ball.x,
-    ball.y,
+    x,
+    y,
     BALL_R * 2.6,
-    g.rad(ball.x, ball.y, BALL_R * 0.8, BALL_R * 2.6, [
-      [0, alpha(C.yellow, 0.35)],
+    g.rad(x, y, BALL_R * 0.8, BALL_R * 2.6, [
+      [0, alpha(hot ? C.orange : C.yellow, 0.35)],
       [1, alpha(C.yellow, 0)],
     ]),
   )
-  g.shadow(ball.x + 5, ball.y + 12, BALL_R * 0.9, BALL_R * 0.55, 0.35)
-  g.ball(ball.x, ball.y, BALL_R, C.yellow, 1)
+  g.shadow(x + 5, y + 12, BALL_R * 0.9, BALL_R * 0.55, 0.35)
+  g.at(x, y, ang, () => g.ball(0, 0, BALL_R, C.yellow, 1), 2 - q, q)
 }
 
 function drawBoard(g: Draw, side: Side, b: Board, look: Look, now: number): void {
@@ -130,11 +151,14 @@ function drawBoard(g: Draw, side: Side, b: Board, look: Look, now: number): void
       }
     for (const br of b.bricks) drawBrick(g, br, now)
     const trail = look.trails[side] ?? []
-    if (!b.ball.stuck) drawBall(g, b.ball, trail)
+    const sm = look.smooth[side]
+    if (!b.ball.stuck) drawBall(g, b.ball, trail, sm, look.ballSq[side])
+    // The paddle leans into its swing.
+    const lean = Math.max(-0.12, Math.min(0.12, (b.pvx / 4200) * 0.12))
     g.at(
-      b.px,
+      sm.px,
       PADDLE_Y,
-      0,
+      lean,
       () => {
         g.shadow(0, 34, PADDLE_HALF * 1.02, 16, 0.4)
         g.tile(-PADDLE_HALF, -PADDLE_H / 2, PADDLE_HALF * 2, PADDLE_H + 22, 22, col, 14)
@@ -146,8 +170,11 @@ function drawBoard(g: Draw, side: Side, b: Board, look: Look, now: number): void
       look.squash[side] ?? 1,
     )
     if (b.ball.stuck) {
-      drawBall(g, b.ball, [])
-      if (look.hint[side]) {
+      // Idle life: the served ball bobs on the paddle.
+      const bob = Math.abs(Math.sin(now * 5)) * 10
+      drawBall(g, b.ball, [], { x: sm.px, y: b.ball.y - bob }, 1 + 0.06 * Math.cos(now * 10))
+      // Online, each phone shows only its own player's prompt.
+      if (look.hint[side] && (g.viewer === null || g.viewer === side)) {
         g.text('TAP TO LAUNCH', W / 2, PADDLE_Y - 118, {
           size: 44,
           weight: 700,
@@ -195,7 +222,10 @@ export function render(g: Draw, m: Match, look: Look): void {
       text: last ? 'LAST BALL!' : undefined,
     })
     // Score on the player's left: world left for red, world right for blue.
-    bigScore(g, side, b.broken, { x: side === 0 ? 130 : W - 130 })
+    bigScore(g, side, b.broken, {
+      x: side === 0 ? 130 : W - 130,
+      size: 76 * (1 + Math.min(0.4, look.pulse[side] * 0.25)),
+    })
     pips(g, side, b.lives, LIVES)
   }
   if (!look.end) clock(g, look.limit - m.t, MID)

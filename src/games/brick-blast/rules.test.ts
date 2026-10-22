@@ -10,7 +10,10 @@ import {
   JUNK_EVERY,
   LIVES,
   type Match,
+  brickRect,
+  DRIVE,
   newBoard,
+  PADDLE_H,
   newMatch,
   PADDLE_Y,
   predictX,
@@ -70,7 +73,7 @@ describe('brick blast rules', () => {
 
   it('bounces the ball off the midline wall, never across it', () => {
     const b = newBoard()
-    b.ball = { x: 500, y: MID + 40, vx: 0, vy: -900, speed: 900, stuck: false }
+    b.ball = { x: 500, y: MID + 40, vx: 0, vy: -900, speed: 900, stuck: false, boost: 1 }
     const rng = new Rng(2)
     for (let i = 0; i < 30; i++) stepBoard(b, 0, STEP, idle, rng, [])
     expect(b.ball.y).toBeGreaterThanOrEqual(MID + BALL_R - 1e-6)
@@ -79,7 +82,7 @@ describe('brick blast rules', () => {
 
   it('a lost ball costs one life and is served again from the paddle', () => {
     const b = newBoard()
-    b.ball = { x: 100, y: H + BALL_R - 2, vx: 0, vy: 900, speed: 900, stuck: false }
+    b.ball = { x: 100, y: H + BALL_R - 2, vx: 0, vy: 900, speed: 900, stuck: false, boost: 1 }
     const out: { kind: string }[] = []
     stepBoard(b, 0, STEP, idle, new Rng(3), out as never[])
     expect(b.lives).toBe(LIVES - 1)
@@ -90,7 +93,7 @@ describe('brick blast rules', () => {
   it('breaking a normal brick sends one junk brick to the rival', () => {
     const m = newMatch(90)
     // Red's ball rises into the bottom row of its wall.
-    m.boards[0].ball = { x: 500, y: 1330, vx: 0, vy: -200, speed: 900, stuck: false }
+    m.boards[0].ball = { x: 500, y: 1330, vx: 0, vy: -200, speed: 900, stuck: false, boost: 1 }
     const rng = new Rng(4)
     let sentTotal = 0
     for (let i = 0; i < 60 * 3 && sentTotal === 0; i++) {
@@ -199,9 +202,103 @@ describe('brick blast bots', () => {
   it('the bot can play blue as well as red', () => {
     const rng = new Rng(9)
     const b = newBoard()
-    b.ball = { x: 300, y: 1000, vx: 0, vy: 700, speed: 800, stuck: false }
+    b.ball = { x: 300, y: 1000, vx: 0, vy: 700, speed: 800, stuck: false, boost: 1 }
     const cmd = decide(b, 'normal', rng, newMemory(), STEP)
     expect(cmd.x).not.toBeNull()
     expect(TUNING.normal.speed).toBeGreaterThan(0)
+  })
+
+  it('a swung paddle puts english and pace on the ball; a still one does not', () => {
+    const hit = (pvxSign: number): { vx: number; speed: number; drive: number } => {
+      const b = newBoard()
+      b.bricks = []
+      b.px = 500
+      b.ball = {
+        x: 500,
+        y: PADDLE_Y - PADDLE_H / 2 - BALL_R - 4,
+        vx: 0,
+        vy: 900,
+        speed: 900,
+        stuck: false,
+        boost: 1,
+      }
+      const out: { kind: string; drive?: number }[] = []
+      // The paddle sweeps under the ball this step (or stays put).
+      b.px = 500 - pvxSign * 60
+      stepBoard(b, 0, STEP, { x: 500, launch: false }, new Rng(1), out as never)
+      const e = out.find((x) => x.kind === 'paddle')
+      return { vx: b.ball.vx, speed: Math.hypot(b.ball.vx, b.ball.vy), drive: e?.drive ?? -1 }
+    }
+    const still = hit(0)
+    const right = hit(1)
+    const left = hit(-1)
+    expect(still.drive).toBe(0)
+    expect(Math.abs(still.vx)).toBeLessThan(1)
+    expect(right.vx).toBeGreaterThan(100)
+    expect(left.vx).toBeLessThan(-100)
+    expect(right.drive).toBeGreaterThan(0.5)
+    expect(right.speed).toBeGreaterThan(still.speed * 1.1)
+    expect(right.speed).toBeLessThanOrEqual(900 * (1 + DRIVE) + 1)
+  })
+
+  it('a driven ball eases back to its rally speed', () => {
+    const b = newBoard()
+    b.bricks = []
+    b.ball = { x: 500, y: 1200, vx: 0, vy: -1200, speed: 900, stuck: false, boost: 1.33 }
+    for (let i = 0; i < 60 * 4; i++) stepBoard(b, 0, STEP, idle, new Rng(1), [])
+    expect(b.ball.boost).toBe(1)
+    expect(Math.hypot(b.ball.vx, b.ball.vy)).toBeCloseTo(b.ball.speed, 0)
+  })
+
+  it('a serve from a moving paddle goes the way the paddle moves', () => {
+    const b = newBoard()
+    b.px = 300
+    const out: { kind: string }[] = []
+    stepBoard(b, 0, STEP, { x: 700, launch: true }, new Rng(2), out as never)
+    expect(b.ball.stuck).toBe(false)
+    expect(b.ball.vx).toBeGreaterThan(0)
+    expect(out.some((e) => e.kind === 'launch')).toBe(true)
+  })
+
+  it('junk never drops onto the ball', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const m = newMatch(90)
+      const b = m.boards[0]
+      // One free cell left, with the ball sitting in it, and one far away.
+      const hole = brickRect(3, 6)
+      b.bricks = []
+      for (let r = 0; r < 9; r++)
+        for (let c = 0; c < COLS; c++)
+          if (!(r === 6 && c === 3) && !(r === 0 && c === 0))
+            b.bricks.push({ c, r, junk: false, at: 0 })
+      b.ball = {
+        x: hole.x + hole.w / 2,
+        y: hole.y + hole.h / 2,
+        vx: 0,
+        vy: 0,
+        speed: 900,
+        stuck: false,
+        boost: 1,
+      }
+      b.queue = 1
+      b.junkT = 0
+      const rng = new Rng(seed)
+      step(m, STEP, [{ x: null, launch: false }, idle], rng)
+      const landed = b.bricks.filter((k) => k.junk)
+      for (const k of landed) expect(k.c === 3 && k.r === 6).toBe(false)
+    }
+  })
+
+  it('the hard bot steers its rebounds toward the bricks still standing', () => {
+    const b = newBoard()
+    // Only one brick, far to the left.
+    b.bricks = [{ c: 0, r: 4, junk: false, at: 0 }]
+    b.ball = { x: 500, y: 1300, vx: 0, vy: 900, speed: 900, stuck: false, boost: 1 }
+    const mem = newMemory()
+    const cmd = decide(b, 'hard', new Rng(3), mem, STEP)
+    // To send the ball left, it takes the ball on the paddle's right half.
+    expect(mem.aim).toBeGreaterThan(500 + 20)
+    expect(cmd.x).not.toBeNull()
+    expect(TUNING.hard.steer).toBeGreaterThan(TUNING.easy.steer)
   })
 })

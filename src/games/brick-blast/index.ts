@@ -1,6 +1,6 @@
 import { frame } from '../../core/frame.ts'
 import { floatFor, type Fx } from '../../core/fx/fx.ts'
-import { Spring } from '../../core/fx/ease.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
@@ -35,6 +35,11 @@ class BrickBlast extends BaseGame<State> {
   // Cosmetic only (not synced): ball trails and paddle squash.
   private trails: { x: number; y: number }[][] = [[], []]
   private squash: [Spring, Spring] = [new Spring(1, 380, 12), new Spring(1, 380, 12)]
+  /** Ball squash per side (1 = round) and the score plate punch. */
+  private ballSq: [Spring, Spring] = [new Spring(1, 520, 16), new Spring(1, 520, 16)]
+  private pulse: [Spring, Spring] = [new Spring(0, 260, 11), new Spring(0, 260, 11)]
+  /** Last step's ball (x, y) and paddle x per side, for interpolation. */
+  private prev: [number, number, number][] | null = null
   /** Bricks broken since the paddle last touched the ball, per side (for combo shouts). */
   private combo: [number, number] = [0, 0]
 
@@ -48,6 +53,7 @@ class BrickBlast extends BaseGame<State> {
 
   protected step(dt: number): void {
     const m = this.s.m
+    this.prev = m.boards.map((b) => [b.ball.x, b.ball.y, b.px] as [number, number, number])
     const cmds: [Cmd, Cmd] = [this.command(0, dt), this.command(1, dt)]
     const events = step(m, dt, cmds, this.ctx.rng)
     for (const e of events) this.juice(e)
@@ -110,7 +116,8 @@ class BrickBlast extends BaseGame<State> {
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
     if (e.kind === 'launch') {
-      audio.play('whoosh', 1.1)
+      audio.play('whoosh', 1 + e.drive * 0.4)
+      this.ballSq[e.side].kick(3 + e.drive * 4)
       return
     }
     if (e.kind === 'junk') {
@@ -124,9 +131,12 @@ class BrickBlast extends BaseGame<State> {
     const p = frame(e.side, e.x, e.y)
     if (e.kind === 'brick') {
       const col = e.junk ? JUNK_COLOR : (ROW_COLORS[e.row % ROW_COLORS.length] ?? C.white)
+      const ball = this.s.m.boards[e.side].ball
+      // Harder hits (a driven or late-rally ball) break louder and wider.
+      const k = Math.min(1, Math.max(0, (ball.speed * ball.boost - 820) / 900))
       fx.burst(p.x, p.y, col, {
-        count: e.junk ? 8 : 18,
-        speed: 560,
+        count: Math.round((e.junk ? 8 : 16) + k * 8),
+        speed: 480 + k * 320,
         size: 12,
         life: 0.5,
         gravity: 500,
@@ -135,8 +145,11 @@ class BrickBlast extends BaseGame<State> {
         kind: 'square',
       })
       const n = ++this.combo[e.side]
-      audio.play(e.junk ? 'thud' : 'pop', 0.85 + Math.min(8, n) * 0.06)
-      fx.shake(e.junk ? 0.04 : 0.06)
+      audio.play(e.junk ? 'thud' : 'pop', 0.85 + Math.min(8, n) * 0.06 + k * 0.1)
+      fx.shake((e.junk ? 0.04 : 0.06) + k * 0.06)
+      if (k > 0.6 || n >= 4) fx.stop(1)
+      this.ballSq[e.side].kick(-2 - k * 3)
+      this.pulse[e.side].kick(6)
       if (e.sent) {
         // A grey chip flies off toward the rival's wall.
         fx.burst(p.x, p.y, JUNK_COLOR, {
@@ -161,11 +174,21 @@ class BrickBlast extends BaseGame<State> {
       }
     } else if (e.kind === 'paddle') {
       this.combo[e.side] = 0
-      audio.play('bounce', 1 + Math.abs(e.off) * 0.3)
-      fx.sparks(p.x, p.y, C.white, 5)
-      this.squash[e.side].kick(-6)
+      const k = e.drive
+      audio.play('bounce', 1 + Math.abs(e.off) * 0.3 + k * 0.3)
+      fx.sparks(p.x, p.y, k > 0.4 ? C.yellow : C.white, Math.round(5 + k * 12))
+      this.squash[e.side].kick(-6 - k * 6)
+      this.ballSq[e.side].kick(-3 - k * 4)
+      if (k > 0.45) {
+        // A swung paddle: the ball leaves hot.
+        audio.play('hit', 1.1 + k * 0.3)
+        audio.buzz(Math.round(8 + k * 14))
+        fx.shake(0.05 + k * 0.12)
+        if (k > 0.75) fx.stop(2)
+      }
     } else if (e.kind === 'wall') {
       audio.play('wall', 1)
+      this.ballSq[e.side].kick(-2)
     } else if (e.kind === 'lost') {
       this.combo[e.side] = 0
       this.loseBall(fx, e.side, p.x, p.y, e.lives)
@@ -191,19 +214,36 @@ class BrickBlast extends BaseGame<State> {
     floatFor(fx, side, lives > 0 ? 'OUCH!' : 'OUT!', hud.x, hud.y)
   }
 
-  render(g: Draw, _alpha: number): void {
+  render(g: Draw, alpha: number): void {
     const m = this.s.m
+    const smooth: [{ x: number; y: number; px: number }, { x: number; y: number; px: number }] = [
+      { x: 0, y: 0, px: 0 },
+      { x: 0, y: 0, px: 0 },
+    ]
     for (const side of [0, 1] as Side[]) {
       const b = m.boards[side]
+      const pv = this.prev?.[side]
+      const lerpBall = pv && !b.ball.stuck && Math.abs(pv[1] - b.ball.y) < 200
+      const sm = smooth[side]
+      sm.x = lerpBall ? lerp(pv[0], b.ball.x, alpha) : b.ball.x
+      sm.y = lerpBall ? lerp(pv[1], b.ball.y, alpha) : b.ball.y
+      sm.px = pv ? lerp(pv[2], b.px, alpha) : b.px
+      if (b.ball.stuck) sm.x = sm.px
       const trail = this.trails[side] as { x: number; y: number }[]
       if (b.ball.stuck) trail.length = 0
       else {
-        trail.push({ x: b.ball.x, y: b.ball.y })
-        while (trail.length > 6) trail.shift()
+        trail.push({ x: sm.x, y: sm.y })
+        // A driven ball leaves a longer streak.
+        while (trail.length > (b.ball.boost > 1.1 ? 9 : 6)) trail.shift()
       }
       this.squash[side].update(1 / 60)
+      this.ballSq[side].update(1 / 60)
+      this.pulse[side].update(1 / 60)
     }
     const look: Look = {
+      smooth,
+      ballSq: [this.ballSq[0].value, this.ballSq[1].value],
+      pulse: [Math.max(0, this.pulse[0].value / 6), Math.max(0, this.pulse[1].value / 6)],
       names: this.ctx.names,
       trails: this.trails,
       squash: [this.squash[0].value, this.squash[1].value],
@@ -217,6 +257,7 @@ class BrickBlast extends BaseGame<State> {
   override restore(snap: unknown): void {
     super.restore(snap)
     this.trails = [[], []]
+    this.prev = null
   }
 }
 
