@@ -18,6 +18,7 @@ import {
   type Shot,
   type State,
   TO_WIN,
+  verdict,
   winner,
 } from './rules.ts'
 
@@ -208,5 +209,76 @@ describe('archery: computer players', () => {
       if (play('hard', 'easy', seed).winner === 0) hardWins++
     }
     expect(hardWins).toBeGreaterThanOrEqual(3)
+  }, 60000)
+})
+
+describe('archery: the same arrows for both', () => {
+  const apple = (s: State) => straight(s.turn, applePower(s.turn, s.gap))
+  const dummy = (s: State) => straight(s.turn, applePower(s.turn, s.gap) - 0.05)
+  const miss = (s: State) => straight(s.turn, 0.2)
+
+  it('the second archer still gets the equalising arrow, then sudden death', () => {
+    const rng = new Rng(21)
+    const s = newState(0, 0)
+    s.apples = [TO_WIN - 1, TO_WIN - 1]
+    shootAndSettle(s, apple(s), rng)
+    expect(s.phase).toBe('aim')
+    expect(s.turn).toBe(1)
+    shootAndSettle(s, apple(s), rng)
+    // Level on the target: play on.
+    expect(s.phase).toBe('aim')
+    expect(s.round).toBe(2)
+    shootAndSettle(s, miss(s), rng)
+    shootAndSettle(s, apple(s), rng)
+    expect(s.phase).toBe('over')
+    expect(s.won).toBe(1)
+    expect(s.apples).toEqual([TO_WIN, TO_WIN + 1])
+  })
+
+  it('the match ends at once when the second arrow cannot change it', () => {
+    const rng = new Rng(22)
+    const s = newState(0, 0)
+    s.apples = [TO_WIN - 1, TO_WIN - 3]
+    shootAndSettle(s, apple(s), rng)
+    expect(s.phase).toBe('over')
+    expect(s.won).toBe(0)
+  })
+
+  it('a starter out of lives still waits for the rival unless the rival is ahead anyway', () => {
+    const rng = new Rng(23)
+    const s = newState(0, 0)
+    s.lives = [1, 1]
+    s.apples = [2, 1]
+    shootAndSettle(s, dummy(s), rng)
+    expect(s.lives[0]).toBe(0)
+    expect(s.phase).toBe('aim')
+    // Both out in the same round: the apples decide.
+    shootAndSettle(s, dummy(s), rng)
+    expect(s.phase).toBe('over')
+    expect(s.won).toBe(0)
+
+    const t = newState(0, 0)
+    t.lives = [1, 2]
+    t.apples = [1, 3]
+    shootAndSettle(t, dummy(t), rng)
+    expect(t.phase).toBe('over')
+    expect(t.won).toBe(1)
+  })
+
+  it('both out of lives on level apples is a draw', () => {
+    expect(verdict([2, 2], [0, 0], TO_WIN)).toBe('draw')
+    expect(verdict([TO_WIN, TO_WIN], [2, 2], TO_WIN)).toBeNull()
+    expect(verdict([TO_WIN + 1, TO_WIN], [2, 2], TO_WIN)).toBe(0)
+  })
+
+  it('a careful bot hits the dummy less than a careless one', () => {
+    const rng = new Rng(24)
+    const hits = { easy: 0, hard: 0 }
+    for (let i = 0; i < 30; i++) {
+      const s = newState(0, rollWind(rng))
+      for (const d of ['easy', 'hard'] as const)
+        if (flight(0, choose(s, 0, d, rng), s.gap, s.wind).outcome === 'dummy') hits[d]++
+    }
+    expect(hits.hard).toBeLessThan(hits.easy)
   }, 60000)
 })

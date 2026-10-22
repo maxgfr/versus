@@ -1,5 +1,6 @@
 import { DragAim } from '../../core/controls.ts'
-import { clamp, outCubic } from '../../core/fx/ease.ts'
+import { clamp, outCubic, Spring } from '../../core/fx/ease.ts'
+import { floatFor } from '../../core/fx/fx.ts'
 import { type MatchSpec, type Side } from '../../core/game.ts'
 import { banner, hudY } from '../../core/hud.ts'
 import type { Draw, Mood } from '../../core/render/draw.ts'
@@ -23,7 +24,6 @@ import {
   rollWind,
   type State,
   TO_WIN,
-  winner,
 } from './rules.ts'
 
 const EVERYWHERE = { x: -600, y: -600, w: 2200, h: 3000 }
@@ -42,6 +42,9 @@ class ArcheryMaster extends TurnGame<State> {
   ]
   /** The computer picks its shot when its turn starts, then draws the bow while it "thinks". */
   private botShot: ShotParams | null = null
+  // Cosmetic only (not synced): the archers' kick on release, the tension clicks.
+  private kick: [Spring, Spring] = [new Spring(1, 300, 11), new Spring(1, 300, 11)]
+  private notch = 0
 
   protected setup(): State {
     // In local 2P the archer on turn may pull anywhere on the table.
@@ -63,8 +66,7 @@ class ArcheryMaster extends TurnGame<State> {
     for (const e of advance(this.s, dt, this.ctx.rng)) this.juice(e)
     if (this.s.phase === 'over' && !this.over) {
       const s = this.s
-      const w =
-        winner(s) ?? (s.apples[0] === s.apples[1] ? 'draw' : s.apples[0] > s.apples[1] ? 0 : 1)
+      const w = s.won ?? 'draw'
       // The big score already shows the apples: the note says how it ended.
       const out = s.lives[0] <= 0 ? 0 : s.lives[1] <= 0 ? 1 : null
       const note =
@@ -72,7 +74,9 @@ class ArcheryMaster extends TurnGame<State> {
           ? s.lives[0] <= 0 && s.lives[1] <= 0
             ? 'Both out of lives'
             : `${this.ctx.names[out]} ran out of lives`
-          : `First to ${s.target} apples`
+          : Math.min(s.apples[0], s.apples[1]) >= s.target
+            ? 'Won in sudden death'
+            : `First to ${s.target} apples`
       this.finish(w, { score: [...s.apples] as [number, number], note, delay: 1.8 })
     }
   }
@@ -82,6 +86,13 @@ class ArcheryMaster extends TurnGame<State> {
     const a = this.aims[side]
     a.update(this.ctx.input.player(side))
     this.s.aiming = a.aim ? { dx: a.aim.dx, dy: a.aim.dy, power: a.aim.power } : null
+    // The bow creaks a little higher at every quarter of the draw.
+    const notch = a.aim ? Math.floor(a.aim.power * 4) : 0
+    if (notch > this.notch) {
+      this.ctx.audio.play('tick', 0.9 + notch * 0.18)
+      this.ctx.audio.buzz(3 + notch * 2)
+    }
+    this.notch = notch
     if (a.shot) this.shoot(a.shot)
   }
 
@@ -94,10 +105,17 @@ class ArcheryMaster extends TurnGame<State> {
     const side = this.s.turn
     if (!loose(this.s, shot)) return
     for (const a of this.aims) a.cancel()
-    this.ctx.audio.play('swish', 0.9 + shot.power * 0.3)
-    this.ctx.audio.play('shoot', 1.3)
+    this.notch = 0
+    // The release is as hard as the draw: louder twang, a kick back, a buzz.
+    const k = shot.power
+    const { fx, audio } = this.ctx
+    audio.play('swish', 0.85 + k * 0.45)
+    audio.play('shoot', 1.45 - k * 0.3)
+    audio.buzz(Math.round(6 + 14 * k))
+    this.kick[side].kick(-2 - 5 * k)
     const y = lineY(side, this.s.gap)
-    this.ctx.fx.puff(500, y + (side === 0 ? -60 : 60), 'rgba(255,255,255,0.45)', 5)
+    fx.puff(500, y + (side === 0 ? -60 : 60), 'rgba(255,255,255,0.45)', Math.round(3 + 6 * k))
+    fx.shake(0.04 + 0.1 * k)
   }
 
   private juice(e: Event): void {
@@ -121,9 +139,17 @@ class ArcheryMaster extends TurnGame<State> {
       case 'round':
         audio.play('go', 1.1)
         audio.play('slide', 0.8)
+        if (Math.min(this.s.apples[0], this.s.apples[1]) >= this.s.target) {
+          for (const side of [0, 1] as Side[]) floatFor(fx, side, 'Sudden death!')
+          fx.flash(C.yellow, 0.15)
+        }
         return
       case 'over':
-        if (e.winner !== 'draw') this.ctx.fx.confetti(e.winner)
+        if (e.winner !== 'draw') {
+          fx.confetti(e.winner)
+          fx.flash(SIDE[e.winner].light, 0.3)
+          fx.shake(0.3)
+        }
         return
     }
   }
@@ -131,13 +157,15 @@ class ArcheryMaster extends TurnGame<State> {
   private shotJuice(side: Side, outcome: string, x: number, z: number): void {
     const { fx, audio } = this.ctx
     const at = project(x, MID, z)
+    // How hard the arrow was drawn: a fast arrow bursts the apple wider and jolts harder.
+    const k = this.s.lastArrow?.power ?? 0.6
     if (outcome === 'apple') {
-      audio.play('chomp', 1.1)
+      audio.play('chomp', 1.25 - k * 0.25)
       audio.play('score', 1.15)
-      audio.buzz(30)
+      audio.buzz(Math.round(20 + 20 * k))
       fx.burst(at.x, at.y, C.red, {
-        count: 22,
-        speed: 520,
+        count: Math.round(14 + 14 * k),
+        speed: 360 + 320 * k,
         size: 13,
         life: 0.6,
         gravity: 0,
@@ -155,17 +183,17 @@ class ArcheryMaster extends TurnGame<State> {
         kind: 'emoji',
         glyph: '⭐',
       })
-      fx.ring(at.x, at.y, SIDE[side].light, 200)
+      fx.ring(at.x, at.y, SIDE[side].light, 150 + 100 * k)
       fx.flash(SIDE[side].main, 0.22)
-      fx.shake(0.3)
-      fx.stop(6)
+      fx.shake(0.18 + 0.2 * k)
+      fx.stop(3 + Math.round(4 * k))
       return
     }
     if (outcome === 'dummy') {
-      audio.play('thud', 0.8)
+      audio.play('thud', 0.95 - 0.25 * k)
       audio.play('boing', 0.9)
       audio.play('error', 0.8)
-      audio.buzz(60)
+      audio.buzz(Math.round(40 + 30 * k))
       fx.burst(at.x, at.y, '#e7c97f', {
         count: 18,
         speed: 440,
@@ -177,8 +205,8 @@ class ArcheryMaster extends TurnGame<State> {
         colors: ['#e7c97f', '#c9a25a', C.woodDark],
       })
       fx.flash(C.red, 0.18)
-      fx.shake(0.45)
-      fx.stop(6)
+      fx.shake(0.3 + 0.25 * k)
+      fx.stop(4 + Math.round(3 * k))
       return
     }
     // A miss: the arrow flies on, the banner says which way it went.
@@ -191,8 +219,8 @@ class ArcheryMaster extends TurnGame<State> {
     const out: [Mood, Mood] = ['happy', 'happy']
     for (const side of [0, 1] as Side[]) {
       if (this.over) {
-        const w = winner(s)
-        out[side] = w === side ? 'grin' : w === null ? 'happy' : 'sad'
+        const w = s.won
+        out[side] = w === side ? 'grin' : w === null || w === 'draw' ? 'happy' : 'sad'
       } else if (s.phase === 'aim' && s.turn === side && s.aiming && s.aiming.power > 0.3) {
         out[side] = 'angry'
       } else if (s.phase === 'fly' && s.arrow?.side === side) out[side] = 'wow'
@@ -204,8 +232,9 @@ class ArcheryMaster extends TurnGame<State> {
     return out
   }
 
-  render(g: Draw): void {
+  render(g: Draw, frac: number): void {
     const s = this.s
+    for (const k of this.kick) k.update(1 / 60)
     let aim: Look['aim'] = null
     // The lines step back at a new round: slide them there.
     const since = s.now - s.turnAt
@@ -235,11 +264,22 @@ class ArcheryMaster extends TurnGame<State> {
       }
     }
     const readers: Side[] = g.flipTop ? [0, 1] : [this.ctx.local]
-    const w = this.over
-      ? (winner(s) ?? (s.apples[0] === s.apples[1] ? 'draw' : s.apples[0] > s.apples[1] ? 0 : 1))
-      : null
-    render(g, { ...s, gap }, { aim, glow, readers, winner: w }, this.time, this.moods())
+    const w = this.over ? (s.won ?? 'draw') : null
+    // Draw the arrow between steps.
+    const arrow =
+      s.arrow && s.phase === 'fly' && !this.over
+        ? { ...s.arrow, t: Math.min(s.arrow.tEnd, s.arrow.t + frac / 60) }
+        : s.arrow
+    render(
+      g,
+      { ...s, gap, arrow },
+      { aim, glow, readers, winner: w, kick: [this.kick[0].value, this.kick[1].value] },
+      this.time,
+      this.moods(),
+    )
     for (const side of [0, 1] as Side[]) {
+      // Online, each phone shows only its own player's controls.
+      if (g.viewer !== null && side !== g.viewer) continue
       if (s.phase === 'aim' && s.turn === side) this.aims[side].render(g)
     }
     this.drawTurns(g, undefined, s.phase === 'aim')
@@ -278,12 +318,18 @@ class ArcheryMaster extends TurnGame<State> {
     if (this.time < 8 && s.round === 1 && s.apples[0] + s.apples[1] === 0 && !this.over) {
       for (const side of [0, 1] as Side[]) {
         if (this.isBot(side) || s.turn !== side || s.phase !== 'aim' || s.aiming) continue
+        if (g.viewer !== null && side !== g.viewer) continue
         banner(g, side, 'Pull back to aim, let go to shoot', side === 0 ? MID + 175 : MID - 175, {
           size: 36,
           alpha: 0.75 + 0.25 * Math.sin(this.time * 4),
         })
       }
     }
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.notch = 0
   }
 }
 

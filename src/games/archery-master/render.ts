@@ -219,6 +219,7 @@ export function drawArcher(
   glow: number,
   mood: Mood,
   t: number,
+  kick = 1,
 ): void {
   inFrame(g, side, () => {
     g.at(500, MID + gap, 0, () => {
@@ -234,8 +235,8 @@ export function drawArcher(
       g.blob(0, 64, 56, col.main, {
         mood,
         look: [sx * 0.8, sy * 0.8],
-        sx: 1 + pull * 0.002,
-        sy: breathe - pull * 0.002,
+        sx: (1 + pull * 0.002) * (2 - kick),
+        sy: (breathe - pull * 0.002) * kick,
       })
       g.at(0, -8, rot, () => {
         // Bow limbs bulge toward the target.
@@ -302,6 +303,8 @@ export interface Look {
   /** Sides that read banners: both in local 2P, the viewer's own otherwise. */
   readers: Side[]
   winner: Side | 'draw' | null
+  /** Archer squash springs (1 = rest): the kick of the release. */
+  kick: [number, number]
 }
 
 /** The arrow after it reached the dummy's plane: misses fly on and fade, the apple rides away on it. */
@@ -338,13 +341,22 @@ export function render(g: Draw, s: State, look: Look, t: number, mood: [Mood, Mo
   drawDummy(g, wob, { k: appleK })
   for (const st of s.stuck) drawStuck(g, st.side, st.x, st.z)
   if (s.arrow && s.phase === 'fly') {
-    drawFlying(g, arrowAt(s.arrow, s.gap, s.wind), s.arrow.side)
+    // Two fading ghosts behind a fast arrow: the faster the draw, the longer the streak.
+    const a = s.arrow
+    for (let i = 2; i >= 1; i--) {
+      const back = i * (0.02 + 0.025 * a.power)
+      if (a.t > back)
+        drawFlying(g, arrowAt({ ...a, t: a.t - back }, s.gap, s.wind), a.side, 0.18 / i)
+    }
+    drawFlying(g, arrowAt(a, s.gap, s.wind), a.side)
   }
   if (res && s.lastArrow) drawAfter(g, s, s.lastArrow, since)
-  if (look.aim && s.phase === 'aim') drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
+  // The flight preview is the shooter's control: online, only their own phone shows it.
+  const own = g.viewer === null || g.viewer === s.turn
+  if (look.aim && s.phase === 'aim' && own) drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
   for (const side of [0, 1] as Side[]) {
     const mine = s.phase === 'aim' && s.turn === side ? look.aim : null
-    drawArcher(g, side, s.gap, mine, look.glow[side], mood[side], t)
+    drawArcher(g, side, s.gap, mine, look.glow[side], mood[side], t, look.kick[side])
   }
   // The wind panel sits in each reader's half, between the dummy and their line.
   for (const side of look.readers) {

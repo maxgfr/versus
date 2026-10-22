@@ -14,7 +14,12 @@ import { MID, W } from '../../core/stage.ts'
  * an apple on its head. Each archer shoots once a turn, both shoot once a round,
  * and after each round the shooting lines back off so the dummy is farther away.
  * An apple is a point; the dummy is a lost life. First to the chosen apple
- * count (five by default), or the last archer with lives. No DOM.
+ * count (five by default), or the last archer with lives.
+ *
+ * Both archers always get the same number of arrows: the match is decided at
+ * the end of a round (or earlier once the second arrow cannot change it).
+ * Level on apples past the target means sudden death, round by round; both out
+ * of lives in the same round goes to the apples, then a draw. No DOM.
  */
 
 export const ARROW: Ballistics = { g: 1000, vmax: 1300, elev: 0.9, z0: 60 }
@@ -79,6 +84,8 @@ export interface State {
   now: number
   turnAt: number
   hitAt: number
+  /** The match result once decided ('over'). */
+  won: Side | 'draw' | null
 }
 
 export type Event =
@@ -111,6 +118,7 @@ export function newState(starter: Side, wind: number, target = TO_WIN): State {
     now: 0,
     turnAt: 0,
     hitAt: -9,
+    won: null,
   }
 }
 
@@ -217,13 +225,15 @@ function resolve(s: State, ev: Event[]): void {
 }
 
 function nextTurn(s: State, ev: Event[], rng: Rng): void {
-  if (winner(s) !== null || s.round > MAX_ROUNDS) {
+  const roundEnd = s.turn === other(s.starter)
+  const v = roundEnd ? verdict(s.apples, s.lives, s.target) : settled(s)
+  if (v !== null || (roundEnd && s.round >= MAX_ROUNDS)) {
     s.phase = 'over'
-    const w = winner(s)
-    ev.push({ kind: 'over', winner: w ?? leaderByApples(s) })
+    s.won = v ?? leaderByApples(s.apples)
+    ev.push({ kind: 'over', winner: s.won })
     return
   }
-  if (s.turn === other(s.starter)) {
+  if (roundEnd) {
     // Both have shot this round: the lines back off, the wind changes.
     s.round++
     s.gap = Math.min(GAP_MAX, GAP0 + GAP_STEP * (s.round - 1))
@@ -240,16 +250,52 @@ function nextTurn(s: State, ev: Event[], rng: Rng): void {
 
 export const rollWind = (rng: Rng): number => (rng.chance(0.2) ? 0 : rng.range(-WIND_MAX, WIND_MAX))
 
-/** The match winner, or null while it is still open. */
-export function winner(s: State): Side | null {
-  if (s.apples[0] >= s.target) return 0
-  if (s.apples[1] >= s.target) return 1
-  if (s.lives[0] <= 0 && s.lives[1] > 0) return 1
-  if (s.lives[1] <= 0 && s.lives[0] > 0) return 0
-  return null
+/**
+ * The verdict at the end of a round, both archers having shot as often:
+ * out of lives loses (both out: the apples decide, else a draw); otherwise
+ * reaching the target wins, and level past the target plays on.
+ */
+export function verdict(
+  apples: readonly [number, number],
+  lives: readonly [number, number],
+  target: number,
+): Side | 'draw' | null {
+  const out0 = lives[0] <= 0
+  const out1 = lives[1] <= 0
+  if (out0 && out1) return leaderByApples(apples)
+  if (out0) return 1
+  if (out1) return 0
+  if (apples[0] < target && apples[1] < target) return null
+  return apples[0] === apples[1] ? null : apples[0] > apples[1] ? 0 : 1
 }
 
-function leaderByApples(s: State): Side | 'draw' {
-  if (s.apples[0] === s.apples[1]) return 'draw'
-  return s.apples[0] > s.apples[1] ? 0 : 1
+/**
+ * After the round's first arrow: the verdict if the second arrow cannot change
+ * it whatever it does (apple, dummy or miss), so nobody shoots for nothing.
+ */
+export function settled(s: State): Side | 'draw' | null {
+  const second = other(s.starter)
+  let out: Side | 'draw' | null = null
+  for (const o of ['apple', 'dummy', 'wide'] as const) {
+    const apples: [number, number] = [s.apples[0], s.apples[1]]
+    const lives: [number, number] = [s.lives[0], s.lives[1]]
+    if (o === 'apple') apples[second]++
+    if (o === 'dummy') lives[second]--
+    const v = verdict(apples, lives, s.target)
+    if (v === null || (out !== null && v !== out)) return null
+    out = v
+  }
+  return out
+}
+
+/** The match winner, or null while it is still open (or drawn). */
+export function winner(s: State): Side | null {
+  if (s.won !== null) return s.won === 'draw' ? null : s.won
+  const v = verdict(s.apples, s.lives, s.target)
+  return v === 'draw' ? null : v
+}
+
+export function leaderByApples(apples: readonly [number, number]): Side | 'draw' {
+  if (apples[0] === apples[1]) return 'draw'
+  return apples[0] > apples[1] ? 0 : 1
 }
