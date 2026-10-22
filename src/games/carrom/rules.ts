@@ -12,8 +12,10 @@ export const BOARD = { x0: 100, y0: 500, x1: 900, y1: 1300 }
 export const PIECE_R = 24
 export const STRIKER_R = 30
 export const POCKET_R = 46
-/** Exponential friction (per second). */
+/** Exponential friction (per second): air and felt, strongest on fast discs. */
 export const DRAG = 1.3
+/** Sliding friction (units / s²): slow discs come to a stop instead of creeping. */
+export const DECEL = 160
 /** Striker speed (world units / s) at full power. */
 export const VMAX = 1700
 const REST = 14
@@ -58,12 +60,14 @@ export interface Board {
   turns: number
   /** Winner of this board, once decided. */
   winner: Side | null
+  /** Who pocketed the queen (and keeps it), null while it is on the board. */
+  queen: Side | null
 }
 
 export type Event =
   | { kind: 'hit'; speed: number; x: number; y: number }
   | { kind: 'rail'; speed: number; x: number; y: number }
-  | { kind: 'pot'; owner: Owner; x: number; y: number }
+  | { kind: 'pot'; owner: Owner; x: number; y: number; speed: number }
   | { kind: 'foul'; side: Side; x: number; y: number }
 
 export const dist = (ax: number, ay: number, bx: number, by: number): number =>
@@ -126,6 +130,7 @@ export function newBoard(first: Side): Board {
     foul: false,
     turns: 0,
     winner: null,
+    queen: null,
   }
   return b
 }
@@ -207,18 +212,14 @@ export function frame(b: Board, ev?: Event[], dt = FRAME): void {
     if (!s.gone && (s.vx !== 0 || s.vy !== 0)) {
       s.x += s.vx * h
       s.y += s.vy * h
-      const k = Math.exp(-DRAG * h)
-      s.vx *= k
-      s.vy *= k
+      slow(s, h)
       railBounce(s, RAIL_E, ev)
     }
     for (const p of b.pieces) {
       if (p.vx === 0 && p.vy === 0) continue
       p.x += p.vx * h
       p.y += p.vy * h
-      const k = Math.exp(-DRAG * h)
-      p.vx *= k
-      p.vy *= k
+      slow(p, h)
       railBounce(p, RAIL_E, ev)
     }
     // Striker against pieces (heavier), then pieces against each other. Two
@@ -252,15 +253,49 @@ export function frame(b: Board, ev?: Event[], dt = FRAME): void {
       if (!pocketed(p.x, p.y)) continue
       b.pieces.splice(j, 1)
       b.pots.push(p.owner)
-      ev?.push({ kind: 'pot', owner: p.owner, x: p.x, y: p.y })
+      ev?.push({ kind: 'pot', owner: p.owner, x: p.x, y: p.y, speed: Math.hypot(p.vx, p.vy) })
     }
   }
-  for (const p of [b.striker, ...b.pieces]) {
-    if (Math.hypot(p.vx, p.vy) < REST) {
-      p.vx = 0
-      p.vy = 0
-    }
+  settle(b.striker)
+  for (const p of b.pieces) settle(p)
+}
+
+/** Below walking pace a disc stops; and a disc nudged into a rail while resting is put back inside. */
+function settle(p: Disc): void {
+  if (Math.hypot(p.vx, p.vy) < REST) {
+    p.vx = 0
+    p.vy = 0
   }
+  railBounce(p, RAIL_E)
+}
+
+/** Friction for one sub-step: exponential drag plus a constant sliding loss. */
+function slow(p: Disc, h: number): void {
+  const sp = Math.hypot(p.vx, p.vy)
+  const next = Math.max(0, sp * Math.exp(-DRAG * h) - DECEL * h)
+  const k = sp > 0 ? next / sp : 0
+  p.vx *= k
+  p.vy *= k
+}
+
+/**
+ * Speed a disc must start with to slide `d` units and still be moving at
+ * `end` (the same friction as `frame`, integrated backwards).
+ */
+export function launchSpeed(d: number, end = 0): number {
+  // Distance slid while slowing from v0 to v1 under dv/dt = -DRAG·v - DECEL.
+  const k = DRAG
+  const c = DECEL
+  const slide = (v0: number) =>
+    (v0 - end) / k - (c / (k * k)) * Math.log((k * v0 + c) / (k * end + c))
+  let lo = end
+  let hi = end + 200 + d * 4
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2
+    if (slide(mid) < d) lo = mid
+    else hi = mid
+  }
+  return hi
 }
 
 /** True when the striker and every piece have stopped (or gone). */
@@ -304,6 +339,8 @@ export function resolve(b: Board, ev?: Event[]): void {
   const rival: Owner = side === 0 ? 1 : 0
   const ownPots = b.pots.filter((o) => o === own).length
   const rivalPots = b.pots.filter((o) => o === rival)
+  const queenPot = b.pots.includes(2)
+  if (queenPot) b.queen = side
   b.left[side] -= ownPots
   b.kept[side] += ownPots
   // A rival's piece goes straight back: it gives the turn away without a point.
@@ -316,6 +353,11 @@ export function resolve(b: Board, ev?: Event[]): void {
       b.left[side]++
       respot(b, own)
     }
+    // A queen pocketed on a foul shot is not earned: back to the centre.
+    if (queenPot) {
+      b.queen = null
+      respot(b, 2)
+    }
   }
   b.pots = []
   b.foul = false
@@ -325,12 +367,13 @@ export function resolve(b: Board, ev?: Event[]): void {
     return
   }
   if (b.turns >= MAX_TURNS) {
-    b.winner = b.left[0] === b.left[1] ? side : b.left[0] < b.left[1] ? 0 : 1
+    // Out of time: fewer pieces left wins; level, the queen decides, then the last shooter.
+    b.winner = b.left[0] < b.left[1] ? 0 : b.left[1] < b.left[0] ? 1 : (b.queen ?? side)
     b.phase = 'done'
     return
   }
-  // Potting one of your own pieces earns another turn.
-  const again = ownPots > 0 && !b.striker.gone
+  // Potting one of your own pieces (or the queen) earns another turn; a foul never does.
+  const again = (ownPots > 0 || queenPot) && !b.striker.gone
   b.turn = again ? side : side === 0 ? 1 : 0
   b.phase = 'place'
   b.striker.gone = false
@@ -346,7 +389,13 @@ export interface Outcome {
   foul: boolean
   /** Distance of the striker to the nearest piece it left behind (for the bot's tie-break). */
   strikerEnd: number
+  /** Own / rival pieces left sitting near a pocket (an easy pot next turn). */
+  ownNear: number
+  rivalNear: number
 }
+
+/** Close enough to a pocket to be an easy pot. */
+const NEAR = 190
 
 /** The shot played forward on a copy of the board, with the real physics. */
 export function simulate(
@@ -355,7 +404,7 @@ export function simulate(
   dx: number,
   dy: number,
   power: number,
-  maxFrames = 240,
+  maxFrames = 420,
 ): Outcome {
   const c = cloneBoard(b)
   placeStriker(c, x)
@@ -369,13 +418,22 @@ export function simulate(
   const own: Owner = side
   const rival: Owner = side === 0 ? 1 : 0
   let nearest = Infinity
-  for (const p of c.pieces) nearest = Math.min(nearest, dist(p.x, p.y, c.striker.x, c.striker.y))
+  let ownNear = 0
+  let rivalNear = 0
+  for (const p of c.pieces) {
+    nearest = Math.min(nearest, dist(p.x, p.y, c.striker.x, c.striker.y))
+    if (p.owner === 2 || !POCKETS.some((k) => dist(p.x, p.y, k.x, k.y) < NEAR)) continue
+    if (p.owner === own) ownNear++
+    else rivalNear++
+  }
   return {
     own: c.pots.filter((o) => o === own).length,
     rival: c.pots.filter((o) => o === rival).length,
     queen: c.pots.includes(2),
     foul: c.foul || c.striker.gone,
     strikerEnd: Number.isFinite(nearest) ? nearest : 0,
+    ownNear,
+    rivalNear,
   }
 }
 

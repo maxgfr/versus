@@ -45,6 +45,11 @@ export interface Look {
   /** The striker is the active thing: yellow ring. */
   live: boolean
   sinks: Sink[]
+  /** Interpolated piece positions while rolling (index-aligned with `board.pieces`), else null. */
+  px: number[] | null
+  py: number[] | null
+  /** Where the striker is drawn this frame, its squash (1 = round) and its motion trail. */
+  striker: { x: number; y: number; squash: number; trail: { x: number; y: number }[] }
 }
 
 const RIM = 62
@@ -202,20 +207,45 @@ export function drawPiece(g: Draw, x: number, y: number, owner: Owner, r = PIECE
   g.alpha(0.5, () => g.ellipse(x - r * 0.35, y - r * 0.45, r * 0.3, r * 0.14, '#fff', -0.5))
 }
 
-function drawStriker(g: Draw, b: Board, side: Side, live: boolean, t: number): void {
-  const s = b.striker
-  if (s.gone) return
+function drawStriker(
+  g: Draw,
+  b: Board,
+  look: Look['striker'],
+  side: Side,
+  live: boolean,
+  t: number,
+): void {
+  if (b.striker.gone) return
+  const { x, y } = look
+  // Motion trail: fading ghosts along the last few frames of a fast shot.
+  const tr = look.trail
+  for (let i = 0; i < tr.length; i++) {
+    const p = tr[i] as { x: number; y: number }
+    const k = (i + 1) / (tr.length + 1)
+    g.alpha(k * 0.35, () => g.circle(p.x, p.y, STRIKER_R * (0.55 + k * 0.4), SIDE[side].light))
+  }
   if (live) {
     const p = 0.5 + 0.5 * Math.sin(t * 6)
-    g.circle(s.x, s.y, STRIKER_R + 18 + p * 5, alpha(C.yellow, 0.15))
-    g.ring(s.x, s.y, STRIKER_R + 18 + p * 5, C.yellow, 6)
+    g.circle(x, y, STRIKER_R + 18 + p * 5, alpha(C.yellow, 0.15))
+    g.ring(x, y, STRIKER_R + 18 + p * 5, C.yellow, 6)
   }
-  g.shadow(s.x + 6, s.y + 13, STRIKER_R, STRIKER_R * 0.55, 0.4)
-  g.disc(s.x, s.y, STRIKER_R, SIDE[side].main, STRIKER_R * 0.24)
-  g.ring(s.x, s.y, STRIKER_R * 0.72, alpha('#ffffff', 0.55), 5)
-  g.sideMark(side, s.x, s.y, STRIKER_R * 0.3, alpha('#ffffff', 0.95))
-  g.alpha(0.55, () =>
-    g.ellipse(s.x - STRIKER_R * 0.35, s.y - STRIKER_R * 0.45, STRIKER_R * 0.3, 7, '#fff', -0.5),
+  g.shadow(x + 6, y + 13, STRIKER_R, STRIKER_R * 0.55, 0.4)
+  // Squash on a knock: wider and flatter, then it springs back round.
+  const sq = Math.max(0.7, Math.min(1.3, look.squash))
+  g.at(
+    x,
+    y,
+    0,
+    () => {
+      g.disc(0, 0, STRIKER_R, SIDE[side].main, STRIKER_R * 0.24)
+      g.ring(0, 0, STRIKER_R * 0.72, alpha('#ffffff', 0.55), 5)
+      g.sideMark(side, 0, 0, STRIKER_R * 0.3, alpha('#ffffff', 0.95))
+      g.alpha(0.55, () =>
+        g.ellipse(-STRIKER_R * 0.35, -STRIKER_R * 0.45, STRIKER_R * 0.3, 7, '#fff', -0.5),
+      )
+    },
+    2 - sq,
+    sq,
   )
 }
 
@@ -308,8 +338,17 @@ export function drawBoard(g: Draw, look: Look): void {
   drawMarkings(g, b.turn, look.live, t)
   drawPockets(g)
   drawSinks(g, look.sinks, t)
-  for (const p of b.pieces) drawPiece(g, p.x, p.y, p.owner)
-  drawStriker(g, b, b.striker.side, look.live && !look.aim, t)
+  for (let i = 0; i < b.pieces.length; i++) {
+    const p = b.pieces[i] as Board['pieces'][number]
+    drawPiece(g, look.px?.[i] ?? p.x, look.py?.[i] ?? p.y, p.owner)
+  }
+  // Lining up a shot draws the striker back a touch, like a finger cocked behind it.
+  const st = look.striker
+  const aim = b.phase === 'flick' ? look.aim : null
+  const at = aim
+    ? { ...st, x: st.x - aim.dx * aim.power * 16, y: st.y - aim.dy * aim.power * 16 }
+    : st
+  drawStriker(g, b, at, b.striker.side, look.live && !look.aim, t)
   if (look.aim && b.phase === 'flick') drawAim(g, b, b.striker.side, look.aim)
   if (look.hint && (b.phase === 'place' || b.phase === 'flick') && !look.aim) {
     const side = b.turn

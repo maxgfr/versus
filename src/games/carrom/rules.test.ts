@@ -12,6 +12,7 @@ import {
   dist,
   frame,
   freeX,
+  launchSpeed,
   newBoard,
   placeStriker,
   POCKETS,
@@ -199,6 +200,93 @@ describe('carrom rules', () => {
       if (b.phase === 'done') break
     }
     expect(STRIKER_R).toBeGreaterThan(0)
+  })
+})
+
+describe('carrom queen, friction and time limit', () => {
+  it('potting the queen earns another turn and the queen is kept', () => {
+    const b = newBoard(0)
+    b.pieces = b.pieces.filter((p) => p.owner !== 2)
+    b.pots = [2]
+    b.phase = 'roll'
+    resolve(b)
+    expect(b.turn).toBe(0)
+    expect(b.queen).toBe(0)
+    expect(b.pieces.some((p) => p.owner === 2)).toBe(false)
+  })
+
+  it('a queen pocketed on a foul shot goes back to the centre and the turn passes', () => {
+    const b = newBoard(0)
+    b.pieces = []
+    b.pots = [2]
+    b.striker.gone = true
+    b.foul = true
+    b.phase = 'roll'
+    resolve(b)
+    expect(b.turn).toBe(1)
+    expect(b.queen).toBeNull()
+    const q = b.pieces.find((p) => p.owner === 2)
+    expect(q && dist(q.x, q.y, CENTRE.x, CENTRE.y)).toBe(0)
+  })
+
+  it('out of time with level pieces, the queen holder takes the board', () => {
+    const b = newBoard(0)
+    b.turns = 70
+    b.left = [4, 4]
+    b.queen = 1
+    b.phase = 'roll'
+    resolve(b)
+    expect(b.winner).toBe(1)
+  })
+
+  it('a disc launched at launchSpeed(d) slides about d before stopping', () => {
+    const b = newBoard(0)
+    b.pieces = []
+    b.striker.x = 500
+    b.striker.y = BOARD.y1 - 40
+    const v = launchSpeed(600)
+    b.striker.vy = -v
+    b.phase = 'roll'
+    let f = 0
+    while (!atRest(b) && f++ < 600) frame(b)
+    const slid = BOARD.y1 - 40 - b.striker.y
+    expect(slid).toBeGreaterThan(560)
+    expect(slid).toBeLessThan(640)
+  })
+
+  it('a slow disc stops instead of creeping for seconds', () => {
+    const b = newBoard(0)
+    b.pieces = []
+    b.striker.vy = -200
+    b.phase = 'roll'
+    let f = 0
+    while (!atRest(b) && f < 600) {
+      frame(b)
+      f++
+    }
+    expect(f).toBeLessThan(60)
+  })
+
+  it('a resting disc nudged past a rail is put back inside it', () => {
+    const b = newBoard(0)
+    b.pieces = [{ x: BOARD.x0 + 5, y: 900, vx: 0, vy: 0, r: PIECE_R, owner: 0 }]
+    b.striker.vx = 0
+    b.striker.vy = 0
+    frame(b)
+    expect(b.pieces[0]!.x).toBeGreaterThanOrEqual(BOARD.x0 + PIECE_R)
+  })
+
+  it('the hard computer pots a clean straight shot that the board offers it', () => {
+    const b = newBoard(0)
+    // One own piece on the line from the baseline to the top-left pocket, nothing else.
+    b.pieces = [{ x: 330, y: 760, vx: 0, vy: 0, r: PIECE_R, owner: 0 }]
+    b.left = [1, 9]
+    const shot = choose({ board: b }, 'hard', 3)
+    placeStriker(b, shot.x)
+    strike(b, shot.dx, shot.dy, shot.power)
+    for (let f = 0; f < 900 && !atRest(b); f++) frame(b)
+    resolve(b)
+    expect(b.winner).toBe(0)
   })
 })
 
