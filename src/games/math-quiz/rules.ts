@@ -30,16 +30,22 @@ const RANGE: Record<
   hard: { add: [20, 99], mulA: [6, 12], mulB: [6, 15] },
 }
 
-export function makeQuestion(rng: Rng, d: Difficulty): Question {
+/**
+ * A sum for the level. `heat` (0..1: how close the leader is to winning)
+ * stretches the top of each range, so the race gets tougher at the end.
+ */
+export function makeQuestion(rng: Rng, d: Difficulty, heat = 0): Question {
   const r = RANGE[d]
+  const k = Math.min(1, Math.max(0, heat))
+  const top = (hi: number, grow: number) => Math.round(hi + grow * k)
   const op = rng.pick(OPS)
   if (op === '×') {
-    const a = rng.int(r.mulA[0], r.mulA[1])
-    const b = rng.int(r.mulB[0], r.mulB[1])
+    const a = rng.int(r.mulA[0], top(r.mulA[1], 3))
+    const b = rng.int(r.mulB[0], top(r.mulB[1], 3))
     return { a, b, op, answer: a * b }
   }
-  let a = rng.int(r.add[0], r.add[1])
-  let b = rng.int(r.add[0], r.add[1])
+  let a = rng.int(r.add[0], top(r.add[1], r.add[1] * 0.6))
+  let b = rng.int(r.add[0], top(r.add[1], r.add[1] * 0.6))
   if (op === '+') return { a, b, op, answer: a + b }
   // Subtraction: keep the answer a positive number.
   if (b > a) [a, b] = [b, a]
@@ -92,9 +98,32 @@ export interface QuizState {
   sums: number
 }
 
+/**
+ * How much thinking a sum takes, about 1 (single digits) to 2 (carries,
+ * borrows, big products). The computer takes longer on harder sums, as people do.
+ */
+export function effort(q: Question): number {
+  const digits = (n: number) => String(n).split('').map(Number).reverse()
+  let e = 1
+  if (q.op === '×') {
+    e += Math.max(0, Math.max(q.a, q.b) - 5) * 0.07 + (q.answer >= 100 ? 0.3 : 0)
+  } else {
+    const a = digits(q.a)
+    const b = digits(q.b)
+    let hard = 0
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const x = a[i] ?? 0
+      const y = b[i] ?? 0
+      if (q.op === '+' ? x + y >= 10 : x < y) hard++
+    }
+    e += hard * 0.25 + (Math.max(q.a, q.b) >= 100 ? 0.25 : 0)
+  }
+  return Math.min(2, e)
+}
+
 /** Each side sees the same four options, in its own shuffled order. */
-export function dealSum(rng: Rng, d: Difficulty, now: number, sums: number): QuizState {
-  const q = makeQuestion(rng, d)
+export function dealSum(rng: Rng, d: Difficulty, now: number, sums: number, heat = 0): QuizState {
+  const q = makeQuestion(rng, d, heat)
   const opts = makeOptions(rng, q)
   return {
     q,
@@ -111,8 +140,8 @@ export function dealSum(rng: Rng, d: Difficulty, now: number, sums: number): Qui
 }
 
 /** Replace the current sum with a fresh one (scores carry over). */
-export function nextSum(s: QuizState, rng: Rng, d: Difficulty, now: number): void {
-  const fresh = dealSum(rng, d, now, s.sums)
+export function nextSum(s: QuizState, rng: Rng, d: Difficulty, now: number, heat = 0): void {
+  const fresh = dealSum(rng, d, now, s.sums, heat)
   Object.assign(s, fresh, { score: s.score })
 }
 

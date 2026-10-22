@@ -14,7 +14,7 @@ import {
   racePips,
 } from './render.ts'
 import { planBot } from './bot.ts'
-import { champion, dealSum, due, nextSum, press, TARGET, type QuizState } from './rules.ts'
+import { champion, dealSum, due, effort, nextSum, press, TARGET, type QuizState } from './rules.ts'
 
 /** Seconds between the winning answer and the result screen. */
 const END_DELAY = 2.3
@@ -55,6 +55,12 @@ class MathQuizGame extends BaseGame<State> {
     return state
   }
 
+  /** 0..1 how close the leader is to winning: later sums get bigger. */
+  private heat(): number {
+    const lead = Math.max(this.s.score[0], this.s.score[1])
+    return Math.min(1, Math.max(0, lead / Math.max(1, this.target - 1)))
+  }
+
   /** Each computer side times its answer to this sum. */
   private planBots(): void {
     const s = this.s
@@ -63,7 +69,7 @@ class MathQuizGame extends BaseGame<State> {
         s.botAt[side] = -1
         continue
       }
-      const p = planBot(this.ctx.difficulty, this.ctx.rng, s.choices[side], s.q.answer)
+      const p = planBot(this.ctx.difficulty, this.ctx.rng, s.choices[side], s.q.answer, effort(s.q))
       s.botAt[side] = this.time + p.delay
       s.botIdx[side] = p.idx
     }
@@ -72,7 +78,7 @@ class MathQuizGame extends BaseGame<State> {
   protected step(_dt: number): void {
     const s = this.s
     if (due(s, this.time)) {
-      nextSum(s, this.ctx.rng, this.ctx.difficulty, this.time)
+      nextSum(s, this.ctx.rng, this.ctx.difficulty, this.time, this.heat())
       s.pressIdx = [-1, -1]
       s.pressOk = [false, false]
       this.planBots()
@@ -152,8 +158,9 @@ class MathQuizGame extends BaseGame<State> {
     const s = this.s
     drawBackdrop(g)
     drawSum(g, s, this.time, this.ctx.names)
-    drawOptions(g, s, 0, this.time)
-    drawOptions(g, s, 1, this.time)
+    // Online, each phone draws only its own player's answer buttons.
+    for (const side of [0, 1] as Side[])
+      if (g.viewer === null || g.viewer === side) drawOptions(g, s, side, this.time)
     for (const side of [0, 1] as Side[]) {
       const bot = this.isBot(side)
       const ended = s.endAt >= 0
