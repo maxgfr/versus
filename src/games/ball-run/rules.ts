@@ -21,7 +21,7 @@ const SPEED_MAX = 1050
 const SPEED_UP = 9
 const ACCEL = 260
 /** Turn rate limit of the ball (rad/s). */
-const TURN = 9
+export const TURN = 9
 /** Angle per unit of finger drag (rad). */
 export const STEER = 0.0045
 /** Speed kept after a barrier hit. */
@@ -56,7 +56,8 @@ export function inArc(phi: number, arc: Arc, pad = 0): boolean {
 export function rowAt(seed: number, i: number): Row {
   const row: Row = { holes: [], bars: [] }
   if (i < 3) return row
-  const p = Math.min(1, i / 70)
+  // Busier with depth, and still a little busier past the first minute.
+  const p = Math.min(1, i / 70) + Math.min(0.5, Math.max(0, i - 70) / 260)
   const arcs: { kind: 'hole' | 'bar'; arc: Arc }[] = []
   const nHoles =
     hash01(seed, i, 1) < 0.3 + 0.35 * p ? 1 + (hash01(seed, i, 2) < 0.25 + 0.3 * p ? 1 : 0) : 0

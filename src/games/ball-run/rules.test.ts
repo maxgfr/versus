@@ -5,7 +5,7 @@ import { Input } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
 import type { Stage } from '../../core/stage.ts'
 import makeGame from './index.ts'
-import { drive, newBrain } from './bot.ts'
+import { aimAt, drive, newBrain } from './bot.ts'
 import {
   type Arc,
   baseSpeed,
@@ -157,6 +157,34 @@ describe('ball run bot', () => {
       if (!b.out) alive++
     }
     expect(alive).toBeGreaterThanOrEqual(6)
+  })
+
+  it('plans a way through: the aim is clear of the holes of the next ring and reachable', () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const { i, hole } = ringWithHole(seed)
+      const b = newBall()
+      b.dist = i * ROW - 150
+      b.next = i
+      b.phi = hole.c
+      const aim = aimAt(b, seed, 3, 0.85)
+      for (const h of rowAt(seed, i).holes) expect(inArc(aim, h)).toBe(false)
+    }
+  })
+
+  it('hard rolls the whole 90 s on every course; easy falls on most, so hard wins', () => {
+    const roll = (seed: number, d: Difficulty): boolean => {
+      const b = newBall()
+      const rng = new Rng(seed)
+      const brain = newBrain()
+      for (let f = 0; f < 60 * TIME_CAP; f++) {
+        b.phiT = drive(b, seed, d, rng, brain)
+        if (stepBall(b, seed, DT) === 'fall') return false
+      }
+      return true
+    }
+    const seeds = [5, 36, 67, 98, 129, 160]
+    expect(seeds.filter((s) => roll(s, 'hard')).length).toBe(seeds.length)
+    expect(seeds.filter((s) => !roll(s, 'easy')).length).toBeGreaterThanOrEqual(4)
   })
 
   it('an easy bot falls sometimes, so matches end', () => {

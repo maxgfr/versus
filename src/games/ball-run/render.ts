@@ -10,6 +10,9 @@ type View = { x0: number; y0: number; x1: number; y1: number }
 
 export interface LaneView {
   ball: Ball
+  /** Interpolated distance and angle for this frame. */
+  dist: number
+  phi: number
   seed: number
   time: number
   phase: 'ready' | 'run'
@@ -255,12 +258,12 @@ function backdrop(g: Draw, side: Side, v: View, time: number): void {
 }
 
 /** Streaks flying past near the walls: they speed up with the ball. */
-function streaks(g: Draw, side: Side, b: Ball, cam: number): void {
+function streaks(g: Draw, side: Side, b: Ball, dist: number, cam: number): void {
   const n = 10
   for (let k = 0; k < n; k++) {
     const a = hash01(7, k, 1) * Math.PI * 2
     const span = 1400
-    const z = span - ((b.dist * 1.15 + hash01(7, k, 2) * span) % span)
+    const z = span - ((dist * 1.15 + hash01(7, k, 2) * span) % span)
     // Keep the streaks off the ball's own floor.
     if (z < 160 || Math.abs(wrap(a - cam)) < 0.5) continue
     const r0 = ringR(z) * 0.94
@@ -295,6 +298,11 @@ function ballAt(g: Draw, side: Side, b: Ball, o: LaneView): void {
       sx = 1 + 0.35 * q
       sy = 1 - 0.3 * q
     }
+    // Leaning into a hard turn: the ball slides off-centre and stretches with it.
+    const turn = Math.max(-1, Math.min(1, wrap(b.phiT - b.phi) / 0.8))
+    x += turn * 26
+    sx *= 1 + Math.abs(turn) * 0.08
+    sy *= 1 - Math.abs(turn) * 0.05
     g.shadow(x, home.y + BALL_R - 2, r * 0.85, 10, 0.5)
   }
   if (k <= 0.01) return
@@ -320,7 +328,7 @@ function ballAt(g: Draw, side: Side, b: Ball, o: LaneView): void {
         g.ctx.beginPath()
         g.ctx.arc(0, 0, r * 0.97, 0, Math.PI * 2)
         g.ctx.clip()
-        const roll = (b.dist / (BALL_R * 2.2)) % 1
+        const roll = (o.dist / (BALL_R * 2.2)) % 1
         for (let j = 0; j < 2; j++) {
           const p = (roll + j * 0.5) % 1
           const yy = r - p * r * 2
@@ -342,11 +350,11 @@ function ballAt(g: Draw, side: Side, b: Ball, o: LaneView): void {
 
 export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const b = o.ball
-  const cam = b.phi
+  const cam = o.phi
   backdrop(g, side, v, o.time)
   // Far to near, so near bands overlap far ones.
   const bands: Band[] = []
-  for (let i = b.next + VIS; i >= Math.max(0, b.next - 2); i--) bands.push(band(o.seed, i, b.dist))
+  for (let i = b.next + VIS; i >= Math.max(0, b.next - 2); i--) bands.push(band(o.seed, i, o.dist))
   for (const bd of bands) {
     if (bd.rNear < 4) continue
     const last = bd.i === b.next - 1
@@ -357,7 +365,7 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
     bars(g, bd, cam)
   }
   if (b.next - 1 < 0 || !b.out) {
-    streaks(g, side, b, cam)
+    streaks(g, side, b, o.dist, cam)
     ballAt(g, side, b, o)
   }
   hud(g, side, o)
@@ -376,18 +384,20 @@ function hud(g: Draw, side: Side, o: LaneView): void {
     size: 44,
   })
 
+  // Online, each phone only coaches its own player: the rival's lane just says Ready.
+  const coach = !o.bot && (g.viewer === null || g.viewer === side)
   if (o.phase === 'ready') {
     // The shell has just counted 3-2-1: a short beat to read the one rule.
     card(
       g,
       side,
-      o.bot ? 'Ready…' : 'Drag to steer',
-      o.bot ? o.name : 'Dodge the holes!',
+      coach ? 'Drag to steer' : 'Ready…',
+      coach ? 'Dodge the holes!' : o.name,
       330,
       o.since,
     )
   }
-  if (!o.bot && (o.phase === 'ready' || o.since < 1.6) && o.winner === null) {
+  if (coach && (o.phase === 'ready' || o.since < 1.6) && o.winner === null) {
     const sw = Math.sin(o.time * 4)
     g.alpha(o.phase === 'ready' ? 1 : 1 - prog(o.since, 1, 1.6), () =>
       g.emoji('👆', 500 + sw * 170, 826, 84, sw * 0.25),

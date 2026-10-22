@@ -1,10 +1,11 @@
-import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { type GameContext, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { clamp, lerp } from '../../core/fx/ease.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
-import { RunnerGame, toLocal, toWorld } from '../../engines/runner/index.ts'
-import { wrap } from './rules.ts'
+import { mirrorFx, RunnerGame, toLocal, toWorld } from '../../engines/runner/index.ts'
+import { rowAt, wrap } from './rules.ts'
 import { type Brain, drive, newBrain } from './bot.ts'
 import { ballPos, drawLane } from './render.ts'
 import { type Ball, metres, newBall, ROW, STEER, stepBall, TIME_CAP } from './rules.ts'
@@ -20,6 +21,9 @@ export interface State {
   endAt: number
   endWhy: 'fall' | 'time' | null
 }
+
+/** A hole passed with less room than this (rad) is a close call. */
+const CLOSE = 0.1
 
 /** A beat after the shell's 3-2-1 to read the rule. */
 const READY_T = 1.3
@@ -42,6 +46,30 @@ class BallRun extends RunnerGame<State> {
   private rng: Rng | null = null
   /** Sides whose ball dropped out during the current step. */
   private fell: Side[] = []
+  /** Cosmetic: each ball's distance and angle at the previous step, for interpolation. */
+  private prev: [{ d: number; phi: number }, { d: number; phi: number }] = [
+    { d: 0, phi: 0 },
+    { d: 0, phi: 0 },
+  ]
+  private stepped = false
+  private alpha = 1
+
+  override init(ctx: GameContext): void {
+    super.init(ctx)
+    // Effects land where each lane is drawn, also when a half is shown turned (online).
+    mirrorFx(ctx, this.frames)
+  }
+
+  override render(g: Draw, alpha = 1): void {
+    // Hit-stop freezes the world: no blending between two steps that are not moving.
+    this.alpha = this.stepped && this.ctx.fx.hitstop === 0 ? alpha : 1
+    super.render(g)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.stepped = false
+  }
 
   protected setup(): State {
     return {
@@ -80,6 +108,12 @@ class BallRun extends RunnerGame<State> {
   }
 
   protected override step(dt: number): void {
+    for (const side of [0, 1] as Side[]) {
+      const b = this.s.balls[side]
+      this.prev[side].d = b.dist
+      this.prev[side].phi = b.phi
+    }
+    this.stepped = true
     super.step(dt)
     if (this.over) return
     const s = this.s
@@ -150,10 +184,36 @@ class BallRun extends RunnerGame<State> {
       b.phiT = drive(b, this.ctx.seed, this.ctx.difficulty, this.botRng(), this.brains[side])
     } else this.steer(side, b)
     const before = Math.floor(b.dist / MILESTONE)
+    const ring = b.next
+    const v = b.v
     const ev = stepBall(b, this.ctx.seed, dt)
-    if (ev === 'fall') this.onFall(side)
-    else if (ev === 'bar') this.onBar(side)
-    else if (Math.floor(b.dist / MILESTONE) > before) this.milestone(side, b)
+    if (ev === 'fall') this.onFall(side, v)
+    else {
+      if (ev === 'bar') this.onBar(side, v)
+      else if (Math.floor(b.dist / MILESTONE) > before) this.milestone(side, b)
+      // Rings just passed: skimming the edge of a hole is a close call.
+      for (let i = ring; i < b.next; i++) {
+        for (const h of rowAt(this.ctx.seed, i).holes) {
+          if (Math.abs(wrap(b.phi - h.c)) - h.w / 2 < CLOSE) {
+            this.closeCall(side)
+            break
+          }
+        }
+      }
+    }
+  }
+
+  private closeCall(side: Side): void {
+    const p = this.local(side, 0, -170)
+    this.ctx.audio.play('swish', 1.4)
+    this.ctx.fx.sparks(p.x, p.y, C.yellow, 8)
+    this.ctx.fx.float('Close!', p.x, p.y, C.yellow, 52, side)
+  }
+
+  /** World position of a point offset (lane-local) from the ball. */
+  private local(side: Side, dx: number, dy: number): { x: number; y: number } {
+    const b = ballPos()
+    return toWorld(this.frames[side], b.x + dx, b.y + dy)
   }
 
   /** Drag the finger across the half: the ball turns with it, from where the finger went down. */
@@ -179,40 +239,51 @@ class BallRun extends RunnerGame<State> {
     return toWorld(this.frames[side], p.x, p.y)
   }
 
-  private onFall(side: Side): void {
+  /** Dropping out at speed is a bigger fall. */
+  private onFall(side: Side, v: number): void {
     const fx = this.ctx.fx
+    const k = clamp(v / 1050, 0.4, 1)
     const p = this.at(side)
     this.s.outT[side] = this.time
     this.fell.push(side)
-    this.ctx.audio.play('slide', 0.9)
+    this.ctx.audio.play('slide', 1.05 - k * 0.3)
     this.ctx.audio.play('lose')
-    fx.burst(p.x, p.y, SIDE[side].main, { count: 26, speed: 520, size: 14, gravity: 600 })
+    fx.burst(p.x, p.y, SIDE[side].main, {
+      count: Math.round(14 + k * 16),
+      speed: 360 + k * 260,
+      size: 14,
+      gravity: 600,
+    })
     fx.burst(p.x, p.y, C.yellow, { count: 10, speed: 360, size: 8, kind: 'spark' })
-    fx.ring(p.x, p.y, SIDE[side].light, 260)
-    fx.shake(0.55)
-    fx.stop(5)
+    fx.ring(p.x, p.y, SIDE[side].light, 180 + k * 100)
+    fx.shake(0.3 + k * 0.3)
+    fx.stop(Math.round(3 + k * 3))
     fx.flash(SIDE[side].main, 0.25)
-    this.ctx.audio.buzz?.(60)
+    this.ctx.audio.buzz?.(Math.round(35 + k * 30))
   }
 
-  private onBar(side: Side): void {
+  /** A barrier hit hurts as much as the ball was rolling. */
+  private onBar(side: Side, v: number): void {
     const fx = this.ctx.fx
+    const k = clamp(v / 1050, 0.2, 1)
     this.s.balls[side].barAt = this.time
     const p = this.at(side)
-    this.ctx.audio.play('wall', 1)
+    this.ctx.audio.play('wall', 1.2 - k * 0.4)
     this.ctx.audio.play('bounce', 0.9)
-    fx.sparks(p.x, p.y, C.pink, 14)
-    fx.puff(p.x, p.y, alpha(C.white, 0.6), 6)
-    fx.shake(0.3)
-    fx.stop(3)
-    this.ctx.audio.buzz?.(25)
-    fx.float('Bonk!', p.x, p.y - 150, C.pink, 56, side)
+    fx.sparks(p.x, p.y, C.pink, Math.round(8 + k * 14))
+    fx.puff(p.x, p.y, alpha(C.white, 0.6), Math.round(3 + k * 6))
+    fx.shake(0.12 + k * 0.3)
+    fx.stop(Math.round(1 + k * 4))
+    this.ctx.audio.buzz?.(Math.round(12 + k * 25))
+    const t = this.local(side, 0, -150)
+    fx.float('Bonk!', t.x, t.y, C.pink, 56, side)
   }
 
   private milestone(side: Side, b: Ball): void {
     const p = this.at(side)
+    const t = this.local(side, 0, -160)
     this.ctx.audio.play('coin', 1 + Math.min(0.4, b.dist / 200000))
-    this.ctx.fx.float(`${metres(b.dist)} m`, p.x, p.y - 160, SIDE[side].light, 56, side)
+    this.ctx.fx.float(`${metres(b.dist)} m`, t.x, t.y, SIDE[side].light, 56, side)
     this.ctx.fx.ring(p.x, p.y, SIDE[side].light, 140)
   }
 
@@ -223,8 +294,13 @@ class BallRun extends RunnerGame<State> {
   ): void {
     const s = this.s
     const since = this.time - s.phaseAt
+    const b = s.balls[side]
+    const p = this.prev[side]
+    const a = this.alpha
     drawLane(g, side, view, {
-      ball: s.balls[side],
+      ball: b,
+      dist: lerp(p.d, b.dist, a),
+      phi: wrap(p.phi + wrap(b.phi - p.phi) * a),
       seed: this.ctx.seed,
       time: this.time,
       phase: s.phase,
