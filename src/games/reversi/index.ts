@@ -289,7 +289,10 @@ class Reversi extends TurnGame<State> {
   render(g: Draw): void {
     const s = this.s
     const idle = s.endedAt < 0 && this.time >= s.readyAt
-    const hints = idle && !this.isBot(s.turn) ? legalMoves(s.cells, s.turn).map((m) => m.at) : []
+    // Online, the move hints are for the player to move: only their own phone shows them.
+    const mine = g.viewer === null || g.viewer === s.turn
+    const hints =
+      idle && mine && !this.isBot(s.turn) ? legalMoves(s.cells, s.turn).map((m) => m.at) : []
     const passing =
       s.passAt >= 0 && this.time >= s.passAt && this.time - s.passAt < 1.5 && !this.over
     tableBackdrop(g)
