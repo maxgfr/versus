@@ -15,6 +15,7 @@ import {
   nearestDisc,
   PLAYER_R,
   RINK,
+  RUSH_AT,
   step,
   type World,
 } from './rules.ts'
@@ -48,6 +49,8 @@ class MiniSoccer extends BaseGame<State> {
   private pop: Spring[] = [0, 1, 2, 3].map(() => new Spring(1, 380, 12))
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
   private lastTick = -1
+  /** Fading afterimages behind fast discs, per disc (cosmetic). */
+  private ghosts: { x: number; y: number }[][] = [[], [], [], []]
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -140,8 +143,29 @@ class MiniSoccer extends BaseGame<State> {
       }
     }
     w.aims = previews
+    const wasGoal = w.phase === 'goal'
+    const leftBefore = w.left
     const events = step(w, dt, cmd)
     for (const e of events) this.juice(e)
+    if (wasGoal && w.phase === 'play') {
+      // Kick-off whistle, and a ring where the ball restarts.
+      this.ctx.audio.play('go', 1.1)
+      this.ctx.fx.ring(w.ball.x, w.ball.y, C.white, 140)
+    }
+    if (!w.golden && leftBefore > RUSH_AT && w.left <= RUSH_AT && w.phase === 'play') {
+      // The closing seconds: discs recharge quicker from here on.
+      this.ctx.audio.play('powerup', 1.15)
+      this.ctx.fx.flash(C.yellow, 0.12)
+      for (const side of [0, 1] as Side[])
+        this.ctx.fx.float(
+          'Final rush!',
+          W / 2,
+          side === 0 ? MID + 330 : MID - 330,
+          C.yellow,
+          52,
+          side,
+        )
+    }
     if (w.phase === 'end' && w.winner !== null && !this.over) {
       this.s.endAt = this.time
       this.ctx.audio.play('buzz', 0.7)
@@ -158,12 +182,18 @@ class MiniSoccer extends BaseGame<State> {
   private juice(e: Event): void {
     const { fx, audio } = this.ctx
     if (e.kind === 'flick') {
+      // The pull sets the power, and the power sets the kick: sound, dust, ring, shake.
       const side = (e.index >> 1) as Side
-      audio.play('thud', 1.1 + e.power * 0.3)
-      audio.play('whoosh', 0.9 + e.power * 0.4)
-      fx.puff(e.x, e.y, 'rgba(255,255,255,0.55)', 6)
-      fx.ring(e.x, e.y, alpha(SIDE[side].light, 0.6), 80)
-      this.pop[e.index]?.kick(-2.5)
+      const p = e.power
+      audio.play('thud', 1.1 + p * 0.3)
+      audio.play('whoosh', 0.9 + p * 0.4)
+      fx.puff(e.x, e.y, 'rgba(255,255,255,0.55)', 4 + Math.round(p * 6))
+      fx.ring(e.x, e.y, alpha(p > 0.85 ? C.yellow : SIDE[side].light, 0.7), 70 + p * 70)
+      if (p > 0.8) {
+        fx.shake(0.06 + (p - 0.8) * 0.4)
+        audio.buzz(8)
+      }
+      this.pop[e.index]?.kick(-2 - p * 3)
     } else if (e.kind === 'hit') {
       const k = Math.min(1, e.speed / 2600)
       audio.play('hit', 0.8 + k * 0.6)
@@ -222,9 +252,18 @@ class MiniSoccer extends BaseGame<State> {
     const dt = 1 / 60
     for (const s of this.pop) s.update(dt)
     for (const p of this.pulse) p.update(dt)
+    const players = w.players.map((p, i) => ip(p, prev?.players[i]))
+    players.forEach((p, i) => {
+      const gh = this.ghosts[i]
+      if (!gh) return
+      if (Math.hypot(p.vx, p.vy) > 1000 && w.phase === 'play') gh.push({ x: p.x, y: p.y })
+      else gh.shift()
+      while (gh.length > 5) gh.shift()
+    })
     render(g, w, {
       ball,
-      players: w.players.map((p, i) => ip(p, prev?.players[i])),
+      players,
+      ghosts: this.ghosts,
       trail: this.trail,
       // A kicked spring dips below 1: turn it into a short punch outward.
       pop: this.pop.map((s) => 1 + Math.max(-0.08, Math.min(0.16, (1 - s.value) * 0.7))),

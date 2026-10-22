@@ -3,17 +3,20 @@ import { type Difficulty, type Side, STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
 import { disc } from '../../engines/puck/index.ts'
-import { decide, type BotMemory, newMemory } from './bot.ts'
+import { decide, type BotMemory, judge, newMemory } from './bot.ts'
 import {
   BALL_R,
   type Cmd,
   COOLDOWN,
+  cooldownOf,
   type Flick,
   GOAL_PAUSE,
   homeOf,
+  KICKOFF_DEPTH,
   nearestDisc,
   newWorld,
   RINK,
+  RUSH_AT,
   step,
   type World,
 } from './rules.ts'
@@ -52,9 +55,11 @@ describe('flicks', () => {
 
   it('a flicked disc that meets the ball knocks it on', () => {
     const w = newWorld(90)
-    const p = homeOf(0)
-    w.players[0] = disc(p.x, MID - 300, 74)
-    w.ball = disc(p.x, MID - 300 - 200, BALL_R)
+    // Clear of the other discs (blue's forward stands at its kick-off spot).
+    const x = 820
+    expect(Math.abs(homeOf(2).x - x)).toBeGreaterThan(300)
+    w.players[0] = disc(x, MID - 300, 74)
+    w.ball = disc(x, MID - 300 - 130, BALL_R)
     const ev = step(w, STEP, { flicks: [{ index: 0, dx: 0, dy: -1, power: 1 }] })
     expect(ev.some((e) => e.kind === 'hit' && e.index === 0)).toBe(true)
     expect(w.ball.vy).toBeLessThan(-800)
@@ -84,8 +89,34 @@ describe('goals and the clock', () => {
     expect(w.phase).toBe('goal')
     for (let i = 0; i < 60 * 0.3; i++) step(w, STEP, none())
     expect(w.phase).toBe('play')
+    // Blue conceded: blue kicks off from its own half, red's discs wait a moment.
     expect(w.ball.x).toBeCloseTo(W / 2, 6)
-    expect(w.ball.y).toBeCloseTo(MID, 6)
+    expect(w.ball.y).toBeCloseTo(MID - KICKOFF_DEPTH, 6)
+    expect(w.cool[0]).toBeGreaterThan(0)
+    expect(w.cool[1]).toBeGreaterThan(0)
+    expect(w.cool[2]).toBe(0)
+    expect(w.cool[3]).toBe(0)
+    const ev = step(w, STEP, { flicks: [{ index: 0, dx: 0, dy: -1, power: 1 }] })
+    expect(ev.some((e) => e.kind === 'flick')).toBe(false)
+  })
+
+  it('every kick-off has a keeper in front of each goal', () => {
+    for (const i of [1, 3]) {
+      const h = homeOf(i)
+      expect(Math.abs(h.x - W / 2)).toBeLessThan(RINK.goal / 2)
+      const own = i >> 1 === 0 ? RINK.y1 : RINK.y0
+      expect(Math.abs(h.y - own)).toBeLessThan(300)
+    }
+  })
+
+  it('discs recharge quicker in the closing seconds and a golden goal', () => {
+    const w = newWorld(90)
+    expect(cooldownOf(w)).toBe(COOLDOWN)
+    w.left = RUSH_AT - 1
+    expect(cooldownOf(w)).toBeLessThan(COOLDOWN)
+    w.left = 0
+    w.golden = true
+    expect(cooldownOf(w)).toBeLessThan(COOLDOWN)
   })
 
   it('a clear lead at full time wins', () => {
@@ -172,6 +203,47 @@ function botMatch(
 }
 
 describe('mini soccer bots', () => {
+  it('judges a goal for it above everything, a goal against below everything', () => {
+    const w = newWorld(90)
+    const mid = judge(w, 0, [0, 0])
+    w.score = [1, 0]
+    expect(judge(w, 0, [0, 0])).toBeGreaterThan(mid + 1000)
+    expect(judge(w, 1, [0, 0])).toBeLessThan(mid - 1000)
+  })
+
+  it('the hard bot looks ahead and buries an open chance', () => {
+    const w = newWorld(90)
+    // Red's forward right behind the ball, blue's keeper pulled wide.
+    w.ball = disc(W / 2, RINK.y0 + 420, BALL_R)
+    w.players[0] = disc(W / 2 + 40, RINK.y0 + 600, 74)
+    w.players[3] = disc(RINK.x1 - 90, MID - 100, 74)
+    w.players[2] = disc(RINK.x0 + 90, MID - 100, 74)
+    const plan = decide(w, 0, [0, 1], 'hard', new Rng(3), newMemory(), STEP)
+    expect(plan).not.toBeNull()
+    let scored = false
+    step(w, STEP, { flicks: plan ? [plan] : [] })
+    for (let i = 0; i < 90 && !scored; i++)
+      scored = step(w, STEP, { flicks: [] }).some((e) => e.kind === 'goal' && e.side === 0)
+    expect(scored).toBe(true)
+  })
+
+  it('the hard bot will not knock the ball into its own goal', () => {
+    // Ball sitting in front of red's own goal, red's disc between it and blue's goal:
+    // the straight aim would drive the ball into its own net.
+    for (const seed of [4, 5, 6]) {
+      const w = newWorld(90)
+      w.ball = disc(W / 2, RINK.y1 - 200, BALL_R)
+      w.players[0] = disc(W / 2 + 20, RINK.y1 - 420, 74)
+      w.players[1] = disc(RINK.x0 + 90, MID + 100, 74)
+      const plan = decide(w, 0, [0, 1], 'hard', new Rng(seed), newMemory(), STEP)
+      step(w, STEP, { flicks: plan ? [plan] : [] })
+      let own = false
+      for (let i = 0; i < 90 && !own; i++)
+        own = step(w, STEP, { flicks: [] }).some((e) => e.kind === 'goal' && e.side === 1)
+      expect(own).toBe(false)
+    }
+  })
+
   it('a bot-vs-bot match ends within the bound', () => {
     const { w, steps } = botMatch('normal', 'normal', 61)
     expect(w.phase).toBe('end')

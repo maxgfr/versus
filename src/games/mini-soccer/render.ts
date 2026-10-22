@@ -5,11 +5,13 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { Disc } from '../../engines/puck/index.ts'
-import { BALL_R, COOLDOWN, GOAL_PAUSE, RINK, type World } from './rules.ts'
+import { BALL_R, cooldownOf, GOAL_PAUSE, RINK, type World } from './rules.ts'
 
 export interface Look {
   ball: Disc
   players: Disc[]
+  /** Fading afterimages behind fast discs, per disc. */
+  ghosts: { x: number; y: number }[][]
   trail: { x: number; y: number }[]
   /** Uniform punch per disc (1 = rest). */
   pop: number[]
@@ -248,13 +250,14 @@ function drawPlayer(
   ball: Disc,
   mood: 'happy' | 'grin' | 'sad' | 'wow',
   ready: boolean,
+  full: number,
 ): void {
   const col = SIDE[side].main
   const r = p.r * pop
   g.shadow(p.x + 8, p.y + 18, r * 1.02, r * 0.9, 0.38)
   // Cooldown: a dim track filling back up, then a soft ready glow.
   if (cool > 0) {
-    const k = 1 - clamp(cool / COOLDOWN, 0, 1)
+    const k = 1 - clamp(cool / full, 0, 1)
     g.ring(p.x, p.y, r + 15, alpha('#000000', 0.3), 9)
     g.arc(p.x, p.y, r + 15, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k, alpha(C.white, 0.9), 9)
   } else if (ready) {
@@ -394,9 +397,22 @@ export function render(g: Draw, w: World, look: Look): void {
     return 'happy'
   }
   // Aims under everything so the arrow never hides a disc.
+  // Online, each phone shows only its own player's controls (aims, ready glows).
+  const own = (side: Side): boolean => g.viewer === null || g.viewer === side
   w.aims.forEach((a, i) => {
     const p = look.players[i]
-    if (a && p) drawAim(g, p, (i >> 1) as Side, a)
+    const side = (i >> 1) as Side
+    if (a && p && own(side)) drawAim(g, p, side, a)
+  })
+  // Afterimages behind discs that were flicked hard.
+  look.ghosts.forEach((gh, i) => {
+    const side = (i >> 1) as Side
+    for (let k = 0; k < gh.length; k++) {
+      const t = gh[k]
+      if (!t) continue
+      const f = (k + 1) / (gh.length + 1)
+      g.alpha(f * 0.22, () => g.circle(t.x, t.y, 74 * (0.6 + 0.4 * f), SIDE[side].light))
+    }
   })
   // Ball trail and the ball itself (it sits on the grass, under the discs).
   const sp = Math.hypot(ball.vx, ball.vy)
@@ -418,6 +434,7 @@ export function render(g: Draw, w: World, look: Look): void {
     if (!p) continue
     const side = (i >> 1) as Side
     const cool = w.cool[i] ?? 0
+    const full = Math.max(cool, cooldownOf(w))
     drawPlayer(
       g,
       p,
@@ -425,8 +442,9 @@ export function render(g: Draw, w: World, look: Look): void {
       look.pop[i] ?? 1,
       cool,
       ball,
-      cool > COOLDOWN * 0.6 ? 'wow' : mood(side),
-      !look.bots[side] && w.phase === 'play',
+      cool > full * 0.6 ? 'wow' : mood(side),
+      !look.bots[side] && w.phase === 'play' && own(side),
+      full,
     )
   }
   // Calls in the middle: goal, kick-off, golden goal, full time.
