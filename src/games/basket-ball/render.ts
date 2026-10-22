@@ -26,6 +26,8 @@ import {
 /** Screen lift per unit of height: a 3/4 view, so the arc reads as an arc. */
 const K = 0.36
 const LINE = alpha(C.white, 0.55)
+/** Online, each phone draws only its own player's controls and prompts. */
+const mine = (g: Draw, side: Side): boolean => g.viewer === null || g.viewer === side
 /** Hoop ground point and backboard ground line, in red's frame. */
 const HY = MID + HOOP_DIST
 const BY = HY - BOARD_OFF
@@ -487,20 +489,27 @@ export function render(g: Draw, look: Look): void {
       if (behind) ball()
       hoopFront(g, w.time, w.swishAt[side])
       if (!deep && !behind) ball()
-      if (live && lp && live.state === 'ready' && look.hint[side] && !look.drag[side])
+      if (
+        live &&
+        lp &&
+        live.state === 'ready' &&
+        look.hint[side] &&
+        !look.drag[side] &&
+        mine(g, side)
+      )
         drawHint(g, lp.x, lp.y, w.time)
     })
   }
   for (const side of [0, 1] as Side[]) {
     const b = look.balls[side]
     const d = look.drag[side]
-    if (!b || !d || !ready(w, side)) continue
+    if (!b || !d || !ready(w, side) || !mine(g, side)) continue
     inFrame(g, side, () => drawPreview(g, b, d, side))
   }
   // The finger's swipe: a tapered streak in the team colour.
   for (const side of [0, 1] as Side[]) {
     const d = look.drag[side]
-    if (!d || !ready(w, side)) continue
+    if (!d || !ready(w, side) || !mine(g, side)) continue
     // The streak heats up with the flick's speed.
     const hot = prog(d.v ?? 0, 900, 3400)
     g.line(d.x0, d.y0, d.x, d.y, alpha(SIDE[side].light, 0.25 + hot * 0.25), 22 + hot * 14)
@@ -520,7 +529,7 @@ export function render(g: Draw, look: Look): void {
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, look.names[side], {
       active: ready(w, side) && !look.end,
-      text: look.status[side],
+      text: mine(g, side) ? look.status[side] : undefined,
     })
     hud(g, look, side)
   }
