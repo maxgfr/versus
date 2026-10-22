@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
 import { choose } from './bot.ts'
-import { type Cell, emptyBoard, moves, outcome, place } from './rules.ts'
+import { type Cell, emptyBoard, moves, outcome, place, threats } from './rules.ts'
 
 const board = (s: string): Cell[] => [...s].map((ch) => (ch === 'o' ? 0 : ch === 'x' ? 1 : null))
 
@@ -19,6 +19,18 @@ describe('tic tac toe rules', () => {
 
   it('detects a draw on a full board', () => {
     expect(outcome(board('oxooxxxoo'))).toEqual({ winner: 'draw' })
+  })
+
+  it('counts open threats (two in a line with the third empty)', () => {
+    expect(threats(board('oo.......'), 0)).toBe(1)
+    expect(threats(board('oox......'), 0)).toBe(0)
+    // A fork: two ways to win at once.
+    expect(threats(board('o.o...o..'), 0)).toBe(3)
+    expect(threats(board('oo.......'), 1)).toBe(0)
+  })
+
+  it('a win on the last cell is a win, not a draw', () => {
+    expect(outcome(board('oxoxoxxoo'))).toMatchObject({ winner: 0 })
   })
 
   it('refuses a taken cell', () => {

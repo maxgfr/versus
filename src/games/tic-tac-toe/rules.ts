@@ -36,6 +36,21 @@ export function lineWinner(cells: readonly Cell[]): { side: Side; line: readonly
   return null
 }
 
+/** Open lines `side` could complete next move: two of theirs and an empty third. */
+export function threats(cells: readonly Cell[], side: Side): number {
+  let n = 0
+  for (const line of LINES) {
+    let mine = 0
+    let empty = 0
+    for (const i of line) {
+      if (cells[i] === side) mine++
+      else if (cells[i] === null) empty++
+    }
+    if (mine === 2 && empty === 1) n++
+  }
+  return n
+}
+
 export type Outcome = { winner: Side; line: readonly number[] } | { winner: 'draw' } | null
 
 export function outcome(cells: readonly Cell[]): Outcome {
