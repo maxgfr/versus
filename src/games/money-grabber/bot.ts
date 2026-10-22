@@ -21,9 +21,9 @@ const CFG: Record<
   Difficulty,
   { lag: number; speed: number; accuracy: number; react: [number, number] }
 > = {
-  easy: { lag: 0.9, speed: 340, accuracy: 0.25, react: [0.5, 0.8] },
-  normal: { lag: 0.45, speed: 700, accuracy: 0.7, react: [0.28, 0.45] },
-  hard: { lag: 0.1, speed: 1400, accuracy: 1, react: [0.12, 0.2] },
+  easy: { lag: 0.9, speed: 380, accuracy: 0.3, react: [0.5, 0.8] },
+  normal: { lag: 0.3, speed: 900, accuracy: 0.85, react: [0.2, 0.32] },
+  hard: { lag: 0.06, speed: 1700, accuracy: 1, react: [0.08, 0.14] },
 }
 
 /** Bombs the bot has noticed: when, and whether it will react to this one. */
@@ -94,16 +94,25 @@ export class CatchBot {
     return this.aim
   }
 
-  /** The best money to go for, skipping money a respected bomb will land on or near. */
+  /**
+   * The best money to go for, skipping money a respected bomb will land on or
+   * near, and money it cannot get under before it lands (at its own speed).
+   */
   private choose(l: Lane, bombs: readonly Item[]): number {
     const watched = bombs.filter((b) => this.seen.get(b.id)?.respect)
+    const speed = this.speed
     let best: { x: number; score: number } | null = null
     for (const it of l.items) {
       if (it.kind === BOMB || it.y > BASKET_Y - 40) continue
       if (watched.some((b) => inWay(b.x, l.basket, it.x) || Math.abs(b.x - it.x) < 170)) continue
       const value = (KINDS[it.kind] as (typeof KINDS)[number]).value
       const dist = Math.abs(it.x - l.basket)
-      const score = value / (1 + dist / 320)
+      // Time until it reaches the rim, and the slide needed to be under it by then.
+      const land = (BASKET_Y - 30 - it.y) / Math.max(1, it.vy)
+      const need = Math.max(0, dist - BASKET_HALF * 0.6) / speed
+      if (need > land + 0.05) continue
+      // Sooner money first (it will be gone), then value, then nearness.
+      const score = value / (1 + dist / 320) / (0.6 + land)
       if (!best || score > best.score) best = { x: it.x, score }
     }
     return best ? best.x : l.basket

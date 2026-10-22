@@ -19,6 +19,8 @@ import {
 } from './rules.ts'
 
 export interface View {
+  /** Seconds the frame sits before the last step (smooth motion). */
+  back: number
   names: [string, string]
   sec: number
   over: boolean
@@ -49,10 +51,14 @@ export function renderMoney(g: Draw, lanes: [Lane, Lane], now: number, v: View):
     const lane = lanes[side]
     inFrame(g, side, () => {
       backdrop(g, side, now)
-      for (const it of lane.items) marker(g, it)
-      for (const it of lane.items) item(g, it, now)
-      basket(g, side, lane, now)
-      if (!v.over && now < 3.5) hint(g, side, lane, now)
+      // Between two steps: money a fraction of a step higher, the basket a fraction back.
+      const b = v.back
+      const items = b > 0 ? lane.items.map((it) => ({ ...it, y: it.y - it.vy * b })) : lane.items
+      for (const it of items) marker(g, it)
+      for (const it of items) item(g, it, now)
+      basket(g, side, b > 0 ? { ...lane, basket: lane.basket - lane.bv * b } : lane, now)
+      // Online, each phone coaches only its own player.
+      if (!v.over && now < 3.5 && (g.viewer === null || g.viewer === side)) hint(g, side, lane, now)
     })
   }
   // The chute both lanes rain from.
@@ -173,10 +179,12 @@ function basket(g: Draw, side: Side, lane: Lane, now: number): void {
   g.shadow(x, RAIL_Y + 4, 112, 16, 0.4)
   // Wheels on the rail.
   for (const dx of [-62, 62]) g.ball(x + dx + shake, RAIL_Y - 4, 16, '#d6d9e6', 0.6)
+  // The bucket leans into its slide and swings back when it stops.
+  const lean = Math.max(-0.16, Math.min(0.16, -(lane.bv ?? 0) / 9000))
   g.at(
     x + shake,
     y + 40,
-    0,
+    lean,
     () => {
       // Loot heaped inside, more as the score grows.
       if (heap > 0) {

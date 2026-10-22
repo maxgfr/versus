@@ -128,6 +128,14 @@ class MoneyGrabber extends BaseGame<State> {
         }
         fx.ring(p.x, towardMid(side, p.y, 60), '#ffc83d', 90 + ev.value * 8)
         floatFor(fx, side, `+$${ev.value}`, p.x, towardMid(side, p.y, 200))
+        if (ev.dive) {
+          // A diving catch: the basket was flying. Sparks trail off its slide.
+          ctx.audio.play('swish', 1.2 + ev.speed * 0.3)
+          ctx.audio.buzz(12)
+          fx.shake(0.08 + ev.speed * 0.1)
+          fx.sparks(p.x, p.y, '#ffffff', Math.round(6 + ev.speed * 10))
+          fx.float('DIVE!', p.x, towardMid(side, p.y, 300), C.yellow, 48, side)
+        }
         continue
       }
       // A bomb: it costs points, shakes the table and stuns the basket.
@@ -164,9 +172,10 @@ class MoneyGrabber extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha = 1): void {
     const { s, ctx } = this
     renderMoney(g, s.lanes, this.time, {
+      back: this.over ? 0 : (1 - alpha) / 60,
       names: ctx.names,
       sec: Math.max(0, Math.ceil(this.limit() - this.time)),
       over: this.over,

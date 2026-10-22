@@ -11,6 +11,9 @@ import {
   BOMB,
   clampBasket,
   COIN,
+  DIVE_BONUS,
+  DIVE_SPEED,
+  type Ev,
   type Drop,
   type Item,
   laneNew,
@@ -61,6 +64,27 @@ describe('money grabber rules', () => {
     expect(evs.some((e) => e.k === 'catch')).toBe(true)
     expect(l.score).toBe(1)
     expect(l.items).toHaveLength(0)
+  })
+
+  it('a diving catch (basket sliding fast) earns a bonus; a still catch does not', () => {
+    const sched = [{ t: 0, x: 600, vy: 300, kind: COIN }]
+    const still = laneNew()
+    still.basket = 600
+    const dive = laneNew()
+    dive.basket = 600 - DIVE_SPEED * STEP * 2
+    let a: Ev[] = []
+    let b: Ev[] = []
+    for (let i = 0; i < 60 * 3; i++) {
+      a = a.concat(laneStep(still, STEP, i * STEP, sched, 600))
+      // The diving basket sweeps across under the coin right as it lands.
+      const target = still.items.length === 0 && dive.items.length === 0 ? null : 1000
+      const land = dive.items[0] && dive.items[0].y > BASKET_Y - 36
+      b = b.concat(laneStep(dive, STEP, i * STEP, sched, land ? target : dive.basket))
+    }
+    expect(still.score).toBe(1)
+    expect(a.some((e) => e.k === 'catch' && !e.dive)).toBe(true)
+    expect(dive.score).toBe(1 + DIVE_BONUS)
+    expect(b.some((e) => e.k === 'catch' && e.dive)).toBe(true)
   })
 
   it('a bill is worth 5 and a bag 10', () => {
@@ -191,6 +215,17 @@ describe('money grabber bot vs bot', () => {
       if (play(400 + seed, 'hard', 'easy').winner === 0) hard++
     }
     expect(hard).toBeGreaterThanOrEqual(12)
+  })
+
+  it('hard beats normal and normal beats easy most of the time', () => {
+    let hard = 0
+    let normal = 0
+    for (let seed = 0; seed < 10; seed++) {
+      if (play(600 + seed, 'hard', 'normal').winner === 0) hard++
+      if (play(600 + seed, 'normal', 'easy').winner === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(8)
+    expect(normal).toBeGreaterThanOrEqual(8)
   })
 
   it('hard catchers dodge bombs; easy ones do not always', () => {

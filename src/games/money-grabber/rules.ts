@@ -13,8 +13,14 @@ export const LIMIT = 45
 export const BASKET_Y = 1600
 /** Half the basket's width. */
 export const BASKET_HALF = 92
-/** Fastest the basket slides, world units per second. */
-export const BASKET_SPEED = 1500
+/** Fastest the basket slides, world units per second: quick enough to stay under a finger. */
+export const BASKET_SPEED = 2600
+/**
+ * A diving catch: money caught while the basket is sliding at least this fast
+ * (world units / s) earns DIVE_BONUS on top. Lunging for it pays.
+ */
+export const DIVE_SPEED = 1100
+export const DIVE_BONUS = 1
 /** Seconds a bomb leaves the basket unable to move. */
 export const STUN = 1
 /** Where drops appear (just past the midline, in the lane). */
@@ -62,6 +68,8 @@ export interface Lane {
   score: number
   /** Basket centre, lane x. */
   basket: number
+  /** Basket velocity over the last step (lane x per s). */
+  bv: number
   /** Game time until the basket can move again (bombs stun it). */
   stunUntil: number
   items: Item[]
@@ -75,13 +83,24 @@ export interface Lane {
 }
 
 export type Ev =
-  | { k: 'catch'; kind: number; value: number; x: number; y: number }
+  | {
+      k: 'catch'
+      kind: number
+      value: number
+      x: number
+      y: number
+      /** Diving catch: the basket was sliding fast (the bonus is in `value`). */
+      dive: boolean
+      /** 0..1 how fast the basket was moving. */
+      speed: number
+    }
   | { k: 'bomb'; value: number; x: number; y: number }
   | { k: 'drop'; kind: number; x: number; y: number }
 
 export const laneNew = (): Lane => ({
   score: 0,
   basket: 500,
+  bv: 0,
   stunUntil: -1,
   items: [],
   next: 0,
@@ -147,11 +166,13 @@ export function laneStep(
     })
     out.push({ k: 'drop', kind: d.kind, x: d.x, y: SPAWN_Y })
   }
+  const was = l.basket
   if (target !== null && time >= l.stunUntil) {
     const dx = clampBasket(target) - l.basket
     const step = Math.min(Math.abs(dx), speed * dt)
     l.basket += Math.sign(dx) * step
   }
+  l.bv = (l.basket - was) / dt
   for (const it of l.items) {
     it.y += it.vy * dt
     it.rot += it.vr * dt
@@ -168,9 +189,19 @@ export function laneStep(
         l.stunUntil = time + STUN
         out.push({ k: 'bomb', value: kind.value, x: it.x, y: it.y })
       } else {
-        l.score += kind.value
-        l.caught[it.kind] = (l.caught[it.kind] ?? 0) + kind.value
-        out.push({ k: 'catch', kind: it.kind, value: kind.value, x: it.x, y: it.y })
+        const dive = Math.abs(l.bv) >= DIVE_SPEED
+        const value = kind.value + (dive ? DIVE_BONUS : 0)
+        l.score += value
+        l.caught[it.kind] = (l.caught[it.kind] ?? 0) + value
+        out.push({
+          k: 'catch',
+          kind: it.kind,
+          value,
+          x: it.x,
+          y: it.y,
+          dive,
+          speed: Math.min(1, Math.abs(l.bv) / BASKET_SPEED),
+        })
       }
       continue
     }
