@@ -15,6 +15,9 @@ import {
   RING_AT,
   TARGET,
   TIMEOUT,
+  MATCH_POINT_BOOST,
+  SPEED_CAP,
+  matchPoint,
   puckHeight,
   ringsBell,
   roundSpeed,
@@ -92,13 +95,21 @@ describe('hammer hit rules', () => {
     expect(roundWinner(0, 0.02)).toBe(1)
   })
 
-  it('gauges get quicker each round and stay bounded', () => {
+  it('gauges get quicker each round, quicker again at match point, and stay bounded', () => {
     expect(roundSpeed(1, new Rng(4))).toBeLessThan(roundSpeed(4, new Rng(4)))
+    expect(roundSpeed(3, new Rng(4))).toBeLessThan(roundSpeed(3, new Rng(4), true))
     for (let r = 1; r <= 30; r++) {
-      const v = roundSpeed(r, new Rng(r))
+      const v = roundSpeed(r, new Rng(r), r % 2 === 0)
       expect(v).toBeGreaterThan(0.5)
-      expect(v).toBeLessThanOrEqual(1.5 * 1.04 + 1e-9)
+      expect(v).toBeLessThanOrEqual((SPEED_CAP + MATCH_POINT_BOOST) * 1.04 + 1e-9)
     }
+  })
+
+  it('match point is one win away, never in a single-round match', () => {
+    expect(matchPoint([0, 0], 3)).toBe(false)
+    expect(matchPoint([2, 0], 3)).toBe(true)
+    expect(matchPoint([1, 2], 3)).toBe(true)
+    expect(matchPoint([0, 0], 1)).toBe(false)
   })
 
   it('the winner is decided on the readout: equal numbers draw, different numbers never do', () => {
@@ -191,10 +202,50 @@ describe('hammer hit bot', () => {
     const normal = play('normal', 0.76)
     const hard = play('hard', 0.76)
     expect(easy.mean).toBeLessThan(normal.mean - 3)
-    expect(normal.mean).toBeLessThan(hard.mean - 2)
+    expect(normal.mean).toBeLessThan(hard.mean - 1)
+    expect(normal.mean).toBeGreaterThan(94)
     expect(easy.mean).toBeLessThan(90)
     expect(hard.mean).toBeGreaterThan(95)
     expect(hard.worst).toBeGreaterThan(85)
+  })
+
+  /** One best-of-5 match between two bots with the real round rules; returns the winner. */
+  function duel(a: Difficulty, b: Difficulty, seed: number): Side {
+    const rng = new Rng(seed)
+    const bots = [new HammerBot(rng.fork(), a), new HammerBot(rng.fork(), b)]
+    const wins: [number, number] = [0, 0]
+    for (let round = 1; ; round++) {
+      const speed = roundSpeed(round, rng, matchPoint(wins, TARGET))
+      const sws = [swingNew(speed), swingNew(speed)]
+      for (const bot of bots) bot.newRound()
+      let rt = 0
+      while (sws.some((sw) => sw.height < 0)) {
+        rt += STEP
+        sws.forEach((sw, i) => {
+          const bot = bots[i] as HammerBot
+          swingUpdate(sw, i as Side, STEP, rt, rt >= LEAD && bot.wantsStop(sw))
+        })
+      }
+      const w = roundWinner(sws[0]?.height ?? 0, sws[1]?.height ?? 0)
+      if (w === 'draw') continue
+      if (++wins[w] >= TARGET) return w
+    }
+  }
+
+  /** Share of `n` seeded matches that `a` (playing red, then blue) wins against `b`. */
+  function share(a: Difficulty, b: Difficulty, n = 120): number {
+    let won = 0
+    for (let i = 0; i < n; i++) {
+      if (i % 2 === 0) won += duel(a, b, 100 + i) === 0 ? 1 : 0
+      else won += duel(b, a, 100 + i) === 1 ? 1 : 0
+    }
+    return won / n
+  }
+
+  it('head to head: hard beats easy almost always, and each level beats the one below', () => {
+    expect(share('hard', 'easy')).toBeGreaterThan(0.9)
+    expect(share('normal', 'easy')).toBeGreaterThan(0.75)
+    expect(share('hard', 'normal')).toBeGreaterThan(0.6)
   })
 
   it('a faster gauge costs it height, as it would a person', () => {

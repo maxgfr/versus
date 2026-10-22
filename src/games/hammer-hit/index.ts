@@ -16,6 +16,7 @@ import { HammerBot } from './bot.ts'
 import { COL, GAUGE, PAD, STRONG, puckY, renderHammer, type Look } from './render.ts'
 import {
   LEAD,
+  matchPoint,
   ringsBell,
   roundSpeed,
   roundWinner,
@@ -98,7 +99,10 @@ class HammerHit extends BaseGame<State> {
   /** A fresh round: both gauges reset to the same speed, so the start is fair. */
   private startRound(): void {
     const s = this.s
-    const speed = roundSpeed(s.rounds.round, this.ctx.rng)
+    const r = s.rounds
+    const hot = matchPoint(r.wins, r.target)
+    const speed = roundSpeed(r.round, this.ctx.rng, hot)
+    if (hot) this.ctx.audio.play('powerup')
     s.roundAt = this.time
     s.swings = [swingNew(speed), swingNew(speed)]
     s.settleAt = -1

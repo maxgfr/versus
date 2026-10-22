@@ -4,9 +4,12 @@ import { swingStopped, type Swing } from './rules.ts'
 
 /** Timing error (s) either side of the peak, and the chance of a nervous early strike. */
 export const BOT_TUNING: Record<Difficulty, { span: number; flinch: number }> = {
+  // Welcoming: often well off the peak, and sometimes jumps the gun.
   easy: { span: 0.26, flinch: 0.15 },
-  normal: { span: 0.12, flinch: 0.05 },
-  hard: { span: 0.05, flinch: 0 },
+  // A steady player: within a few hundredths of a second most of the time.
+  normal: { span: 0.075, flinch: 0.03 },
+  // A sharp player's rhythm (±30 ms at worst): rings the bell most rounds.
+  hard: { span: 0.03, flinch: 0 },
 }
 
 /** A human needs this long after the needle starts to see the first peak coming. */

@@ -96,9 +96,22 @@ export function roundWinner(a: number, b: number): Side | 'draw' {
   return sa > sb ? 0 : 1
 }
 
-/** Gauge speed (sweeps per second) for a round. Both sides share it, so it is fair. */
-export function roundSpeed(round: number, rng: Rng): number {
-  return Math.min(1.5, 0.7 + round * 0.06) * rng.range(0.96, 1.04)
+/** Gauge speed cap (sweeps per second) from rounds alone, and the extra at match point. */
+export const SPEED_CAP = 1.6
+export const MATCH_POINT_BOOST = 0.18
+
+/** Is either side one round win from the match? */
+export const matchPoint = (wins: readonly [number, number], target: number): boolean =>
+  target > 1 && Math.max(wins[0], wins[1]) >= target - 1
+
+/**
+ * Gauge speed (sweeps per second) for a round: quicker every round, and a
+ * notch quicker again at match point so the decider is tense. Both sides
+ * share it, so it is fair.
+ */
+export function roundSpeed(round: number, rng: Rng, atMatchPoint = false): number {
+  const base = Math.min(SPEED_CAP, 0.7 + round * 0.08) + (atMatchPoint ? MATCH_POINT_BOOST : 0)
+  return base * rng.range(0.96, 1.04)
 }
 
 /** What a swing did this step, for juice. */

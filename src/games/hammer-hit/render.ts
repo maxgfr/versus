@@ -9,6 +9,7 @@ import { gaugeValue, type GaugeState, type Rounds } from '../../engines/reflex/i
 import {
   FLY,
   LEAD,
+  matchPoint,
   RING_AT,
   puckHeight,
   ringsBell,
@@ -497,9 +498,15 @@ function roundBanner(g: Draw, r: Rounds, now: number, over: boolean): void {
     if (r.phase === 'between' && r.text) {
       const k = outBack(prog(now - r.at, 0.25, 0.55))
       if (k > 0) banner(g, side, r.text, p.y, { size: 52, alpha: Math.min(1, k) })
-    } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.1) {
-      const a = 1 - Math.max(0, (now - r.at - 0.7) / 0.4)
-      banner(g, side, `Round ${r.round}`, p.y, { size: 60, alpha: a })
+    } else if (r.phase === 'play' && r.round > 1 && now - r.at < 1.3) {
+      // Match point: the gauge runs hotter, and the banner says so.
+      const hot = matchPoint(r.wins, r.target)
+      const a = 1 - Math.max(0, (now - r.at - 0.9) / 0.4)
+      banner(g, side, hot ? 'Match point!' : `Round ${r.round}`, p.y, {
+        size: 60,
+        alpha: a,
+        ...(hot ? { color: C.yellow } : {}),
+      })
     }
   }
 }
