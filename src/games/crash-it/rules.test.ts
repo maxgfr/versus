@@ -5,8 +5,11 @@ import { Input } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
 import type { Stage } from '../../core/stage.ts'
 import makeGame from './index.ts'
+import { drive, newBrain } from './bot.ts'
 import {
   AIRTIME,
+  CLIMB_OUT,
+  GAP_RAMP,
   BOOST_MAX,
   CRUISE,
   FINISH,
@@ -51,7 +54,7 @@ describe('crash it course', () => {
       kinds.add(o.kind)
       if (o.kind === 'gap') {
         expect(o.len).toBeGreaterThanOrEqual(170)
-        expect(o.len).toBeLessThanOrEqual(260)
+        expect(o.len).toBeLessThanOrEqual(260 + GAP_RAMP)
       } else expect(o.len).toBe(0)
     }
     expect(kinds).toEqual(new Set(['gap', 'wall']))
@@ -101,6 +104,30 @@ describe('crash it jumps', () => {
     expect(t.y).toBe(0)
   })
 
+  it('climbing out leaves enough run-up to clear the widest gap without boost', () => {
+    // From a standstill at the climb-out point, cruise to the edge and jump there.
+    const len = 260 + GAP_RAMP
+    const v = Math.sqrt(2 * 200 * CLIMB_OUT)
+    expect(v * AIRTIME).toBeGreaterThan(len + 20)
+    // And on a real course: a truck that fell in climbs out and makes it across.
+    const { i, o } = firstOf(3, 'gap')
+    const t = approach(3, i, 100)
+    let rose = false
+    for (let f = 0; f < 60 * 5 && !(rose && t.state === 'run'); f++) {
+      stepTruck(t, 3, DT, false, false)
+      if (t.state === 'rise') rose = true
+    }
+    expect(t.state).toBe('run')
+    expect(t.x).toBe(o.x - CLIMB_OUT)
+    let fell = false
+    for (let f = 0; f < 60 * 4 && t.k === i; f++) {
+      const press = t.y <= 0 && t.x + t.v * DT * 1.5 >= o.x && t.x < o.x
+      if (stepTruck(t, 3, DT, press, false) === 'fall') fell = true
+    }
+    expect(fell).toBe(false)
+    expect(t.k).toBeGreaterThan(i)
+  })
+
   it('does not jump while already in the air', () => {
     const t = newTruck()
     t.v = CRUISE
@@ -134,6 +161,19 @@ describe('crash it walls', () => {
     for (let f = 0; f < 60 * 2 && t.state === 'bump'; f++) stepTruck(t, 4, DT, false, false)
     expect(t.state).toBe('run')
     expect(t.x).toBeLessThan(o.x - 300)
+  })
+
+  it('a truck that hits a wall in mid-air drops back onto the road while it backs off', () => {
+    const { i } = firstOf(4, 'wall')
+    const t = approach(4, i, 40, CRUISE)
+    t.y = 120
+    t.vy = 200
+    let ev: string | null = null
+    for (let f = 0; f < 60 && !ev; f++) ev = stepTruck(t, 4, DT, false, false)
+    expect(ev).toBe('bump')
+    for (let f = 0; f < 60 * 2 && t.state === 'bump'; f++) stepTruck(t, 4, DT, false, false)
+    expect(t.y).toBe(0)
+    expect(t.vy).toBe(0)
   })
 
   it('a bumped truck can build enough speed from the back-off point to smash the wall', () => {
@@ -176,6 +216,49 @@ describe('crash it boost and flag', () => {
     expect(stepTruck(t, 1, DT, false, false)).toBe('finish')
     expect(t.finished).toBe(true)
     expect(stepTruck(t, 1, DT, true, true)).toBeNull()
+  })
+})
+
+describe('crash it bot', () => {
+  /** One truck alone on a course: seconds to the flag. */
+  function race(seed: number, d: Difficulty): number {
+    const t = newTruck()
+    const rng = new Rng(seed)
+    const brain = newBrain()
+    let f = 0
+    for (; f < 60 * 120 && !t.finished; f++) {
+      const i = drive(t, seed, d, rng, brain)
+      stepTruck(t, seed, DT, i.jump, i.boost)
+    }
+    return f / 60
+  }
+
+  it('plays by the finger rules: starting a boost on the road hops', () => {
+    const rng = new Rng(1)
+    for (let seed = 1; seed <= 6; seed++) {
+      const t = newTruck()
+      const brain = newBrain()
+      let was = false
+      for (let f = 0; f < 60 * 60 && !t.finished; f++) {
+        const grounded = t.y <= 0 && t.vy <= 0 && t.state === 'run'
+        const i = drive(t, seed, 'hard', rng, brain)
+        if (i.boost && !was && grounded) expect(i.jump).toBe(true)
+        was = i.boost
+        stepTruck(t, seed, DT, i.jump, i.boost)
+      }
+      expect(t.finished).toBe(true)
+    }
+  })
+
+  it('never gets stuck: every level reaches the flag on every course', () => {
+    for (const d of ['easy', 'normal', 'hard'] as Difficulty[])
+      for (let seed = 1; seed <= 8; seed++) expect(race(seed * 31 + 5, d)).toBeLessThan(40)
+  })
+
+  it('hard beats easy to the flag on most courses', () => {
+    const seeds = [5, 36, 67, 98, 129, 160, 191, 222]
+    const wins = seeds.filter((s) => race(s, 'hard') < race(s, 'easy')).length
+    expect(wins).toBeGreaterThanOrEqual(7)
   })
 })
 

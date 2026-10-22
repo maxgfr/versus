@@ -1,13 +1,16 @@
-import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { type GameContext, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { clamp, lerp } from '../../core/fx/ease.ts'
 import type { Ptr } from '../../core/input.ts'
 import type { Rng } from '../../core/rng.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE } from '../../core/render/palette.ts'
-import { RunnerGame, toWorld } from '../../engines/runner/index.ts'
+import { mirrorFx, RunnerGame, toWorld } from '../../engines/runner/index.ts'
 import { type Brain, drive, newBrain } from './bot.ts'
 import { drawLane } from './render.ts'
 import {
+  BOOST_V,
   ROAD_Y,
+  WALL_V,
   TRUCK_HALF,
   TRUCK_X,
   type Truck,
@@ -33,6 +36,8 @@ interface Race {
   smashX: Pair
   bumpAt: Pair
   landAt: Pair
+  /** How hard each truck last landed, 0..1 (the squash scales with it). */
+  landK: Pair
   fallAt: Pair
   /** Who won this race, or 'draw'. */
   winner: Side | 'draw' | null
@@ -67,6 +72,7 @@ function newRace(seed: number): Race {
     smashX: [0, 0],
     bumpAt: [-9, -9],
     landAt: [-9, -9],
+    landK: [0, 0],
     fallAt: [-9, -9],
     winner: null,
     endAt: -1,
@@ -78,6 +84,30 @@ class CrashIt extends RunnerGame<State> {
   private rng: Rng | null = null
   /** Sides whose truck crossed the flag during the current step. */
   private crossed: Side[] = []
+  /** Cosmetic: each truck's position at the previous step, for interpolation. */
+  private prev: [{ x: number; y: number }, { x: number; y: number }] = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ]
+  private stepped = false
+  private alpha = 1
+
+  override init(ctx: GameContext): void {
+    super.init(ctx)
+    // Effects land where each lane is drawn, also when a half is shown turned (online).
+    mirrorFx(ctx, this.frames)
+  }
+
+  override render(g: Draw, alpha = 1): void {
+    // Hit-stop freezes the world: no blending between two steps that are not moving.
+    this.alpha = this.stepped && this.ctx.fx.hitstop === 0 ? alpha : 1
+    super.render(g)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.stepped = false
+  }
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -117,6 +147,12 @@ class CrashIt extends RunnerGame<State> {
   }
 
   protected override step(dt: number): void {
+    for (const side of [0, 1] as Side[]) {
+      const t = this.s.lanes[side]
+      this.prev[side].x = t.x
+      this.prev[side].y = t.y
+    }
+    this.stepped = true
     super.step(dt)
     if (this.crossed.length === 0) return
     const [a, b] = this.crossed
@@ -213,9 +249,12 @@ class CrashIt extends RunnerGame<State> {
     }
     const airborne = t.y > 0 || t.vy > 0
     const wasBoosting = t.boosting
+    const v = t.v
+    const vy = t.vy
     const ev = stepTruck(t, seed, dt, press, hold)
-    if (ev) this.onEvent(side, t, ev)
-    if (airborne && t.state === 'run' && t.y <= 0 && t.vy <= 0 && ev !== 'jump') this.onLand(side)
+    if (ev) this.onEvent(side, t, ev, v)
+    if (airborne && t.state === 'run' && t.y <= 0 && t.vy <= 0 && ev !== 'jump')
+      this.onLand(side, vy)
     if (t.boosting && !wasBoosting) this.ctx.audio.play('powerup', 1.3)
     // Wheel dust while the truck drives on the road.
     if (t.v > 120 && t.y <= 0 && Math.round(this.time * 60) % 6 === side) {
@@ -229,53 +268,66 @@ class CrashIt extends RunnerGame<State> {
     return toWorld(this.frames[side], x, y)
   }
 
-  private onLand(side: Side): void {
+  /** A touch-down as heavy as the drop: squash, dust, thud and a jolt for the big ones. */
+  private onLand(side: Side, vy: number): void {
+    const k = clamp(-vy / 900, 0, 1)
     this.s.landAt[side] = this.time
+    this.s.landK[side] = k
     const wheels = this.at(side, TRUCK_X, ROAD_Y - 4)
-    this.ctx.audio.play('thud', 1.2)
-    this.ctx.fx.puff(wheels.x, wheels.y, alpha(C.white, 0.65), 8)
+    this.ctx.audio.play('thud', 1.4 - k * 0.5)
+    this.ctx.fx.puff(wheels.x, wheels.y, alpha(C.white, 0.65), Math.round(4 + k * 8))
+    if (k > 0.6) {
+      this.ctx.fx.shake(0.08 + k * 0.12)
+      this.ctx.audio.buzz?.(10)
+    }
   }
 
-  private onEvent(side: Side, t: Truck, ev: TruckEvent): void {
+  private onEvent(side: Side, t: Truck, ev: TruckEvent, v: number): void {
     const fx = this.ctx.fx
     const front = this.at(side, TRUCK_X + TRUCK_HALF - 20, ROAD_Y - t.y - 80)
     const wheels = this.at(side, TRUCK_X, ROAD_Y - 4)
     switch (ev) {
       case 'jump':
-        this.ctx.audio.play('boing', 1.05)
-        fx.puff(wheels.x, wheels.y, alpha(C.white, 0.6), 6)
+        // Faster trucks launch with a deeper boing.
+        this.ctx.audio.play('boing', 1.2 - Math.min(0.3, v / 2500))
+        fx.puff(wheels.x, wheels.y, alpha(C.white, 0.6), Math.round(4 + v / 150))
         break
       case 'smash': {
+        // The harder it hits, the bigger the bang: speed past smashing point drives it all.
+        const k = clamp((v - WALL_V) / (BOOST_V - WALL_V), 0, 1)
         this.s.smashAt[side] = this.time
         this.s.smashX[side] = t.x + TRUCK_HALF
-        this.ctx.audio.play('explode', 0.95 + Math.min(0.2, t.smashed * 0.02))
-        this.ctx.audio.buzz?.(35)
+        this.ctx.audio.play('explode', 1.05 - k * 0.2 + Math.min(0.2, t.smashed * 0.02))
+        this.ctx.audio.buzz?.(Math.round(25 + k * 25))
         const hit = this.at(side, TRUCK_X + TRUCK_HALF, ROAD_Y - 120)
         fx.burst(hit.x, hit.y, '#c2703d', {
-          count: 26,
-          speed: 560,
+          count: Math.round(18 + k * 16),
+          speed: 460 + k * 260,
           size: 16,
           kind: 'square',
           gravity: 1200,
         })
         fx.burst(hit.x, hit.y, C.yellow, { count: 12, speed: 420, size: 9, kind: 'spark' })
         fx.puff(hit.x, hit.y, alpha('#ffffff', 0.7), 10)
-        fx.shake(0.45)
-        fx.stop(4)
+        fx.ring(hit.x, hit.y, C.yellow, 160 + k * 100)
+        fx.shake(0.3 + k * 0.3)
+        fx.stop(Math.round(3 + k * 3))
         const above = this.at(side, TRUCK_X + 60, ROAD_Y - 330)
-        fx.float('Smash!', above.x, above.y, C.yellow, 68, side)
+        fx.float(k > 0.8 ? 'SMASH!' : 'Smash!', above.x, above.y, C.yellow, 60 + k * 16, side)
         break
       }
-      case 'bump':
+      case 'bump': {
+        const k = clamp(v / WALL_V, 0.3, 1)
         this.s.bumpAt[side] = this.time
-        this.ctx.audio.buzz?.(40)
-        this.ctx.audio.play('hit')
+        this.ctx.audio.buzz?.(Math.round(20 + k * 25))
+        this.ctx.audio.play('hit', 1.1 - k * 0.2)
         this.ctx.audio.play('wall', 0.9)
-        fx.sparks(front.x, front.y, C.yellow, 16)
+        fx.sparks(front.x, front.y, C.yellow, Math.round(8 + k * 12))
         fx.puff(front.x, front.y, alpha(C.white, 0.7), 8)
-        fx.shake(0.4)
-        fx.stop(5)
+        fx.shake(0.2 + k * 0.25)
+        fx.stop(Math.round(2 + k * 3))
         break
+      }
       case 'fall': {
         this.s.fallAt[side] = this.time
         this.ctx.audio.play('thud')
@@ -299,8 +351,13 @@ class CrashIt extends RunnerGame<State> {
     view: { x0: number; y0: number; x1: number; y1: number },
   ): void {
     const s = this.s
+    const t = s.lanes[side]
+    const p = this.prev[side]
+    // Blend toward the latest step, unless the truck jumped back (a new race, a crane).
+    const a = Math.abs(t.x - p.x) > 200 ? 1 : this.alpha
     drawLane(g, side, view, {
-      truck: s.lanes[side],
+      truck: { ...t, x: lerp(p.x, t.x, a), y: lerp(p.y, t.y, a) },
+      landK: s.landK[side],
       rival: s.lanes[other(side)],
       seed: s.seed,
       time: this.time,

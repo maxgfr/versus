@@ -44,10 +44,16 @@ export interface Obstacle {
   len: number
 }
 
+/** Run-up a truck gets after climbing out of a pit: enough to clear the widest gap at cruise. */
+export const CLIMB_OUT = 300
+/** Gaps widen by up to this much toward the flag: the run home is the tensest. */
+export const GAP_RAMP = 30
+
 export function obstacleAt(seed: number, i: number): Obstacle {
   const x = 900 + i * 600 + Math.floor(hash01(seed, i, 1) * 160)
   const kind: Kind = hash01(seed, i, 2) < 0.5 ? 'gap' : 'wall'
-  return { x, kind, len: kind === 'gap' ? 170 + Math.floor(hash01(seed, i, 3) * 90) : 0 }
+  const ramp = Math.floor(GAP_RAMP * Math.min(1, x / FINISH))
+  return { x, kind, len: kind === 'gap' ? 170 + Math.floor(hash01(seed, i, 3) * 90) + ramp : 0 }
 }
 
 export type TState = 'run' | 'bump' | 'fall' | 'rise'
@@ -117,6 +123,12 @@ export function stepTruck(
   if (t.finished) return null
   if (t.state === 'bump') {
     t.timer -= dt
+    // Bounced off the wall in mid-air: it drops back onto the road while sliding.
+    if (t.y > 0) {
+      t.vy -= GRAV * dt
+      t.y = Math.max(0, t.y + t.vy * dt)
+      if (t.y === 0) t.vy = 0
+    }
     const p = 1 - Math.max(0, t.timer) / BUMP_T
     t.x = t.from + (t.to - t.from) * (p * p * (3 - 2 * p))
     t.v = 0
@@ -135,7 +147,7 @@ export function stepTruck(
       // Climb back out on the near side of the pit.
       t.state = 'rise'
       t.timer = RISE_T
-      t.x = obstacleAt(seed, t.k).x - 220
+      t.x = obstacleAt(seed, t.k).x - CLIMB_OUT
       t.y = -FALL_DEPTH
       t.vy = 0
       t.v = 0
@@ -201,6 +213,7 @@ export function stepTruck(
       // Back up far enough to build the speed for a second try.
       t.to = t.from - 420
       t.v = 0
+      t.vy = Math.min(0, t.vy)
       t.boosting = false
       return 'bump'
     }

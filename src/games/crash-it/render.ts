@@ -21,6 +21,8 @@ import { card, chip, scorePill } from './ui.ts'
 type View = { x0: number; y0: number; x1: number; y1: number }
 
 export interface LaneView {
+  /** How hard the last landing was, 0..1. */
+  landK: number
   truck: Truck
   rival: Truck
   seed: number
@@ -436,10 +438,15 @@ function truckAt(g: Draw, side: Side, t: Truck, o: LaneView): void {
   let sx = 1
   let sy = 1
   if (sinceLand >= 0 && sinceLand < 0.3) {
+    // Deeper after a big drop.
     const q = Math.sin((sinceLand / 0.3) * Math.PI) * (1 - sinceLand / 0.3)
-    sx = 1 + 0.12 * q
-    sy = 1 - 0.14 * q
+    const d = 0.6 + 0.8 * o.landK
+    sx = 1 + 0.12 * q * d
+    sy = 1 - 0.14 * q * d
   }
+  // Stretched by the launch, leaning back on the boost.
+  if (t.state === 'run' && t.vy > 0) sy *= 1 + Math.min(0.08, t.vy / 9000)
+  if (t.boosting && t.y <= 0) ang -= 0.03
   if (sinceBump >= 0 && sinceBump < 0.35) {
     const q = Math.sin((sinceBump / 0.35) * Math.PI)
     sx *= 1 - 0.1 * q
@@ -558,13 +565,15 @@ function hud(g: Draw, side: Side, o: LaneView, obs: ReturnType<typeof visible>):
   const wallNear = next?.kind === 'wall' && ahead - TRUCK_HALF < 560
   boostMeter(g, side, t, o.time, wallNear)
 
+  // Online, each phone only coaches its own player: the rival's lane gets no tips.
+  const coach = !o.bot && (g.viewer === null || g.viewer === side)
   if (o.phase === 'ready') {
     const later = o.round > 1
     card(
       g,
       side,
-      later ? `Round ${o.round}` : o.bot ? 'Ready…' : 'Tap to jump',
-      later ? `${o.wins} – ${o.rivalWins}` : o.bot ? o.name : 'Hold to boost through walls',
+      later ? `Round ${o.round}` : coach ? 'Tap to jump' : 'Ready…',
+      later ? `${o.wins} – ${o.rivalWins}` : coach ? 'Hold to boost through walls' : o.name,
       CARD_Y,
       o.since,
       { x: CARD_X },
@@ -609,7 +618,7 @@ function hud(g: Draw, side: Side, o: LaneView, obs: ReturnType<typeof visible>):
       g,
       side,
       'Ouch!',
-      o.bot ? 'Too slow for the wall' : 'Hold to boost, then hit it',
+      coach ? 'Hold to boost, then hit it' : 'Too slow for the wall',
       CARD_Y,
       o.time - o.bumpAt,
       { x: CARD_X, accent: C.orange },
@@ -621,14 +630,14 @@ function hud(g: Draw, side: Side, o: LaneView, obs: ReturnType<typeof visible>):
       g,
       side,
       'Into the pit!',
-      o.bot ? 'Craning it out…' : 'Tap earlier to jump',
+      coach ? 'Tap earlier to jump' : 'Craning it out…',
       CARD_Y,
       o.time - o.fallAt,
       { x: CARD_X, accent: C.orange },
     )
     return
   }
-  if (!o.bot && next && t.state === 'run') {
+  if (coach && next && t.state === 'run') {
     // Teach the two verbs right before the obstacle that needs them.
     const yellow = { color: C.ink, bg: alpha(C.yellow, 0.95), size: 42 }
     if (next.kind === 'wall' && wallNear && !t.boosting && t.v < WALL_V)
