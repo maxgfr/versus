@@ -243,6 +243,41 @@ describe('block bot', () => {
     }
   })
 
+  it('the hard computer never strands a piece it still has to place when it can help it', () => {
+    // Room for exactly one 3x3 in the corner, and a dot: the dot must not take the 3x3's spot.
+    const g = empty()
+    for (let i = 0; i < N * N; i++) {
+      const x = i % N
+      const y = Math.floor(i / N)
+      if (!(x < 3 && y < 3) && !(x === 7 && y === 7) && !(x === 7 && y === 0)) g[i] = 1
+    }
+    const sq = SHAPES.findIndex((s) => s.w === 3 && s.h === 3 && s.cells.length === 9)
+    const m = chooseMove(g, [DOT, codeOf(sq, 0), null], 'hard', new Rng(1))
+    expect(m?.slot === 1 || (m?.slot === 0 && !(m.x < 3 && m.y < 3))).toBe(true)
+  })
+
+  it('hard outscores easy over the same 90 s, course after course', () => {
+    const play = (seed: number, d: 'easy' | 'hard'): number => {
+      const seq = pieceSequence(seed)
+      let b: Board = { grid: empty(), tray: trayAt(seq, 0), k: 0 }
+      const rng = new Rng(seed)
+      let score = 0
+      for (let t = 0; t < 90; t += PACE[d]) {
+        const m = chooseMove(b.grid, b.tray, d, rng)
+        if (!m) break
+        const r = step(b, seq, m.slot, m.x, m.y)
+        if (!r) break
+        score += r.points
+        b = r.board
+        if (r.dead) break
+      }
+      return score
+    }
+    let wins = 0
+    for (let seed = 1; seed <= 5; seed++) if (play(seed, 'hard') > play(seed, 'easy')) wins++
+    expect(wins).toBe(5)
+  })
+
   for (const d of ['easy', 'normal', 'hard'] as const) {
     it(`plays a whole two-player match on ${d} to the end, within the clock`, () => {
       const seq = pieceSequence(31)

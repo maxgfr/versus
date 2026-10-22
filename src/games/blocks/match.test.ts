@@ -45,4 +45,21 @@ describe('blocks match length', () => {
     expect(t).toBeGreaterThanOrEqual(30)
     expect(t).toBeLessThan(35)
   })
+
+  it('ends at once when one board is out of moves and the other is already ahead', () => {
+    const g = game()
+    g.init(ctx(90))
+    const s = (g.snapshot() as { s: { boards: { dead: boolean; score: number }[] } }).s
+    const [a, b] = s.boards as [{ dead: boolean; score: number }, { dead: boolean; score: number }]
+    a.dead = true
+    a.score = 40
+    b.score = 30
+    // Behind: blue plays on.
+    g.update(1 / 60)
+    expect(g.result).toBeNull()
+    b.score = 41
+    for (let i = 0; i < 60 * 3 && !g.result; i++) g.update(1 / 60)
+    expect(g.result?.winner).toBe(1)
+    expect((g.snapshot() as { t: number }).t).toBeLessThan(5)
+  })
 })

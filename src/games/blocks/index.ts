@@ -50,6 +50,8 @@ export interface Board {
   fadeAt: number
   /** Lines cleared by the last drop (the combo banner). */
   lines: number
+  /** How hard the last piece was slammed down, 0..1 (the finger's speed on release). */
+  slam: number
   /** When the score last went up (it pops). */
   scoreAt: number
   /** A piece being dragged: its tray slot, the finger's panel-local position, and when it was picked up. */
@@ -104,6 +106,7 @@ class Blocks extends BaseGame<State> {
       fade: [],
       fadeAt: -10,
       lines: 0,
+      slam: 0,
       scoreAt: -10,
       drag: null,
       back: null,
@@ -135,6 +138,20 @@ class Blocks extends BaseGame<State> {
     }
     if (this.time >= this.target) this.end(true)
     else if (this.sides().every((s) => this.s.boards[s].dead)) this.end(false)
+    else if (this.decided()) this.end(false)
+  }
+
+  /**
+   * Two players, one out of moves and the other already ahead: nothing can
+   * change the result, so the match ends now instead of running the clock down.
+   */
+  private decided(): boolean {
+    if (this.solo) return false
+    const [a, b] = this.s.boards
+    if (a.dead === b.dead) return false
+    const out = a.dead ? a : b
+    const on = a.dead ? b : a
+    return on.score > out.score
   }
 
   private humanTurn(side: Side): void {
@@ -166,6 +183,9 @@ class Blocks extends BaseGame<State> {
     d.y = q.y
     if (up) {
       b.drag = null
+      // The finger's speed as it lets go: a flick slams the piece down.
+      const speed = Math.hypot(p.x - p.px, p.y - p.py) * 60
+      b.slam = Math.max(0, Math.min(1, (speed - 300) / 2200))
       this.drop(side, d.slot, q.x, q.y - l.lift)
     }
   }
@@ -194,6 +214,7 @@ class Blocks extends BaseGame<State> {
       if (this.time - b.aim.at < AIM) return
       const a = b.aim
       b.aim = null
+      b.slam = 0.35
       this.commit(side, a.slot, a.x, a.y)
       return
     }
@@ -235,7 +256,17 @@ class Blocks extends BaseGame<State> {
       l.gx0 + (sx / r.placed.length) * l.cs,
       l.gy0 + (sy / r.placed.length) * l.cs,
     )
-    this.ctx.fx.burst(at.x, at.y, SIDE[side].light, { count: 8, speed: 240, size: 8, life: 0.4 })
+    const slam = b.slam
+    this.ctx.fx.burst(at.x, at.y, SIDE[side].light, {
+      count: Math.round(8 + slam * 10),
+      speed: 240 + slam * 260,
+      size: 8,
+      life: 0.4,
+    })
+    if (slam > 0.5) {
+      this.ctx.fx.shake(0.05 + slam * 0.12)
+      this.ctx.audio.buzz(Math.round(6 + slam * 10))
+    }
     if (r.lines) {
       b.fade = r.cleared
       b.fadeAt = this.time
@@ -270,7 +301,8 @@ class Blocks extends BaseGame<State> {
       this.ctx.fx.shake(0.12 + 0.05 * r.lines)
       this.ctx.audio.play('score', 1 + r.lines * 0.12)
     } else {
-      this.ctx.audio.play('place', 0.95 + r.placed.length * 0.02)
+      this.ctx.audio.play('place', 0.95 + r.placed.length * 0.02 - slam * 0.25)
+      if (slam > 0.5) this.ctx.audio.play('thud', 1.3 - slam * 0.3)
     }
     this.ctx.fx.float(`+${r.placed.length}`, at.x, at.y + (f.angle ? -40 : 40), C.white, 44, side)
     if (r.dead) this.die(side)
@@ -336,7 +368,7 @@ class Blocks extends BaseGame<State> {
     })
   }
 
-  private view(side: Side): PanelView {
+  private view(side: Side, g: Draw): PanelView {
     const b = this.s.boards[side]
     return {
       side,
@@ -346,6 +378,7 @@ class Blocks extends BaseGame<State> {
       tray: b.tray,
       placed: b.placed,
       placedAt: b.placedAt,
+      slam: b.slam,
       fade: b.fade,
       fadeAt: b.fadeAt,
       lines: b.lines,
@@ -357,7 +390,13 @@ class Blocks extends BaseGame<State> {
       dead: b.dead,
       deadAt: b.deadAt,
       clock: this.left(),
-      hint: !this.isBot(side) && !b.dead && b.score === 0 && this.time < 8,
+      // Online, each phone only coaches its own player.
+      hint:
+        !this.isBot(side) &&
+        (g.viewer === null || g.viewer === side) &&
+        !b.dead &&
+        b.score === 0 &&
+        this.time < 8,
       best: this.solo ? (store.records.blocks ?? null) : null,
       now: this.time,
     }
@@ -370,7 +409,7 @@ class Blocks extends BaseGame<State> {
       inFrame(g, f, () => {
         const v = localView(g, f)
         g.rect(v.x0, v.y0, v.x1 - v.x0, v.y1 - v.y0, shade(SIDE[side].main, -0.78))
-        drawPanel(g, f.w, f.h, this.view(side))
+        drawPanel(g, f.w, f.h, this.view(side, g))
       })
     }
     if (!this.solo) {

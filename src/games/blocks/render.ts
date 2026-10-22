@@ -99,6 +99,8 @@ export interface PanelView {
   tray: readonly (number | null)[]
   placed: readonly number[]
   placedAt: number
+  /** How hard the last piece was slammed down, 0..1. */
+  slam: number
   fade: readonly { cell: number; value: number }[]
   fadeAt: number
   /** Lines cleared by the last drop (for the combo banner). */
@@ -275,7 +277,9 @@ export function drawPanel(g: Draw, w: number, h: number, v: PanelView): void {
     const color =
       dim > 0 ? mix(TOYS[val - 1] as string, C.ink3, dim * 0.75) : (TOYS[val - 1] as string)
     if (popK < 1 && v.placed.includes(i)) {
-      const sc = 0.55 + 0.45 * outBack(popK)
+      // A slammed piece lands flatter and bounces back harder.
+      const from = 0.55 - 0.2 * v.slam
+      const sc = from + (1 - from) * outBack(popK) + 0.1 * v.slam * Math.sin(popK * Math.PI)
       g.at(bx + cs / 2, by + cs / 2, 0, () => block(g, -cs / 2, -cs / 2, cs, color), sc)
     } else block(g, bx, by, cs, color)
   }
