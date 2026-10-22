@@ -25,6 +25,9 @@ import {
   matchWinner,
   stepDuel,
   strikeTime,
+  heatOf,
+  HEAT_REST,
+  HEAT_STRIKE,
   type Duel,
   type Ev,
   type Touch,
@@ -441,5 +444,85 @@ describe('hand slap match length', () => {
     d.points = [3, 1]
     expect(matchWinner(d, 3)).toBe(0)
     expect(matchWinner(d, 7)).toBeNull()
+  })
+})
+
+describe('hand slap ramp', () => {
+  it('heat rises with the leading score and is full at match point', () => {
+    expect(heatOf([0, 0], 5)).toBe(0)
+    expect(heatOf([2, 1], 5)).toBeCloseTo(0.5)
+    expect(heatOf([1, 4], 5)).toBe(1)
+    expect(heatOf([0, 0], 1)).toBe(1)
+  })
+
+  it('a hotter match lands slaps sooner, the same for both players', () => {
+    expect(strikeTime(HOLD_FORCE, 1)).toBeCloseTo(STRIKE * (1 - HEAT_STRIKE))
+    expect(strikeTime(1, 1)).toBeLessThan(strikeTime(1, 0))
+    const rng = new Rng(40)
+    const d = ready()
+    d.heat = 1
+    stepDuel(d, STEP, PRESS, NONE, rng)
+    steps(d, Math.ceil(COMMIT / STEP) + 1, HOLD, NONE, rng)
+    expect(d.strike).toBeCloseTo(STRIKE * (1 - HEAT_STRIKE))
+  })
+
+  it('a hotter match rests less between attacks', () => {
+    const rest = (heat: number): number => {
+      const rng = new Rng(41)
+      const d = ready()
+      d.heat = heat
+      stepDuel(d, STEP, PRESS, NONE, rng)
+      settle(d, rng)
+      return d.cool
+    }
+    expect(rest(1)).toBeLessThan(rest(0) * (1 - HEAT_REST) + 1e-9)
+  })
+})
+
+/** A whole match between two bots, with the heat ramp, to `target` points. */
+function botMatch(a: Difficulty, b: Difficulty, seed: number, target = 5): Side {
+  const rng = new Rng(seed)
+  const bots = [new SlapBot(rng.fork(), a), new SlapBot(rng.fork(), b)]
+  const d = duelNew(rng.chance(0.5) ? 1 : 0)
+  for (let i = 0; i < 60 * 600; i++) {
+    const att = d.att
+    const def: Side = att === 0 ? 1 : 0
+    const view = {
+      phase: d.phase,
+      t: d.t,
+      cool: d.cool,
+      pend: d.pend,
+      flinched: d.flinched,
+      strike: d.strike,
+    }
+    const ta = (bots[att] as SlapBot).drive(STEP, 'att', view)
+    const tb = (bots[def] as SlapBot).drive(STEP, 'def', view)
+    stepDuel(d, STEP, ta, tb, rng)
+    d.heat = heatOf(d.points, target)
+    const w = matchWinner(d, target)
+    if (w !== null) return w
+  }
+  throw new Error('match never ended')
+}
+
+describe('hand slap difficulty spread', () => {
+  const share = (strong: Difficulty, weak: Difficulty, n: number): number => {
+    let wins = 0
+    for (let seed = 1; seed <= n; seed++) {
+      // Swap sides every other match.
+      const flip = seed % 2 === 0
+      const w = flip ? botMatch(weak, strong, seed) : botMatch(strong, weak, seed)
+      if ((w === 0) !== flip) wins++
+    }
+    return wins / n
+  }
+
+  it('hard beats easy most of the time over seeded matches', () => {
+    expect(share('hard', 'easy', 40)).toBeGreaterThanOrEqual(0.85)
+  })
+
+  it('normal beats easy, and hard beats normal, more often than not', () => {
+    expect(share('normal', 'easy', 40)).toBeGreaterThanOrEqual(0.75)
+    expect(share('hard', 'normal', 40)).toBeGreaterThan(0.5)
   })
 })

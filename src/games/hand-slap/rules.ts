@@ -61,6 +61,11 @@ export interface Duel {
   strike: number
   /** The attacker pressed just before the rest ended and is still holding. */
   queued: boolean
+  /**
+   * 0..1 tension of the match (1 at match point): slaps land faster and the
+   * rests get shorter as it rises. The same for both players.
+   */
+  heat: number
   points: [number, number]
 }
 
@@ -75,14 +80,26 @@ export const duelNew = (att: Side): Duel => ({
   force: HOLD_FORCE,
   strike: STRIKE,
   queued: false,
+  heat: 0,
   points: [0, 0],
 })
 
-/** Seconds from commit to impact for a slap of `force` (0..1). */
-export const strikeTime = (force: number): number =>
-  STRIKE -
-  ((Math.max(HOLD_FORCE, Math.min(1, force)) - HOLD_FORCE) / (1 - HOLD_FORCE)) *
-    (STRIKE - STRIKE_MIN)
+/** How much faster a slap lands, and how much shorter a rest is, at full heat. */
+export const HEAT_STRIKE = 0.15
+export const HEAT_REST = 0.35
+
+/** Match tension from the score: 0 at the start, 1 once either side is a point from `target`. */
+export function heatOf(points: readonly [number, number], target: number): number {
+  if (target <= 1) return 1
+  return Math.min(1, Math.max(points[0], points[1]) / (target - 1))
+}
+
+/** Seconds from commit to impact for a slap of `force` (0..1) at match `heat` (0..1). */
+export const strikeTime = (force: number, heat = 0): number =>
+  (STRIKE -
+    ((Math.max(HOLD_FORCE, Math.min(1, force)) - HOLD_FORCE) / (1 - HOLD_FORCE)) *
+      (STRIKE - STRIKE_MIN)) *
+  (1 - HEAT_STRIKE * Math.min(1, Math.max(0, heat)))
 
 /**
  * What one side did this step. `held` is still down; `press` went down this
@@ -138,7 +155,7 @@ export function stepDuel(d: Duel, dt: number, a: Touch, b: Touch, rng: Rng): Ev[
       d.phase = 'strike'
       d.t = 0
       d.force = flick > 0 ? Math.max(HOLD_FORCE, Math.min(1, flick)) : HOLD_FORCE
-      d.strike = strikeTime(d.force)
+      d.strike = strikeTime(d.force, d.heat ?? 0)
       evs.push('commit')
       if (d.pend) {
         d.dodged = true
@@ -194,7 +211,7 @@ export function stepDuel(d: Duel, dt: number, a: Touch, b: Touch, rng: Rng): Ev[
 function finish(d: Duel, rng: Rng, k = 1): void {
   d.phase = 'rest'
   d.t = 0
-  d.cool = (REST + rng.range(0, REST_SPREAD)) * k
+  d.cool = (REST + rng.range(0, REST_SPREAD)) * k * (1 - HEAT_REST * (d.heat ?? 0))
   d.pend = false
   d.dodged = false
   d.flinched = false

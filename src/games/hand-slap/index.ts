@@ -1,6 +1,7 @@
 import { BaseGame, other, type MatchSpec, type Side } from '../../core/game.ts'
 import { lerp, Spring } from '../../core/fx/ease.ts'
 import { frame } from '../../core/frame.ts'
+import { floatFor } from '../../core/fx/fx.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -14,6 +15,7 @@ import {
   IMPACT,
   duelNew,
   handTarget,
+  heatOf,
   matchWinner,
   stepDuel,
   type Duel,
@@ -117,6 +119,13 @@ class HandSlap extends BaseGame<State> {
 
     const evs = stepDuel(d, dt, a, b, ctx.rng)
     for (const ev of evs) this.juice(ev, att)
+    // The match tightens toward its end: faster slaps, shorter rests.
+    const heat = heatOf(d.points, s.target)
+    if (heat >= 1 && (d.heat ?? 0) < 1 && s.target > 1 && matchWinner(d, s.target) === null) {
+      ctx.audio.play('powerup', 1.2)
+      for (const side of [0, 1] as Side[]) floatFor(ctx.fx, side, 'Match point!')
+    }
+    d.heat = heat
 
     // Palms ease to where the duel wants them; a harder slap travels faster.
     for (const side of [0, 1] as Side[]) {
