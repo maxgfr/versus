@@ -18,6 +18,8 @@ export interface RecentRoom {
   code: string
   role: 'host' | 'guest'
   at: number
+  /** The last game played there, so the players can go straight back to it. */
+  game?: string
 }
 
 export interface Saved {
@@ -106,8 +108,21 @@ const MAX_ROOMS = 6
 
 export function rememberRoom(code: string, role: RecentRoom['role']): void {
   if (!store.settings.rememberRooms) return
-  store.rooms = [{ code, role, at: Date.now() }, ...store.rooms.filter((r) => r.code !== code)]
+  const game = store.rooms.find((r) => r.code === code)?.game
+  const room: RecentRoom = game
+    ? { code, role, at: Date.now(), game }
+    : { code, role, at: Date.now() }
+  store.rooms = [room, ...store.rooms.filter((r) => r.code !== code)]
   store.rooms.length = Math.min(store.rooms.length, MAX_ROOMS)
+  save()
+}
+
+/** A game started in room `code`: it becomes the one to go back to. */
+export function roomGame(code: string, game: string): void {
+  const r = store.rooms.find((x) => x.code === code)
+  if (!r) return
+  r.game = game
+  r.at = Date.now()
   save()
 }
 

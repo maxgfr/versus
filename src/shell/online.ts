@@ -2,8 +2,9 @@ import { Link, newCode, type Role } from '../core/net/link.ts'
 import { audio } from '../core/audio.ts'
 import { forgetRooms, type RecentRoom, rememberRoom, store } from '../core/store.ts'
 import qrcode from 'qrcode-generator'
+import { findGame, isBuilt } from '../registry.ts'
 import { clear, h, onTap } from './dom.ts'
-import { home } from './home.ts'
+import { home, playOnline } from './home.ts'
 import { icon } from './icons.ts'
 import { go } from './router.ts'
 import { ROOM_KEY, ui } from './state.ts'
@@ -48,6 +49,9 @@ function saved(): Saved | null {
 /** The room just left, so "Rejoin" gets the same seat back. */
 let last: Saved | null = null
 
+/** Rejoined from "Your rooms": go straight back into its last game once the friend is in. */
+let resume: { code: string; id: string } | null = null
+
 export const roomPath = (code: string): string => `/online/${code}`
 const inGame = (code: string) => location.hash.startsWith(`#${roomPath(code)}/play/`)
 
@@ -65,6 +69,15 @@ function connect(code: string, role: Role): Link {
       pending = r.target === undefined ? { seed: r.seed } : { seed: r.seed, target: r.target }
       go(path)
     })
+  } else {
+    // The guest picked a game (or is back in one after a reload): start it here,
+    // the round pulls the guest in. A host already in a game keeps playing it.
+    link.on('pick', (d) => {
+      const g = findGame((d as { id?: string } | null)?.id ?? '')
+      if (!g || !isBuilt(g.id) || !g.online || location.hash !== `#${roomPath(code)}`) return
+      toast(`Your friend picked ${g.name}.`)
+      go(`${roomPath(code)}/play/${g.id}`)
+    })
   }
   link.on('quit', () => {
     if (inGame(code)) {
@@ -80,7 +93,7 @@ function connect(code: string, role: Role): Link {
           ? 'Your friend is back.'
           : role === 'host'
             ? 'Friend connected! Pick a game.'
-            : 'Connected! Your friend picks the game.',
+            : 'Connected! Pick a game.',
       )
     } else {
       toast('Your friend disconnected.')
@@ -107,6 +120,7 @@ export function leaveRoom(): void {
   const link = ui.link
   if (!link) return
   last = { code: link.code, role: link.role }
+  resume = null
   link.leave()
   ui.link = null
   remember(null)
@@ -187,7 +201,7 @@ export function lobby(root: HTMLElement): void {
     h(
       'section.panel',
       h('h2', 'Host'),
-      h('p', 'Create a room and send the link to your friend. You play Red and pick the games.'),
+      h('p', 'Create a room and send the link to your friend. You play Red.'),
       create,
     ),
     h(
@@ -217,18 +231,20 @@ function recent(): HTMLElement[] {
   if (!store.rooms.length) return []
   const list = h('ul.rooms')
   const item = (r: RecentRoom) => {
+    const game = r.game ? findGame(r.game) : undefined
     const open = h(
       'button.room-open',
-      { 'aria-label': `Rejoin room ${r.code}` },
+      { 'aria-label': game ? `Back to ${game.name} in room ${r.code}` : `Rejoin room ${r.code}` },
       h('span.room-code', r.code),
       h(
         'span.room-meta',
-        r.role === 'host' ? 'You created it' : 'You joined',
+        game ? `Back to ${game.name}` : r.role === 'host' ? 'You created it' : 'You joined',
         h('span.sub', ago(r.at)),
       ),
     )
     onTap(open, () => {
       audio.unlock()
+      resume = game ? { code: r.code, id: game.id } : null
       room(r.code, r.role)
       go(roomPath(r.code))
     })
@@ -295,10 +311,27 @@ export function roomScreen(root: HTMLElement, code: string): () => void {
     clear(root)
     if (link.connected) cleanup = home(root, 'online')
     else cleanup = waiting(root, link)
+    const back = resume?.code === code ? findGame(resume.id) : undefined
+    if (link.connected && back) {
+      resume = null
+      // After this screen is in place, not in the middle of routing to it.
+      setTimeout(() => {
+        if (location.hash === `#${roomPath(code)}`) playOnline(link, back)
+      })
+    }
   }
   show()
   const unwatch = link.watch(show)
+  // A guest still in a game (this host reloaded under it) answers with a pick.
+  // Repeated: a reloaded host's first messages can be lost while the guest's
+  // link still points at the old page.
+  const lobby = () => {
+    if (link.role === 'host' && link.connected) link.send('lobby')
+  }
+  lobby()
+  const ping = window.setInterval(lobby, 2000)
   return () => {
+    clearInterval(ping)
     unwatch()
     if (typeof cleanup === 'function') cleanup()
   }

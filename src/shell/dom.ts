@@ -44,10 +44,11 @@ export function clear(el: Element): void {
   while (el.firstChild) el.removeChild(el.firstChild)
 }
 
-// Where each finger went down, and the last scroll (the page or a list): tracked on the
-// document so a button re-rendered mid-press (the other player got ready) still sees it.
+// Where each finger went down, and the last two scrolls (the page or a list): tracked on
+// the document so a button re-rendered mid-press (the other player got ready) still sees it.
 const downs = new Map<number, { x: number; y: number; t: number }>()
 let lastScroll = -Infinity
+let prevScroll = -Infinity
 const capture = { capture: true, passive: true }
 document.addEventListener(
   'pointerdown',
@@ -55,7 +56,14 @@ document.addEventListener(
   capture,
 )
 document.addEventListener('pointercancel', (e) => downs.delete(e.pointerId), capture)
-document.addEventListener('scroll', () => (lastScroll = performance.now()), capture)
+document.addEventListener(
+  'scroll',
+  () => {
+    prevScroll = lastScroll
+    lastScroll = performance.now()
+  },
+  capture,
+)
 
 /** Pointer-down activation: on a shared table phone, click's 300 ms feel is too slow and multi-touch swallows clicks. */
 export function onTap(el: HTMLElement, fn: (e: PointerEvent) => void): void {
@@ -65,7 +73,9 @@ export function onTap(el: HTMLElement, fn: (e: PointerEvent) => void): void {
     if (e.pointerType === 'mouse' && e.button !== 0) return
     // A drag, a scroll, or a touch that only stopped a momentum scroll is not a tap.
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 10) return
-    if (lastScroll > down.t - 100) return
+    // Momentum is a stream of scrolls; a lone one (a restored or scripted scroll
+    // position) just before the press is not.
+    if (lastScroll > down.t || prevScroll > down.t - 100) return
     const r = el.getBoundingClientRect()
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)
       return

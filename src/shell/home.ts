@@ -1,6 +1,7 @@
 import type { Mode } from '../core/game.ts'
+import type { Link } from '../core/net/link.ts'
 import { store } from '../core/store.ts'
-import { FAMILIES, builtGames, type GameMeta } from '../registry.ts'
+import { FAMILIES, builtGames, findGame, isBuilt, type GameMeta } from '../registry.ts'
 import { capture, cardArt, familyColor } from './art.ts'
 import { h, onTap } from './dom.ts'
 import { icon, type IconName } from './icons.ts'
@@ -19,6 +20,19 @@ const MODES: [Mode, string, IconName][] = [
 function visible(g: GameMeta, mode: Mode): boolean {
   if (mode === 'online') return g.online
   return true
+}
+
+/**
+ * Either phone picks the game. The host runs every match, so a guest's pick
+ * asks the host to start it (online.ts) and the host's round pulls both in.
+ */
+export function playOnline(link: Link, g: GameMeta): void {
+  if (link.role === 'host') {
+    go(`/online/${link.code}/play/${g.id}`)
+    return
+  }
+  link.send('pick', { id: g.id })
+  toast(`Starting ${g.name}…`)
 }
 
 /** The game grid. `mode` online is the room screen once both phones are in (online.ts). */
@@ -77,8 +91,7 @@ export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
     }
     const link = ui.link
     if (!link?.connected) toast('Waiting for your friend…')
-    else if (link.role === 'guest') toast('Your friend picks the game. Ask them!')
-    else go(`/online/${link.code}/play/${g.id}`)
+    else playOnline(link, g)
   }
 
   const renderModes = () => {
@@ -158,17 +171,30 @@ export function home(root: HTMLElement, initial: Mode = ui.local): () => void {
         h('span.grow', 'Room ', h('b', link.code), ' · waiting for your friend'),
         btn,
       )
-    return h(
+    const bar = h(
       'div.online-banner',
       h('span.pulse'),
       h(
         'span.grow',
         'Connected in ',
         h('b', link.code),
-        link.role === 'host' ? ' · you are Red, pick a game' : ' · you are Blue, your friend picks',
+        link.role === 'host' ? ' · you are Red' : ' · you are Blue',
+        ', either of you picks a game',
       ),
       btn,
     )
+    // The game last played in this room, one tap away.
+    const lastId = store.rooms.find((r) => r.code === link.code)?.game
+    const last = lastId ? findGame(lastId) : undefined
+    if (!last || !isBuilt(last.id) || !last.online) return bar
+    const again = h(
+      'button.btn.big.tile.live',
+      { style: { width: '100%', marginBottom: '14px' } },
+      icon('play'),
+      `Back to ${last.name}`,
+    )
+    onTap(again, () => pick(last))
+    return h('div', bar, again)
   }
 
   const renderGrid = (animate: boolean) => {

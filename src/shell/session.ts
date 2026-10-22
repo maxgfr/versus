@@ -17,7 +17,7 @@ import { Draw } from '../core/render/draw.ts'
 import { clearSprites } from '../core/render/sprites.ts'
 import { Rng } from '../core/rng.ts'
 import { Stage } from '../core/stage.ts'
-import { save, store, toggleFavorite } from '../core/store.ts'
+import { roomGame, save, store, toggleFavorite } from '../core/store.ts'
 import type { GameMeta } from '../registry.ts'
 import { h, onTap, reducedMotion, sleep } from './dom.ts'
 import { icon } from './icons.ts'
@@ -118,7 +118,10 @@ export class Session {
     onTap(pauseBtn, () => this.pause(true))
     // Card captures want the bare game.
     if (!o.demo?.clean) this.root.append(pauseBtn)
-    if (o.mode === 'online' && o.link) this.wireNet(o.link)
+    if (o.mode === 'online' && o.link) {
+      roomGame(o.link.code, o.meta.id)
+      this.wireNet(o.link)
+    }
     this.newRound(o.seed)
     this.loop.start()
   }
@@ -250,6 +253,10 @@ export class Session {
       })
       on('ready', () => this.markReady(0))
       on('count', () => void this.countdown())
+      // The host reloaded and sits on the room screen: bring it back into this game.
+      on('lobby', () => {
+        if (this.phase !== 'result') link.send('pick', { id: this.o.meta.id })
+      })
       link.send('hi')
       on('snap', (d) => {
         const sn = d as Snap

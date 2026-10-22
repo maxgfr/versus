@@ -209,16 +209,53 @@ test('online has its own address, and leaving it leaves the room', async ({ brow
   await host.goto('./#/online')
   await expect(host.locator('.rooms li')).toHaveCount(1)
   await expect(host.locator('.room-open')).toContainText(code)
-  await expect(host.locator('.room-open')).toContainText('You created it')
+  // The room remembers its last game: one tap goes straight back into it.
+  await expect(host.locator('.room-open')).toContainText('Back to Air Hockey')
   await guest.goto('./#/online')
-  await expect(guest.locator('.room-open')).toContainText('You joined')
+  await expect(guest.locator('.room-open')).toContainText('Back to Air Hockey')
   await host.locator('.room-open').click()
   await guest.locator('.room-open').click()
-  await expect(host.locator('.online-banner')).toContainText('you are Red', { timeout: 60_000 })
-  await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 60_000 })
+  await host.waitForURL(new RegExp(`#/online/${code}/play/air-hockey$`), { timeout: 60_000 })
+  await guest.waitForURL(new RegExp(`#/online/${code}/play/air-hockey$`), { timeout: 30_000 })
+  await host.getByRole('button', { name: 'Back to games' }).click()
+  await expect(host.locator('.online-banner')).toContainText('you are Red')
+  await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 20_000 })
   // Forgetting a room takes it off the list.
   await host.goto('./#/')
   await host.goto('./#/online')
   await host.getByRole('button', { name: `Forget room ${code}` }).click()
   await expect(host.locator('.rooms')).toHaveCount(0)
+})
+
+test('the guest picks a game too, and a host that reloads mid-game is pulled back in', async ({
+  browser,
+}) => {
+  test.setTimeout(180_000)
+  const open = async () =>
+    (await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 760 } })).newPage()
+  const host = await open()
+  const guest = await open()
+  await host.goto('./#/online')
+  await host.getByRole('button', { name: 'Create a room' }).click()
+  await expect(host.locator('.code span')).toHaveCount(4)
+  const code = (await host.locator('.code span').allTextContents()).join('')
+  await guest.goto(`./#/online/${code}`)
+  await expect(guest.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 60_000 })
+  await expect(host.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 30_000 })
+  // The guest picks: the host starts it and both phones land in it.
+  await guest.locator('.card[data-id="tic-tac-toe"]').click()
+  await host.waitForURL(new RegExp(`#/online/${code}/play/tic-tac-toe$`), { timeout: 20_000 })
+  await guest.waitForURL(new RegExp(`#/online/${code}/play/tic-tac-toe$`), { timeout: 20_000 })
+  await expect(host.locator('.ready-btn')).toBeVisible()
+  await expect(guest.locator('.ready-btn')).toBeVisible()
+  // The host's page reloads (iOS does that behind the share sheet): the guest,
+  // still in the game, brings it back into the same game.
+  await host.reload()
+  await host.waitForURL(new RegExp(`#/online/${code}/play/tic-tac-toe$`), { timeout: 60_000 })
+  await expect(host.locator('.ready-btn')).toBeVisible({ timeout: 20_000 })
+  await expect(guest).toHaveURL(new RegExp(`#/online/${code}/play/tic-tac-toe$`))
+  await host.locator('.ready-btn').click()
+  await guest.locator('.ready-btn').click()
+  await expect(guest.locator('.overlay.ready')).toBeHidden({ timeout: 10_000 })
+  await expect(host.locator('.overlay.ready')).toBeHidden({ timeout: 10_000 })
 })
