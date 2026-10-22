@@ -15,6 +15,7 @@ import {
   flattens,
   type Pellet,
   ROUND_T,
+  SQUEEZE_T,
   type World,
 } from './rules.ts'
 
@@ -356,8 +357,8 @@ function stick(g: Draw, c: StickLook, ready: number, now: number): void {
 function sizeChip(g: Draw, side: Side, w: World, now: number): void {
   const me = w.bugs[side].ball.r
   const foe = w.bugs[side === 0 ? 1 : 0].ball.r
-  const win = flattens(me, foe)
-  const lose = flattens(foe, me)
+  const win = flattens(me, foe, w.t)
+  const lose = flattens(foe, me, w.t)
   const x = side === 0 ? 136 : W - 136
   const y = hudY(g, side)
   const label = win ? 'Flatten!' : lose ? 'Run!' : 'Grow'
@@ -466,13 +467,24 @@ export function renderDung(
   const w = s.w
   const r = s.rounds
   dish(g)
+  // The squeeze: the rim glows and throbs, faster as the bell nears.
+  const sq = (w.t - (ROUND_T - SQUEEZE_T)) / SQUEEZE_T
+  if (r.phase === 'play' && sq > 0 && sq < 1) {
+    const beat = 0.5 + 0.5 * Math.sin(now * (5 + sq * 9))
+    g.path(
+      (c) => c.ellipse(FIELD.cx, FIELD.cy, FIELD.a + 8, FIELD.b + 8, 0, 0, Math.PI * 2),
+      undefined,
+      alpha(C.yellow, (0.25 + 0.45 * beat) * Math.min(1, sq * 6)),
+      10 + 6 * beat,
+    )
+  }
   w.pellets.forEach((p, i) => {
     if (p.on) pellet(g, p, w.t, now, i)
   })
   const [A, B] = w.bugs
   const threat: [boolean, boolean] = [
-    w.flattened === null && flattens(A.ball.r, B.ball.r),
-    w.flattened === null && flattens(B.ball.r, A.ball.r),
+    w.flattened === null && flattens(A.ball.r, B.ball.r, w.t),
+    w.flattened === null && flattens(B.ball.r, A.ball.r, w.t),
   ]
   // Beetles first: each one pushes from behind, its head tucked under its ball.
   for (const bug of w.bugs) {

@@ -11,11 +11,13 @@ import {
   angleTo,
   type Drive,
   type Ev,
+  FIELD,
   flattens,
   NMAX,
   newWorld,
   ROUND_T,
   roundWinner,
+  SQUEEZE_T,
   stepWorld,
   type World,
 } from './rules.ts'
@@ -189,7 +191,10 @@ class DungBattle extends BaseGame<State> {
     const { fx, audio } = this.ctx
     const w = this.s.w
     const [A, B] = w.bugs
-    const now: [boolean, boolean] = [flattens(A.ball.r, B.ball.r), flattens(B.ball.r, A.ball.r)]
+    const now: [boolean, boolean] = [
+      flattens(A.ball.r, B.ball.r, w.t),
+      flattens(B.ball.r, A.ball.r, w.t),
+    ]
     for (const side of [0, 1] as Side[]) {
       if (now[side] && !this.threat[side]) {
         const b = w.bugs[side].ball
@@ -203,6 +208,22 @@ class DungBattle extends BaseGame<State> {
     this.threat = now
     const left = Math.ceil(ROUND_T - w.t)
     if (left <= 5 && left > 0 && left !== this.tick) audio.play('tick', 1.1 + (5 - left) * 0.08)
+    // The squeeze starts: from now on a smaller lead is enough to flatten.
+    if (left === SQUEEZE_T && this.tick === SQUEEZE_T + 1) {
+      audio.play('powerup', 0.7)
+      audio.buzz(20)
+      fx.ring(FIELD.cx, FIELD.cy, C.yellow, FIELD.b)
+      fx.shake(0.15)
+      for (const side of [0, 1] as Side[])
+        fx.float(
+          'Squeeze!',
+          W / 2,
+          side === 0 ? FIELD.cy + 220 : FIELD.cy - 220,
+          C.yellow,
+          64,
+          side,
+        )
+    }
     this.tick = left
   }
 

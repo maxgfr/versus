@@ -24,6 +24,14 @@ import {
   ballRadius,
   rimK,
   tether,
+  cloneWorld,
+  FLATTEN,
+  FLATTEN_END,
+  RAMP_SPEED,
+  RAMP_T,
+  RESPAWN_END,
+  respawnAfter,
+  SQUEEZE_T,
 } from './rules.ts'
 
 const still: Drive[] = [
@@ -322,6 +330,50 @@ describe('dung battle charge', () => {
   })
 })
 
+describe('dung battle ramp', () => {
+  it('pellets come back sooner as the round goes on', () => {
+    expect(respawnAfter(0)).toBe(RESPAWN)
+    expect(respawnAfter(ROUND_T)).toBe(RESPAWN_END)
+    expect(respawnAfter(ROUND_T / 2)).toBeLessThan(RESPAWN)
+    const w = quiet(newWorld(new Rng(2)))
+    w.t = 30
+    const red = w.bugs[0]
+    const p = { x: red.ball.x, y: red.ball.y, on: true, back: 0 }
+    w.pellets.push(p)
+    stepWorld(w, still, STEP, [])
+    expect(p.on).toBe(false)
+    expect(p.back - w.t).toBeLessThan(RESPAWN - 3)
+  })
+
+  it('beetles warm up: faster as the round goes on, never slower than at the start', () => {
+    expect(topSpeed(BALL_R0, RAMP_T)).toBeCloseTo(topSpeed(BALL_R0, 0) * (1 + RAMP_SPEED))
+    expect(topSpeed(BALL_R0, ROUND_T)).toBeCloseTo(topSpeed(BALL_R0, RAMP_T))
+    expect(topSpeed(BALL_R0, 10)).toBeGreaterThan(topSpeed(BALL_R0, 0))
+  })
+
+  it('the squeeze: in the last seconds a smaller lead flattens', () => {
+    expect(flattens(44, 40, 0)).toBe(false)
+    expect(flattens(44, 40, ROUND_T - SQUEEZE_T)).toBe(false)
+    expect(flattens(44, 40, ROUND_T - 0.5)).toBe(true)
+    expect(flattens(40 * FLATTEN_END, 40, ROUND_T)).toBe(false)
+    expect(flattens(40 * FLATTEN, 40, ROUND_T - SQUEEZE_T)).toBe(false)
+    // In play: a ball 10% bigger bounces early on, and flattens at the end.
+    for (const [t, flat] of [
+      [5, null],
+      [ROUND_T - 1, 1],
+    ] as const) {
+      const w = quiet(newWorld(new Rng(4)))
+      w.t = t
+      const [red, blue] = w.bugs
+      red.ball.r = 44
+      blue.ball.x = red.ball.x
+      blue.ball.y = red.ball.y - 80
+      stepWorld(w, still, STEP, [])
+      expect(w.flattened).toBe(flat)
+    }
+  })
+})
+
 describe('dung battle round end', () => {
   it('the bigger ball wins a time-out; a level dish goes to the ball that grew last', () => {
     const w = quiet(newWorld(new Rng(9)))
@@ -381,27 +433,43 @@ describe('dung battle bot', () => {
     }
   })
 
-  it('a clear spread: hard beats normal, which beats easy, over many rounds', () => {
-    const rate = (a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard'): number => {
-      let won = 0
-      const N = 120
-      for (let s = 0; s < N; s++) {
-        const swap = s % 2 === 1
-        const rng = new Rng(900 + s)
-        const w = newWorld(rng)
-        const bots = [new DungBot(rng.fork(), swap ? b : a), new DungBot(rng.fork(), swap ? a : b)]
-        for (let i = 0; i < 60 * (ROUND_T + 1) && roundWinner(w) === null; i++) {
-          const drives = [0, 1].map((x) => bots[x]?.decide(w, x as 0 | 1, STEP) ?? still[0])
-          stepWorld(w, drives as Drive[], STEP, [])
-        }
-        if (roundWinner(w) === (swap ? 1 : 0)) won++
+  /** Share of `n` seeded rounds that bot `a` wins against bot `b` (sides alternate). */
+  function rate(a: 'easy' | 'normal' | 'hard', b: 'easy' | 'normal' | 'hard', n: number): number {
+    let won = 0
+    for (let s = 0; s < n; s++) {
+      const swap = s % 2 === 1
+      const rng = new Rng(900 + s)
+      const w = newWorld(rng)
+      const bots = [new DungBot(rng.fork(), swap ? b : a), new DungBot(rng.fork(), swap ? a : b)]
+      for (let i = 0; i < 60 * (ROUND_T + 1) && roundWinner(w) === null; i++) {
+        const drives = [0, 1].map((x) => bots[x]?.decide(w, x as 0 | 1, STEP) ?? still[0])
+        stepWorld(w, drives as Drive[], STEP, [])
       }
-      return won / N
+      if (roundWinner(w) === (swap ? 1 : 0)) won++
     }
-    expect(rate('hard', 'easy')).toBeGreaterThan(0.68)
-    expect(rate('normal', 'easy')).toBeGreaterThan(0.6)
-    expect(rate('hard', 'normal')).toBeGreaterThan(0.52)
-  }, 30000)
+    return won / n
+  }
+
+  it('hard beats easy almost every round, normal beats easy most of them', () => {
+    expect(rate('hard', 'easy', 30)).toBeGreaterThan(0.85)
+    expect(rate('normal', 'easy', 40)).toBeGreaterThan(0.8)
+  }, 20000)
+
+  it('hard beats normal most of the time', () => {
+    expect(rate('hard', 'normal', 30)).toBeGreaterThan(0.6)
+  }, 20000)
+
+  it('looking ahead never touches the real world', () => {
+    const rng = new Rng(5)
+    const w = newWorld(rng)
+    // Close enough for the search to kick in.
+    w.bugs[1].ball.x = w.bugs[0].ball.x + 60
+    w.bugs[1].ball.y = w.bugs[0].ball.y - 180
+    const before = cloneWorld(w)
+    const bot = new DungBot(new Rng(2), 'hard')
+    for (let i = 0; i < 5; i++) bot.decide(w, 0, STEP)
+    expect(w).toEqual(before)
+  })
 
   for (const d of ['easy', 'normal', 'hard'] as const) {
     it(`bot vs bot reaches a result within the time limit (${d})`, () => {

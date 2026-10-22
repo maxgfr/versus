@@ -1,14 +1,17 @@
-import type { Difficulty, Side } from '../../core/game.ts'
+import { type Difficulty, other, type Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import {
   angleTo,
   BEETLE_R,
+  cloneWorld,
   type Drive,
+  type Ev,
   FIELD,
   flattens,
   GROW,
   type Pellet,
   rimK,
+  stepWorld,
   tether,
   topSpeed,
   type World,
@@ -36,6 +39,17 @@ interface Skill {
   panic: number
   /** Gap under which it goes for the flatten; further off it keeps growing its lead. */
   hunt: number
+  /** Weight of the next pellet after this one when picking a route (0 = one at a time). */
+  route: number
+  /**
+   * Look-ahead search: when the balls are within `engage` of each other, try
+   * this many steering directions (each with and without a charge) by playing
+   * the real rules forward `horizon` seconds against a rival who keeps doing
+   * what it is visibly doing. 0 = no search.
+   */
+  search: number
+  horizon: number
+  engage: number
 }
 
 export const SKILL: Record<Difficulty, Skill> = {
@@ -51,32 +65,44 @@ export const SKILL: Record<Difficulty, Skill> = {
     contest: 0,
     panic: 150,
     hunt: 2000,
+    route: 0,
+    search: 0,
+    horizon: 0,
+    engage: 0,
   },
   normal: {
-    err: 0.12,
-    think: 0.25,
-    lead: 0.35,
-    speed: 0.93,
-    dash: 0.35,
-    power: [0.4, 0.75],
-    margin: 1,
-    samples: 8,
-    contest: 0.45,
-    panic: 260,
-    hunt: 700,
+    err: 0.07,
+    think: 0.2,
+    lead: 0.55,
+    speed: 0.97,
+    dash: 0.65,
+    power: [0.55, 0.9],
+    margin: 0,
+    samples: 12,
+    contest: 1,
+    panic: 300,
+    hunt: 600,
+    route: 0.3,
+    search: 4,
+    horizon: 0.5,
+    engage: 300,
   },
   hard: {
-    err: 0.03,
-    think: 0.1,
+    err: 0.015,
+    think: 0.08,
     lead: 0.7,
     speed: 1,
-    dash: 0.85,
-    power: [0.75, 1],
-    margin: 2,
+    dash: 1,
+    power: [0.85, 1],
+    margin: 0,
     samples: 16,
     contest: 1.5,
     panic: 340,
     hunt: 520,
+    route: 0.5,
+    search: 12,
+    horizon: 0.7,
+    engage: 420,
   },
 }
 
@@ -97,12 +123,17 @@ export class DungBot {
   private mode: Mode = 'grow'
   private target: Pellet | null = null
   private flee = { x: 0, y: 0 }
+  /** The searched move, held until the next look (its charge fires once). */
+  private plan: Drive | null = null
+  private ev: Ev[] = []
 
   constructor(
     private rng: Rng,
     d: Difficulty,
+    /** Tests only: override part of the skill. */
+    tune: Partial<Skill> = {},
   ) {
-    this.sk = SKILL[d]
+    this.sk = { ...SKILL[d], ...tune }
   }
 
   decide(w: World, side: Side, dt: number): Drive {
@@ -120,13 +151,15 @@ export class DungBot {
     const gap = Math.hypot(foe.ball.x - me.ball.x, foe.ball.y - me.ball.y) - rm - rf
 
     this.thinkT -= dt
+    let looked = false
     if (this.thinkT <= 0 || (this.target && !this.target.on)) {
       this.thinkT = sk.think
-      // The real rule decides who can flatten; a careful bot also fears a
-      // rival that is only a pellet or two short of it.
-      const prey = flattens(rm, rf)
-      const threat = flattens(rf + sk.margin * GROW, rm)
-      const panic = flattens(rf, rm) ? sk.panic : sk.panic * 0.6
+      looked = true
+      // The real rule (with the end-of-round squeeze) decides who can flatten;
+      // a careful bot also fears a rival that is only a pellet or two short of it.
+      const prey = flattens(rm, rf, w.t)
+      const threat = flattens(rf + sk.margin * GROW, rm, w.t)
+      const panic = flattens(rf, rm, w.t) ? sk.panic : sk.panic * 0.6
       this.mode = threat && gap < panic ? 'flee' : prey && gap < sk.hunt ? 'hunt' : 'grow'
       if (this.mode === 'grow') this.target = this.bestPellet(w, side, threat)
       if (this.mode === 'flee') this.flee = this.escape(w, side)
@@ -138,7 +171,7 @@ export class DungBot {
       if (gap < 140) this.charge(drive, w, side)
     } else if (this.mode === 'hunt') {
       // The ball rides in front: point the beetle at where the rival ball will be.
-      const lead = Math.min(sk.lead, Math.max(0, gap) / topSpeed(rm))
+      const lead = Math.min(sk.lead, Math.max(0, gap) / topSpeed(rm, w.t))
       const tx = foe.ball.x + foe.ball.vx * lead
       const ty = foe.ball.y + foe.ball.vy * lead
       drive = this.steer(tx, ty, me.beetle.x, me.beetle.y)
@@ -155,6 +188,16 @@ export class DungBot {
         if (far > 380 && aim < 0.25) this.charge(drive, w, side)
       }
     }
+    // Up close, a searching bot plays the candidate moves forward with the real
+    // rules and keeps the best one until its next look.
+    if (looked) this.plan = sk.search > 0 && gap < sk.engage ? this.search(w, side, drive) : null
+    if (this.plan) {
+      drive = { jx: this.plan.jx, jy: this.plan.jy }
+      if (this.plan.dash !== undefined) {
+        drive.dash = this.plan.dash
+        delete this.plan.dash
+      }
+    }
     const out = this.rim(this.rotate(drive, this.err), me.beetle.x, me.beetle.y)
     const m = Math.hypot(out.jx, out.jy)
     if (m > sk.speed) {
@@ -163,6 +206,74 @@ export class DungBot {
     }
     if (drive.dash !== undefined) out.dash = drive.dash
     return out
+  }
+
+  /** Try each candidate move (and a charge with it) against the real rules; keep the best. */
+  private search(w: World, side: Side, base: Drive): Drive {
+    const n = this.sk.search
+    const cands: Drive[] = []
+    const bl = Math.hypot(base.jx, base.jy)
+    if (bl > 0.01) cands.push({ jx: base.jx / bl, jy: base.jy / bl })
+    const a0 = this.rng.range(0, (Math.PI * 2) / n)
+    for (let i = 0; i < n; i++) {
+      const a = a0 + (i / n) * Math.PI * 2
+      cands.push({ jx: Math.cos(a), jy: Math.sin(a) })
+    }
+    if (w.t >= w.bugs[side].beetle.ready) {
+      const p = this.sk.power[1]
+      for (let i = 0, m = cands.length; i < m; i++) {
+        const c = cands[i] as Drive
+        cands.push({ jx: c.jx, jy: c.jy, dash: p })
+      }
+    }
+    let best = cands[0] as Drive
+    let bs = -Infinity
+    for (const c of cands) {
+      const sc = this.rollout(w, side, c)
+      if (sc > bs) {
+        bs = sc
+        best = c
+      }
+    }
+    return best
+  }
+
+  /** Score one candidate: play it forward against the rival's visible intent. */
+  private rollout(w: World, side: Side, c: Drive): number {
+    const sim = cloneWorld(w)
+    const foeSide = other(side)
+    const dt = 1 / 20
+    const steps = Math.round(this.sk.horizon / dt)
+    const drives: Drive[] = [c, c]
+    let mine = 0
+    let theirs = 0
+    for (let i = 0; i < steps; i++) {
+      drives[side] = i === 0 ? c : { jx: c.jx, jy: c.jy }
+      drives[foeSide] = rival(sim, foeSide, i === 0)
+      this.ev.length = 0
+      stepWorld(sim, drives, dt, this.ev)
+      for (const e of this.ev) {
+        if (e.k !== 'eat') continue
+        if (e.side === side) mine++
+        else theirs++
+      }
+      if (sim.flattened !== null) return sim.flattened === side ? -10000 + i * 50 : 10000 - i * 50
+    }
+    const A = sim.bugs[side]
+    const B = sim.bugs[foeSide]
+    const gap = Math.hypot(A.ball.x - B.ball.x, A.ball.y - B.ball.y) - A.ball.r - B.ball.r
+    let score = (mine - theirs) * 90
+    if (flattens(B.ball.r + this.sk.margin * GROW, A.ball.r, sim.t)) {
+      score += Math.min(gap, 500)
+      const k = rimK(A.beetle.x, A.beetle.y, BEETLE_R)
+      if (k > 0.8) score -= (k - 0.8) * 900
+    }
+    if (flattens(A.ball.r, B.ball.r, sim.t)) score -= Math.max(0, gap) * 1.2
+    const p = this.target?.on ? this.target : null
+    if (p) score -= 0.25 * Math.hypot(p.x - A.ball.x, p.y - A.ball.y)
+    // A charge spent for nothing is a charge missing when it matters.
+    if (c.dash !== undefined) score -= 30
+    return score
   }
 
   /** Ask for a charge when one is ready (and the bot is the charging kind). */
@@ -187,6 +298,13 @@ export class DungBot {
       const d = Math.hypot(p.x - c.x, p.y - c.y)
       const turn = Math.abs(angleTo(me.beetle.a, Math.atan2(p.y - me.beetle.y, p.x - me.beetle.x)))
       let cost = d + turn * 70
+      if (this.sk.route > 0) {
+        // Plan two pellets ahead: a pellet next to more food is worth more.
+        let next = Infinity
+        for (const q of w.pellets)
+          if (q !== p && q.on) next = Math.min(next, Math.hypot(q.x - p.x, q.y - p.y))
+        if (next < Infinity) cost += this.sk.route * next
+      }
       const df = Math.hypot(p.x - foe.ball.x, p.y - foe.ball.y)
       if (df < d) cost += this.sk.contest * 260
       if (threat) cost += this.sk.contest * 600 * Math.max(0, 1 - df / 450)
@@ -207,8 +325,8 @@ export class DungBot {
     const me = w.bugs[side]
     const foe = w.bugs[side === 0 ? 1 : 0]
     const T = 0.7
-    const run = topSpeed(me.ball.r) * T
-    const chase = topSpeed(foe.ball.r) * T
+    const run = topSpeed(me.ball.r, w.t) * T
+    const chase = topSpeed(foe.ball.r, w.t) * T
     let bx = FIELD.cx
     let by = FIELD.cy
     let bs = -Infinity
@@ -294,4 +412,24 @@ function segDist(px: number, py: number, ax: number, ay: number, bx: number, by:
   const L2 = dx * dx + dy * dy || 1
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L2))
   return Math.hypot(px - ax - dx * t, py - ay - dy * t)
+}
+
+/**
+ * What the searching bot expects of its rival, from what it can see: a rival
+ * big enough to flatten it comes straight for its ball (charging if it can);
+ * otherwise it keeps going the way it is going.
+ */
+function rival(w: World, side: Side, first: boolean): Drive {
+  const me = w.bugs[side]
+  const foe = w.bugs[other(side)]
+  if (flattens(me.ball.r, foe.ball.r, w.t)) {
+    const dx = foe.ball.x - me.beetle.x
+    const dy = foe.ball.y - me.beetle.y
+    const L = Math.hypot(dx, dy) || 1
+    const d: Drive = { jx: dx / L, jy: dy / L }
+    if (first && w.t >= me.beetle.ready && L < 420) d.dash = 1
+    return d
+  }
+  const v = Math.hypot(me.beetle.vx, me.beetle.vy)
+  return v > 40 ? { jx: me.beetle.vx / v, jy: me.beetle.vy / v } : { jx: 0, jy: 0 }
 }

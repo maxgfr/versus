@@ -19,7 +19,7 @@ export const NMAX = Math.ceil((BALL_RMAX - BALL_R0) / GROW)
 export const PELLETS = 26
 export const PELLET_R = 14
 /** Seconds before an eaten pellet is back on the floor. */
-export const RESPAWN = 12
+export const RESPAWN = 10
 /** Seconds a round lasts; then the bigger ball takes it (equal = draw). */
 export const ROUND_T = 40
 /** A ball must be more than 15% bigger (by radius) to flatten the other beetle. */
@@ -123,9 +123,33 @@ export type Ev =
 
 export const ballRadius = (n: number): number => Math.min(BALL_RMAX, BALL_R0 + n * GROW)
 
-/** Heavier balls drive their beetle more slowly. */
-export const topSpeed = (r: number): number =>
-  TOP * (1 - (0.08 * (r - BALL_R0)) / (BALL_RMAX - BALL_R0))
+// ---------- the round ramps up ----------
+
+/** The beetles warm up: top speed grows by this much over the first RAMP_T seconds. */
+export const RAMP_SPEED = 0.18
+export const RAMP_T = 30
+/** Pellets come back faster as the round goes on: RESPAWN at the start, this at the bell. */
+export const RESPAWN_END = 4
+/** The squeeze: over the last SQUEEZE_T seconds the flatten line drops to FLATTEN_END. */
+export const SQUEEZE_T = 10
+export const FLATTEN_END = 1.07
+
+const ramp01 = (t: number, t0: number, t1: number): number =>
+  Math.max(0, Math.min(1, (t - t0) / (t1 - t0)))
+
+/** Seconds before a pellet eaten at round time `t` is back. */
+export const respawnAfter = (t: number): number =>
+  RESPAWN + (RESPAWN_END - RESPAWN) * ramp01(t, 0, ROUND_T)
+
+/** How much bigger (by radius) a ball must be to flatten at round time `t`. */
+export const flattenRatio = (t: number): number =>
+  FLATTEN + (FLATTEN_END - FLATTEN) * ramp01(t, ROUND_T - SQUEEZE_T, ROUND_T)
+
+/** Heavier balls drive their beetle more slowly; everyone speeds up as the round warms up. */
+export const topSpeed = (r: number, t = 0): number =>
+  TOP *
+  (1 - (0.08 * (r - BALL_R0)) / (BALL_RMAX - BALL_R0)) *
+  (1 + RAMP_SPEED * ramp01(t, 0, RAMP_T))
 
 /** How far behind its ball the beetle rides: just behind it, head down against the ball. */
 export const tether = (r: number): number => r + BEETLE_R * 0.55
@@ -133,8 +157,9 @@ export const tether = (r: number): number => r + BEETLE_R * 0.55
 /** A ball's inertia: bigger balls are heavier. */
 export const massOf = (r: number): number => (r / BALL_R0) ** 2
 
-/** Is `r` the flattening size against `small`? */
-export const flattens = (big: number, small: number): boolean => big > small * FLATTEN
+/** Is `big` the flattening size against `small` (at round time `t`: the squeeze lowers the line)? */
+export const flattens = (big: number, small: number, t = 0): boolean =>
+  big > small * flattenRatio(t)
 
 const spawnY = (side: Side): number => (side === 0 ? FIELD.cy + 285 : FIELD.cy - 285)
 
@@ -188,6 +213,18 @@ function bugAt(side: Side): Bug {
 
 export function newWorld(rng: Rng): World {
   return { t: 0, bugs: [bugAt(0), bugAt(1)], pellets: layPellets(rng), flattened: null, flatT: -1 }
+}
+
+/** A deep copy of the world, for a bot to play "what if" on (the real one is never touched). */
+export function cloneWorld(w: World): World {
+  const bug = (b: Bug): Bug => ({ side: b.side, beetle: { ...b.beetle }, ball: { ...b.ball } })
+  return {
+    t: w.t,
+    bugs: [bug(w.bugs[0]), bug(w.bugs[1])],
+    pellets: w.pellets.map((p) => ({ ...p })),
+    flattened: w.flattened,
+    flatT: w.flatT,
+  }
 }
 
 /** Keep a body inside the dish (for radius r). Bounces it off the rim. Returns the impact speed. */
@@ -316,7 +353,7 @@ export function stepWorld(w: World, drives: readonly Drive[], dt: number, ev: Ev
     const m = Math.min(1, len)
     const ux = len > 0 ? jx / len : 0
     const uy = len > 0 ? jy / len : 0
-    const sp = m * topSpeed(c.r)
+    const sp = m * topSpeed(c.r, w.t)
     const k = Math.min(1, ACCEL * dt)
     b.vx += (ux * sp - b.vx) * k
     b.vy += (uy * sp - b.vy) * k
@@ -376,7 +413,7 @@ export function stepWorld(w: World, drives: readonly Drive[], dt: number, ev: Ev
       if (!p.on || bug.ball.n >= NMAX) continue
       if (Math.hypot(p.x - bug.ball.x, p.y - bug.ball.y) > bug.ball.r * 0.9) continue
       p.on = false
-      p.back = w.t + RESPAWN
+      p.back = w.t + respawnAfter(w.t)
       bug.ball.n++
       bug.ball.r = ballRadius(bug.ball.n)
       bug.ball.eat = w.t
@@ -418,7 +455,7 @@ export function stepWorld(w: World, drives: readonly Drive[], dt: number, ev: Ev
     const my = (A.ball.y * B.ball.r + B.ball.y * A.ball.r) / rs
     const small = A.ball.r <= B.ball.r ? A : B
     const big = small === A ? B : A
-    if (flattens(big.ball.r, small.ball.r)) {
+    if (flattens(big.ball.r, small.ball.r, w.t)) {
       w.flattened = small.side
       w.flatT = w.t
       ev.push({ k: 'flatten', side: small.side, x: mx, y: my })
