@@ -293,7 +293,17 @@ function wave(g: Draw, side: Side, t: number): void {
   })
 }
 
-function blob(g: Draw, p: Fighter, side: Side, f: Floor, now: number, won: boolean): void {
+function blob(
+  g: Draw,
+  p: Fighter,
+  side: Side,
+  f: Floor,
+  now: number,
+  won: boolean,
+  at: [number, number],
+  spring: number,
+): void {
+  const [px, py] = at
   const col = SIDE[side]
   const r = BLOB_R * 1.25
   const dead = p.died >= 0
@@ -302,22 +312,33 @@ function blob(g: Draw, p: Fighter, side: Side, f: Floor, now: number, won: boole
   const blink = !dead && f.t - p.hit < INVULN && Math.floor(now * 12) % 2 === 0
   const sp = Math.hypot(p.vx, p.vy) || 1
   const look: [number, number] = sp > 20 ? [p.vx / sp, p.vy / sp] : [0, 0.2]
-  const squash = 1 + Math.sin(p.walk * 0.2) * 0.06
+  // Walk wobble, idle breathing, and the bump / dash spring on top.
+  const breathe = sp < 20 ? Math.sin(now * 3 + side * 2) * 0.03 : 0
+  const squash = (1 + Math.sin(p.walk * 0.2) * 0.06 + breathe) * clamp(spring, 0.7, 1.4)
   const hop = won ? Math.abs(Math.sin(now * 7)) * 24 : 0
   // Jolt upwards when hit.
   const jolt = hurtNow ? Math.sin(((f.t - p.hit) / 0.3) * Math.PI) * 26 : 0
-  g.shadow(p.x + 5, p.y + 14, r * 1.0, r * 0.45, 0.4 * (dead ? 0.5 : 1))
+  // A dash leaves a short smear behind the blob.
+  const dashing = !dead && f.t - p.dashT < 0.22
+  if (dashing) {
+    const a = 1 - (f.t - p.dashT) / 0.22
+    for (let i = 1; i <= 3; i++)
+      g.alpha(a * 0.22 * (4 - i), () =>
+        g.circle(px - p.dx * i * 26, py - p.dy * i * 26, r * (1 - i * 0.12), col.light),
+      )
+  }
+  g.shadow(px + 5, py + 14, r * 1.0, r * 0.45, 0.4 * (dead ? 0.5 : 1))
   g.alpha(dead ? 1 - k * 0.85 : blink ? 0.4 : 1, () => {
-    g.blob(p.x, p.y - k * 40 - jolt - hop, r, col.main, {
-      mood: dead ? 'dizzy' : hurtNow ? 'wow' : won ? 'grin' : 'happy',
+    g.blob(px, py - k * 40 - jolt - hop, r, col.main, {
+      mood: dead ? 'dizzy' : hurtNow ? 'wow' : won ? 'grin' : dashing ? 'angry' : 'happy',
       look: dead ? [0, 0] : look,
       sx: dead ? 1 + 0.5 * k : hurtNow ? 1.15 : squash,
       sy: dead ? 1 - 0.6 * k : hurtNow ? 0.85 : 1 / squash,
     })
   })
   if (!dead)
-    g.forSide(side, p.x, p.y - jolt - hop, () => g.sideMark(side, 0, -r * 1.55, 9, col.light))
-  if (hurtNow) g.ring(p.x, p.y, r * 1.3, alpha(C.red, 0.8), 6)
+    g.forSide(side, px, py - jolt - hop, () => g.sideMark(side, 0, -r * 1.55, 9, col.light))
+  if (hurtNow) g.ring(px, py, r * 1.3, alpha(C.red, 0.8), 6)
 }
 
 function stick(g: Draw, c: StickLook): void {
@@ -377,6 +398,7 @@ export function renderSpikes(
   now: number,
   names: [string, string],
   over: boolean,
+  look: { at: [number, number][]; squash: [number, number] },
 ): void {
   const f = s.f
   const r = s.rounds
@@ -386,8 +408,19 @@ export function renderSpikes(
   const order = ([0, 1] as Side[]).sort((a, b) => f.fighters[a].y - f.fighters[b].y)
   const won = (side: Side) => (r.phase === 'between' || over) && r.last === side
   spikes(g, h)
-  for (const side of order) blob(g, f.fighters[side], side, f, now, won(side))
-  for (const st of s.sticks) stick(g, st)
+  for (const side of order)
+    blob(
+      g,
+      f.fighters[side],
+      side,
+      f,
+      now,
+      won(side),
+      look.at[side] ?? [f.fighters[side].x, f.fighters[side].y],
+      look.squash[side],
+    )
+  // Online, each phone shows only its own player's stick.
+  for (const st of s.sticks) if (g.viewer === null || st.side === g.viewer) stick(g, st)
   for (const side of [0, 1] as Side[]) {
     namePill(g, side, names[side], { active: won(side) })
     hearts(g, side, f.fighters[side], f.t)

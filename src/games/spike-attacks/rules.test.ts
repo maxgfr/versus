@@ -6,6 +6,8 @@ import {
   BLOB_R,
   CAP,
   COLS,
+  DASH_CD,
+  DASH_T,
   cellX,
   cellY,
   type Drive,
@@ -116,6 +118,15 @@ describe('touching a spike', () => {
     expect(roundWinner(g)).toBe('draw')
   })
 
+  it('both down at different times: the one that lasted longer wins', () => {
+    const f = floorAt(4, 3)
+    f.fighters[0].died = 9
+    f.fighters[1].died = 6
+    expect(roundWinner(f)).toBe(0)
+    f.fighters[0].died = 5
+    expect(roundWinner(f)).toBe(1)
+  })
+
   it('a blob that dies at 0 hearts is out of the round', () => {
     const f = floorAt(4, 3)
     f.fighters[0].hp = 1
@@ -182,6 +193,41 @@ describe('spike floor', () => {
   })
 })
 
+describe('dash', () => {
+  it('a flick dashes about a tile at once, then needs to recharge', () => {
+    const f = floorAt(4, 6)
+    const x0 = f.fighters[0].x
+    const ev: Ev[] = []
+    const go: Drive[] = [{ jx: 1, jy: 0, dash: true }, still[1] as Drive]
+    stepFloor(f, new Rng(1), go, STEP, ev)
+    expect(ev.some((e) => e.k === 'dash' && e.side === 0)).toBe(true)
+    for (let i = 0; i < Math.round(DASH_T / STEP); i++) stepFloor(f, new Rng(1), still, STEP, [])
+    expect(f.fighters[0].x - x0).toBeGreaterThan(TILE * 0.85)
+    // Straight away again: still recharging, no second dash.
+    const again: Ev[] = []
+    stepFloor(f, new Rng(1), go, STEP, again)
+    expect(again.some((e) => e.k === 'dash')).toBe(false)
+    for (let t = 0; t < DASH_CD; t += STEP) stepFloor(f, new Rng(1), still, STEP, [])
+    const later: Ev[] = []
+    stepFloor(f, new Rng(1), go, STEP, later)
+    expect(later.some((e) => e.k === 'dash')).toBe(true)
+  })
+
+  it('dashing into the rival shoves it hard', () => {
+    const f = floorAt(4, 6)
+    const b = f.fighters[1]
+    b.x = f.fighters[0].x + BLOB_R * 2 + 30
+    b.y = f.fighters[0].y
+    const bx = b.x
+    const ev: Ev[] = []
+    stepFloor(f, new Rng(1), [{ jx: 1, jy: 0, dash: true }, still[1] as Drive], STEP, ev)
+    for (let i = 0; i < 30; i++) stepFloor(f, new Rng(1), still, STEP, ev)
+    const bump = ev.find((e) => e.k === 'bump')
+    expect(bump && bump.k === 'bump' && bump.speed).toBeGreaterThan(400)
+    expect(b.x - bx).toBeGreaterThan(TILE * 0.6)
+  })
+})
+
 describe('spike bot', () => {
   it('plays either side and stays put when dead', () => {
     const f = newFloor([500, 500], [1350, 450])
@@ -210,6 +256,29 @@ describe('spike bot', () => {
     }
     expect(moved).toBe(true)
     expect(f.fighters[0].hp).toBe(HP)
+  })
+
+  it('hard outlasts easy most of the time', () => {
+    let hard = 0
+    const n = 10
+    for (let seed = 0; seed < n; seed++) {
+      const rng = new Rng(500 + seed)
+      const f = newFloor([500, 500], [1350, 450])
+      // Swap sides every other game.
+      const hs = (seed % 2) as 0 | 1
+      const bots =
+        hs === 0
+          ? [new SpikeBot('hard'), new SpikeBot('easy')]
+          : [new SpikeBot('easy'), new SpikeBot('hard')]
+      let steps = 0
+      while (roundWinner(f) === null && steps < 60 * 200) {
+        const drives = [0, 1].map((s) => bots[s]?.decide(f, s as 0 | 1, STEP) ?? still[0])
+        stepFloor(f, rng, drives as Drive[], STEP, [])
+        steps++
+      }
+      if (roundWinner(f) === hs) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(8)
   })
 
   for (const d of ['easy', 'normal', 'hard'] as const) {

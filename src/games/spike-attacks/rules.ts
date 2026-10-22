@@ -16,6 +16,10 @@ export const HP = 3
 export const BLOB_R = 30
 const SPEED = 285
 const ACCEL = 10
+/** A dash: this speed held for DASH_T seconds (about a tile), then DASH_CD to recharge. */
+export const DASH = 640
+export const DASH_T = 0.16
+export const DASH_CD = 1.1
 /** Seconds of invulnerability after a hit. */
 export const INVULN = 1
 /** Seconds a spike takes to rise, and to sink again. */
@@ -50,6 +54,10 @@ export interface Fighter {
   /** Round time of the death (-1 = alive). */
   died: number
   walk: number
+  /** Round time of the last dash (-9 = never), and its direction. */
+  dashT: number
+  dx: number
+  dy: number
 }
 
 export interface Floor {
@@ -64,6 +72,8 @@ export interface Floor {
 export interface Drive {
   jx: number
   jy: number
+  /** Dash this step (a flick of the stick), toward (jx, jy). */
+  dash?: boolean
 }
 
 export type Ev =
@@ -72,6 +82,7 @@ export type Ev =
   | { k: 'hit'; side: Side; x: number; y: number }
   | { k: 'dead'; side: Side; x: number; y: number }
   | { k: 'bump'; x: number; y: number; speed: number }
+  | { k: 'dash'; side: Side; x: number; y: number; dx: number; dy: number }
 
 /** Difficulty of the round at time `t`: 0 at the start, 7 at the most. */
 export const levelAt = (t: number): number => Math.min(7, Math.floor(t / 11))
@@ -98,6 +109,9 @@ export function newFloor(fighterX: [number, number], fighterY: [number, number])
     hit: -9,
     died: -1,
     walk: 0,
+    dashT: -9,
+    dx: 0,
+    dy: 0,
   })
   return {
     t: 0,
@@ -241,9 +255,21 @@ export function stepFloor(
     const len = Math.hypot(d.jx, d.jy) || 1
     const tvx = m > 0 ? (d.jx / len) * m * SPEED : 0
     const tvy = m > 0 ? (d.jy / len) * m * SPEED : 0
-    const k = Math.min(1, ACCEL * dt)
-    p.vx += (tvx - p.vx) * k
-    p.vy += (tvy - p.vy) * k
+    // A flick dashes: about a tile at once, to dodge or to shove the rival.
+    if (d.dash && m > 0.3 && t - p.dashT >= DASH_CD) {
+      p.dashT = t
+      p.dx = d.jx / len
+      p.dy = d.jy / len
+      ev.push({ k: 'dash', side, x: p.x, y: p.y, dx: p.dx, dy: p.dy })
+    }
+    if (t - p.dashT < DASH_T) {
+      p.vx = p.dx * DASH
+      p.vy = p.dy * DASH
+    } else {
+      const k = Math.min(1, ACCEL * dt)
+      p.vx += (tvx - p.vx) * k
+      p.vy += (tvy - p.vy) * k
+    }
     p.x = Math.max(X0 + BLOB_R, Math.min(X0 + COLS * TILE - BLOB_R, p.x + p.vx * dt))
     p.y = Math.max(Y0 + BLOB_R, Math.min(Y0 + ROWS * TILE - BLOB_R, p.y + p.vy * dt))
     p.walk += Math.hypot(p.vx, p.vy) * dt
@@ -336,7 +362,8 @@ export function roundWinner(f: Floor): Side | 'draw' | null {
   if (aliveA && aliveB) return null
   if (!aliveA && !aliveB) {
     if (a.died === b.died) return 'draw'
-    return a.died > b.died ? 1 : 0
+    // The one that went down later lasted longer.
+    return a.died > b.died ? 0 : 1
   }
   return aliveA ? 0 : 1
 }

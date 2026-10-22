@@ -1,6 +1,7 @@
 import type { Difficulty, Side } from '../../core/game.ts'
 import {
   COLS,
+  DASH_CD,
   cellX,
   cellY,
   type Drive,
@@ -23,12 +24,16 @@ interface Skill {
   depth: number
   /** Seconds between plans (a human's reaction time). */
   think: number
+  /** Dash out of a tile about to spike. */
+  escape: boolean
+  /** Dash into a rival standing by spikes about to rise. */
+  shove: boolean
 }
 
 const SKILL: Record<Difficulty, Skill> = {
-  easy: { margin: 0.15, edges: false, depth: 5, think: 0.25 },
-  normal: { margin: 0.3, edges: true, depth: 6, think: 0.12 },
-  hard: { margin: 0.45, edges: true, depth: 8, think: 0.04 },
+  easy: { margin: 0.15, edges: false, depth: 5, think: 0.25, escape: false, shove: false },
+  normal: { margin: 0.35, edges: true, depth: 7, think: 0.09, escape: true, shove: false },
+  hard: { margin: 0.45, edges: true, depth: 8, think: 0.04, escape: true, shove: true },
 }
 
 /** Seconds to cross one tile at full speed (about 285 units/s). */
@@ -50,6 +55,7 @@ export class SpikeBot {
   private sk: Skill
   private goal = -1
   private planT = 0
+  private risk: Float64Array = new Float64Array(COLS * ROWS)
 
   constructor(d: Difficulty) {
     this.sk = SKILL[d]
@@ -61,8 +67,24 @@ export class SpikeBot {
     const mine = cellOf(me.x, me.y)
     this.planT -= dt
     if (this.planT <= 0) {
-      this.goal = this.plan(danger(f), mine)
+      this.risk = danger(f)
+      this.goal = this.plan(this.risk, mine)
       this.planT = this.sk.think
+    }
+    const ready = f.t - me.dashT >= DASH_CD
+    // Shove: a rival right beside a tile about to spike gets bumped onto it.
+    if (this.sk.shove && ready && this.planT === this.sk.think) {
+      const foe = f.fighters[side === 0 ? 1 : 0]
+      const fx = foe.x - me.x
+      const fy = foe.y - me.y
+      const d = Math.hypot(fx, fy)
+      const near =
+        this.risk[
+          cellOf(foe.x + (fx / (d || 1)) * TILE * 0.8, foe.y + (fy / (d || 1)) * TILE * 0.8)
+        ]
+      const safeHere = (this.risk[mine] ?? Infinity) > 0.6
+      if (foe.died < 0 && d < 170 && d > 1 && safeHere && near !== undefined && near < 0.35)
+        return { jx: fx / d, jy: fy / d, dash: true }
     }
     const gi = this.goal
     if (gi < 0) return { jx: 0, jy: 0 }
@@ -71,7 +93,9 @@ export class SpikeBot {
     const L = Math.hypot(dx, dy)
     if (L < 6) return { jx: 0, jy: 0 }
     const m = Math.min(1, L / 50 + 0.3)
-    return { jx: (dx / L) * m, jy: (dy / L) * m }
+    // Escape: the tile underfoot is about to spike and the way out is a tile over.
+    const dash = this.sk.escape && ready && (this.risk[mine] ?? Infinity) < 0.3 && L > 60
+    return dash ? { jx: dx / L, jy: dy / L, dash } : { jx: (dx / L) * m, jy: (dy / L) * m }
   }
 
   /** The tile to step to next (or -1 to stay put). */

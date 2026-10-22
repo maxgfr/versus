@@ -1,5 +1,6 @@
 import { Joystick } from '../../core/controls.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { lerp, Spring } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { type Rounds, roundEnd, roundsNew, roundsStep } from '../../engines/reflex/index.ts'
@@ -28,6 +29,9 @@ export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
 
 /** Pause between rounds, seconds. */
 const BETWEEN = 2.2
+
+/** Knob travel (world units) in one step that reads as a flick: a dash. */
+const FLICK = 42
 
 /** Where each blob starts: red near the bottom, blue near the top. */
 const SPAWN_X: [number, number] = [500, 500]
@@ -58,6 +62,18 @@ class SpikeAttacks extends BaseGame<State> {
   private sticks: Joystick[] = []
   private bots: (SpikeBot | null)[] = []
   private ev: Ev[] = []
+  /** Each human stick's knob at the last step, to catch flicks. */
+  private knob: [number, number][] = [
+    [0, 0],
+    [0, 0],
+  ]
+  // Cosmetic only (not synced): interpolation and squash.
+  private prev: [number, number][] = [
+    [500, 1350],
+    [500, 450],
+  ]
+  private squash: [Spring, Spring] = [new Spring(1, 360, 11), new Spring(1, 360, 11)]
+  private seenDash: [number, number] = [-9, -9]
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -85,6 +101,7 @@ class SpikeAttacks extends BaseGame<State> {
       return
     }
     const playing = s.rounds.phase === 'play'
+    this.prev = s.f.fighters.map((p) => [p.x, p.y])
     const drives: Drive[] = ([0, 1] as Side[]).map((side) => {
       const stick = this.sticks[side] as Joystick
       const bot = this.bots[side]
@@ -94,7 +111,11 @@ class SpikeAttacks extends BaseGame<State> {
         return d
       }
       stick.update(ctx.input.player(side))
-      return { jx: stick.x, jy: stick.y }
+      // A flick of the stick (the knob snapping across in one step) is a dash.
+      const [kx, ky] = this.knob[side] as [number, number]
+      const flick = stick.active && Math.hypot(stick.knobX - kx, stick.knobY - ky) > FLICK
+      this.knob[side] = [stick.knobX, stick.knobY]
+      return { jx: stick.x, jy: stick.y, dash: flick }
     })
     s.sticks = this.sticks.map(lookOf)
     if (!playing) {
@@ -123,10 +144,24 @@ class SpikeAttacks extends BaseGame<State> {
   }
 
   private feedback(e: Ev): void {
-    const { fx, audio, rng } = this.ctx
+    const { fx, audio } = this.ctx
     switch (e.k) {
       case 'warn':
-        audio.play('tick', 0.8 + rng.next() * 0.2)
+        audio.play('tick', 0.8 + Math.random() * 0.2)
+        break
+      case 'dash':
+        audio.play('whoosh', 1.2)
+        audio.buzz(8)
+        fx.burst(e.x, e.y, SIDE[e.side].light, {
+          count: 8,
+          speed: 300,
+          size: 9,
+          life: 0.35,
+          gravity: 0,
+          spread: 0.9,
+          dir: Math.atan2(-e.dy, -e.dx),
+        })
+        fx.puff(e.x - e.dx * 30, e.y - e.dy * 30, 'rgba(255,255,255,0.4)', 3)
         break
       case 'fire':
         audio.play('pop', 0.6 + Math.min(0.5, e.n / 30))
@@ -135,12 +170,19 @@ class SpikeAttacks extends BaseGame<State> {
           fx.shake(0.25)
         }
         break
-      case 'bump':
-        audio.play('boing', 0.9 + Math.min(0.4, e.speed / 900))
-        fx.puff(e.x, e.y, 'rgba(255,255,255,0.45)', 4)
-        fx.ring(e.x, e.y, C.white, 70)
-        fx.shake(0.12)
+      case 'bump': {
+        // The harder the shove, the bigger the boing.
+        const k = Math.min(1, e.speed / 900)
+        audio.play('boing', 0.8 + k * 0.6)
+        if (k > 0.4) audio.buzz(10 + Math.round(k * 20))
+        fx.puff(e.x, e.y, 'rgba(255,255,255,0.45)', 3 + Math.round(k * 4))
+        fx.ring(e.x, e.y, C.white, 60 + k * 70)
+        if (k > 0.5) fx.sparks(e.x, e.y, C.yellow, Math.round(6 + k * 10))
+        fx.shake(0.08 + k * 0.25)
+        if (k > 0.6) fx.stop(2 + Math.round(k * 2))
+        for (const sq of this.squash) sq.kick(-2 - k * 5)
         break
+      }
       case 'hit':
         audio.play('hit', 1.05)
         audio.play('slap', 1.2)
@@ -178,8 +220,32 @@ class SpikeAttacks extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
-    renderSpikes(g, this.s, this.time, this.ctx.names, this.over)
+  render(g: Draw, alpha: number): void {
+    const f = this.s.f
+    for (const side of [0, 1] as Side[]) {
+      // A dash (seen through the synced dash time) stretches the blob.
+      const dt = f.fighters[side].dashT
+      if (dt !== this.seenDash[side]) {
+        if (dt > this.seenDash[side] && dt >= 0) this.squash[side].kick(4)
+        this.seenDash[side] = dt
+      }
+      this.squash[side].update(1 / 60)
+    }
+    const at = f.fighters.map((p, i): [number, number] => {
+      const q = this.prev[i] ?? [p.x, p.y]
+      // A jump (new round) is not tweened.
+      if (Math.abs(q[0] - p.x) + Math.abs(q[1] - p.y) > 200) return [p.x, p.y]
+      return [lerp(q[0], p.x, alpha), lerp(q[1], p.y, alpha)]
+    })
+    renderSpikes(g, this.s, this.time, this.ctx.names, this.over, {
+      at,
+      squash: [this.squash[0].value, this.squash[1].value],
+    })
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prev = this.s.f.fighters.map((p) => [p.x, p.y])
   }
 }
 
