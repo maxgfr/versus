@@ -21,7 +21,7 @@ import {
   tileAt,
   tileCenter,
 } from './render.ts'
-import { buildLayout, isFree, LEVELS, type Layout, settle, TRAY } from './rules.ts'
+import { buildLayout, isFree, type Layout, levelFor, settle, TRAY } from './rules.ts'
 
 const EMOJI = [
   '🍎',
@@ -119,7 +119,8 @@ class TapMatch extends PuzzleRace<State> {
 
   /** The layout and kinds of race `round`, from the seed. */
   private derive(round: number): void {
-    const level = LEVELS[this.ctx.difficulty]
+    // Later races of a longer match stack a little higher, with more kinds.
+    const level = levelFor(this.ctx.difficulty, round)
     const seed = this.ctx.seed + round
     this.lay = buildLayout(seed, level)
     this.emoji = new Rng(seed ^ 0x51ed).shuffle(EMOJI.slice()).slice(0, level.kinds)

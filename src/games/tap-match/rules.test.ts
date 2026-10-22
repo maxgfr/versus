@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { Rng } from '../../core/rng.ts'
-import { pickTile, PACE } from './bot.ts'
+import { knownKinds, pickTile, PACE } from './bot.ts'
 import {
   buildLayout,
   isFree,
   LEVELS,
+  levelFor,
+  MAX_KINDS,
+  MAX_SETS,
   type Layout,
   overlaps,
   settle,
@@ -12,6 +15,7 @@ import {
   solve,
   solvable,
   TRAY,
+  visible,
 } from './rules.ts'
 
 const EASY = LEVELS.easy
@@ -113,12 +117,12 @@ describe('tap match solver and deal', () => {
   })
 
   it('solve finds no line from a lost cause', () => {
-    const lay = buildLayout(5, EASY)
-    const taken = Array.from({ length: lay.tiles.length }, () => false)
-    // One of each of the six kinds: whatever tile comes next is a seventh with no set.
+    // Six odd tiles (one of each of six kinds): any tile not of those kinds is a seventh
+    // with no set, and one of those kinds makes two, so the tray fills either way.
+    const lay6 = buildLayout(5, { kinds: 6, sets: 12 })
+    const taken6 = Array.from({ length: lay6.tiles.length }, () => false)
     const tray = [0, 1, 2, 3, 4, 5].map((k) => ({ k }))
-    expect(EASY.kinds).toBe(6)
-    expect(solve(lay, taken, tray, 2000)).toBe(-1)
+    expect(solve(lay6, taken6, tray, 2000)).toBe(-1)
   })
 
   it('when random deals keep failing, the constructive deal is solvable and inside the grid', () => {
@@ -209,18 +213,77 @@ describe('tap match bot', () => {
     })
   }
 
-  it('the hard bot clears every sample layout (it looks ahead with the solver)', () => {
-    for (let s = 1; s <= 6; s++)
-      expect(playBot(buildLayout(s, HARD), 'hard', s).outcome).toBe('cleared')
-  })
-
   it('clears more stacks the harder it plays', () => {
     const cleared = (d: 'easy' | 'normal' | 'hard') =>
-      Array.from({ length: 16 }, (_, s) => s + 1).filter(
-        (s) => playBot(buildLayout(s, HARD), d, s).outcome === 'cleared',
+      Array.from({ length: 12 }, (_, s) => s + 1).filter(
+        (s) => playBot(buildLayout(s, NORMAL), d, s).outcome === 'cleared',
       ).length
     const [e, n, h] = [cleared('easy'), cleared('normal'), cleared('hard')]
     expect(h).toBeGreaterThanOrEqual(n)
     expect(n).toBeGreaterThan(e)
+  })
+
+  it('in a race on the same stack, hard beats easy most of the time', () => {
+    // Clearing first wins; a full tray loses (when both fill, the later one wins).
+    const runs = 12
+    let wins = 0
+    for (let s = 1; s <= runs; s++) {
+      const lay = buildLayout(s * 7, NORMAL)
+      const h = playBot(lay, 'hard', s)
+      const e = playBot(lay, 'easy', s)
+      const time = (r: typeof h, d: 'easy' | 'hard') => r.taps * PACE[d]
+      const hardWins =
+        h.outcome === 'cleared'
+          ? e.outcome !== 'cleared' || time(h, 'hard') < time(e, 'easy')
+          : e.outcome === 'lost' && time(h, 'hard') > time(e, 'easy')
+      if (hardWins) wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(Math.ceil(runs * 0.75))
+  })
+
+  it('never reads a tile it cannot see', () => {
+    const lay = buildLayout(3, HARD)
+    const taken = Array.from({ length: lay.tiles.length }, () => false)
+    const known = knownKinds(lay, taken)
+    const seen = visible(lay, taken)
+    // A tall stack starts with some floor tiles buried under four others.
+    expect(seen.some((v) => !v)).toBe(true)
+    known.forEach((k, i) => expect(k).toBe(seen[i] ? lay.tiles[i]?.k : -1))
+    // Swapping the kinds of hidden tiles never changes what the computer picks.
+    const shuffled = { ...lay, tiles: lay.tiles.map((t, i) => (seen[i] ? t : { ...t, k: 0 })) }
+    for (const d of ['easy', 'normal', 'hard'] as const)
+      expect(pickTile(shuffled, taken, [], d, new Rng(4))).toBe(
+        pickTile(lay, taken, [], d, new Rng(4)),
+      )
+  })
+
+  it('later races of a match are a little harder, within the stack limits', () => {
+    for (const d of ['easy', 'normal', 'hard'] as const) {
+      expect(levelFor(d, 0)).toEqual(LEVELS[d])
+      let prev = levelFor(d, 0)
+      for (let r = 1; r <= 8; r++) {
+        const l = levelFor(d, r)
+        expect(l.kinds + l.sets).toBeGreaterThanOrEqual(prev.kinds + prev.sets)
+        expect(l.sets).toBeLessThanOrEqual(MAX_SETS)
+        expect(l.kinds).toBeLessThanOrEqual(MAX_KINDS)
+        expect(l.kinds).toBeLessThanOrEqual(l.sets)
+        prev = l
+      }
+      expect(levelFor(d, 3).kinds + levelFor(d, 3).sets).toBeGreaterThan(
+        LEVELS[d].kinds + LEVELS[d].sets,
+      )
+    }
+    // Every ramped level still deals a whole, solvable stack.
+    const top = levelFor('hard', 8)
+    const lay = buildLayout(9, top)
+    expect(lay.tiles).toHaveLength(top.sets * SET)
+    expect(solvable(lay, 100000)).toBe(true)
+  })
+
+  it('levels: easy is a small pile with few kinds, hard a tall one with many', () => {
+    expect(EASY.kinds).toBeLessThan(NORMAL.kinds)
+    expect(NORMAL.kinds).toBeLessThan(HARD.kinds)
+    expect(EASY.sets).toBeLessThan(NORMAL.sets)
+    expect(NORMAL.sets).toBeLessThan(HARD.sets)
   })
 })

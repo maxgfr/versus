@@ -13,10 +13,63 @@ export const TRAY = 7
 /** Tiles of one kind that vanish together from the tray. */
 export const SET = 3
 
-export const LEVELS: Record<Difficulty, { kinds: number; sets: number }> = {
-  easy: { kinds: 6, sets: 12 },
-  normal: { kinds: 8, sets: 15 },
-  hard: { kinds: 10, sets: 20 },
+export interface Level {
+  kinds: number
+  sets: number
+}
+
+/**
+ * Per difficulty: kinds of tile and sets in the stack. Easy is a small pile
+ * with few kinds (lots of matches in sight); hard is a tall pile with many
+ * kinds, so the tray fills with odd ones unless every tap is planned.
+ */
+export const LEVELS: Record<Difficulty, Level> = {
+  easy: { kinds: 5, sets: 9 },
+  normal: { kinds: 9, sets: 17 },
+  hard: { kinds: 12, sets: 22 },
+}
+
+/** The most sets a stack holds (three layers over the 14 × 10 grid). */
+export const MAX_SETS = 22
+/** The most kinds of tile a stack uses. */
+export const MAX_KINDS = 14
+
+/**
+ * The level of race `round` (from 0) in a longer match: each later race adds
+ * a set and, from the second on, a kind, up to the stack's limits.
+ */
+export function levelFor(d: Difficulty, round: number): Level {
+  const base = LEVELS[d]
+  const r = Math.max(0, Math.min(round, 4))
+  return {
+    kinds: Math.min(MAX_KINDS, base.kinds + Math.max(0, r - 1) + (d === 'hard' ? r : 0)),
+    sets: Math.min(MAX_SETS, base.sets + r),
+  }
+}
+
+/** Slots (x, y) a tile's 2 × 2 footprint covers. */
+function covers(t: Pos, x: number, y: number): boolean {
+  return x >= t.x && x <= t.x + 1 && y >= t.y && y <= t.y + 1
+}
+
+/**
+ * Which tiles a player can see: every free tile, and every covered tile with
+ * at least one slot of its face not under a tile still on the stack. A tile
+ * whose whole face is covered is hidden (the computer must not read it).
+ */
+export function visible(lay: Layout, taken: readonly boolean[]): boolean[] {
+  return lay.tiles.map((t, i) => {
+    if (taken[i]) return false
+    const over = (lay.above[i] ?? []).filter((j) => !taken[j])
+    if (over.length === 0) return true
+    for (let dx = 0; dx < 2; dx++)
+      for (let dy = 0; dy < 2; dy++) {
+        const x = t.x + dx
+        const y = t.y + dy
+        if (!over.some((j) => covers(lay.tiles[j] as Tile, x, y))) return true
+      }
+    return false
+  })
 }
 
 export interface Tile {
