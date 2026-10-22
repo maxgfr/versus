@@ -199,7 +199,8 @@ export function renderTanks(
   drawWalls(g, grid)
   for (const t of s.w.tanks) if (t.alive) tank(g, t, s.w.t, look)
   shells(g, s, look)
-  for (const c of s.ctl) drawControl(g, c)
+  // Online, each phone shows only its own player's stick and button.
+  for (const c of s.ctl) if (g.viewer === null || c.side === g.viewer) drawControl(g, c)
   status(g, s, 0, names[0], grid)
   status(g, s, 1, names[1], grid)
   const r = s.rounds
