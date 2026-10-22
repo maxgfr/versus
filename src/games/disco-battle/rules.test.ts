@@ -5,6 +5,7 @@ import { DanceBot } from './bot.ts'
 import {
   arrowY,
   BEAT,
+  BOUNCE,
   chartNew,
   DURATION,
   dancerNew,
@@ -126,6 +127,62 @@ describe('disco battle: pressing', () => {
   })
 })
 
+describe('disco battle: no free mashing', () => {
+  it('a tap on a pad with nothing to hit is a whiff and breaks the combo', () => {
+    const d = dancerNew(chartOf([2, 0b0001], [2.5, 0b0001], [3, 0b0001]))
+    press(d, 0, 2)
+    press(d, 0, 2.5)
+    expect(d.combo).toBe(2)
+    expect(press(d, 3, 2.7)).toBeNull()
+    expect(d.whiffs).toBe(1)
+    expect(d.combo).toBe(0)
+    expect(d.best).toBe(2)
+    expect(d.judge).toBe('miss')
+    // The arrow it did not touch is still there to hit.
+    expect(press(d, 0, 3)).toBe('perfect')
+  })
+
+  it('a finger bouncing on the pad it just hit is forgiven', () => {
+    const d = dancerNew(chartOf([2, 0b0001], [2.5, 0b0001]))
+    press(d, 0, 2)
+    expect(press(d, 0, 2 + BOUNCE * 0.5)).toBeNull()
+    expect(d.combo).toBe(1)
+    expect(d.whiffs).toBe(0)
+  })
+
+  it('a whiff with no combo costs nothing but is counted', () => {
+    const d = dancerNew(chartOf([2, 0b0001]))
+    expect(press(d, 2, 1)).toBeNull()
+    expect(d.whiffs).toBe(1)
+    expect(d.score).toBe(0)
+    expect(d.judge).toBe('')
+  })
+
+  it('mashing every pad scores far less than dancing on the beat', () => {
+    const rng = new Rng(8)
+    const s = worldNew(rng)
+    const masher = s.p[0]
+    const bot = new DanceBot(rng.fork(), 'normal')
+    for (let t = STEP, k = 0; t < DURATION; t += STEP, k++) {
+      expire(masher, t)
+      expire(s.p[1], t)
+      // Four fingers drumming all pads about 12 times a second each.
+      if (k % 5 === 0) for (let lane = 0; lane < LANES; lane++) press(masher, lane, t)
+      for (const lane of bot.step(t, s.p[1])) press(s.p[1], lane, t)
+    }
+    expect(s.p[1].score).toBeGreaterThan(masher.score * 1.5)
+    expect(masher.best).toBeLessThan(10)
+  })
+
+  it('records how early or late the last hit was', () => {
+    const d = dancerNew(chartOf([2, 0b0001], [3, 0b0001]))
+    press(d, 0, 1.95)
+    expect(d.err).toBeCloseTo(-0.05, 6)
+    press(d, 0, 3.08)
+    expect(d.err).toBeCloseTo(0.08, 6)
+  })
+})
+
 describe('disco battle: geometry', () => {
   it('an arrow scrolls from the spawn line to the pad over LEAD seconds', () => {
     const h = { t: 4, lane: 0, r: 0 as const }
@@ -141,7 +198,7 @@ describe('disco battle: geometry', () => {
     expect(laneAt(1, 1000 - (LANE_X[1] as number), 1800 - PAD_Y)).toBe(1)
   })
 
-  it('the higher score wins, a tie is a draw', () => {
+  it('the higher score wins, a perfect tie is a draw', () => {
     const s: State = worldNew(new Rng(1))
     s.p[0].score = 500
     s.p[1].score = 300
@@ -149,6 +206,24 @@ describe('disco battle: geometry', () => {
     s.p[1].score = 700
     expect(winnerOf(s)).toBe(1 as Side)
     s.p[1].score = 500
+    expect(winnerOf(s)).toBe('draw')
+  })
+
+  it('equal scores go to the cleaner dance: perfects, then best combo, then fewer slips', () => {
+    const s: State = worldNew(new Rng(1))
+    s.p[0].score = s.p[1].score = 600
+    s.p[1].perfects = 3
+    s.p[0].perfects = 2
+    expect(winnerOf(s)).toBe(1)
+    s.p[0].perfects = 3
+    s.p[0].best = 5
+    s.p[1].best = 4
+    expect(winnerOf(s)).toBe(0)
+    s.p[1].best = 5
+    s.p[0].whiffs = 2
+    s.p[1].misses = 1
+    expect(winnerOf(s)).toBe(1)
+    s.p[1].whiffs = 1
     expect(winnerOf(s)).toBe('draw')
   })
 })
@@ -201,6 +276,27 @@ describe('disco battle: bots', () => {
     expect(total).toBeGreaterThan(40)
     expect((d.perfects + d.goods) / total).toBeGreaterThan(0.85)
     expect(d.perfects / (d.perfects + d.goods)).toBeGreaterThan(0.7)
+  })
+
+  it('a bot never whiffs: its planned hits all land inside the window', () => {
+    for (const d of ['easy', 'normal', 'hard'] as const) {
+      const r = game(5, d, d)
+      expect(r.s.p[0].whiffs).toBe(0)
+      expect(r.s.p[1].whiffs).toBe(0)
+    }
+  })
+
+  it('normal sits between easy and hard', () => {
+    let easy = 0
+    let normal = 0
+    let hard = 0
+    for (const seed of [1, 2, 3]) {
+      easy += game(seed, 'easy', 'easy').s.p[0].score
+      normal += game(seed, 'normal', 'normal').s.p[0].score
+      hard += game(seed, 'hard', 'hard').s.p[0].score
+    }
+    expect(normal).toBeGreaterThan(easy * 1.2)
+    expect(hard).toBeGreaterThan(normal * 1.2)
   })
 
   it('a bot never presses an arrow that is not on screen', () => {

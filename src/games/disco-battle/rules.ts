@@ -21,6 +21,8 @@ export const LEAD = 1.6
 /** Half-windows (s): perfect and good. */
 export const PERFECT = 0.05
 export const GOOD = 0.12
+/** A second press on a pad this soon after a hit there is a finger bounce, not a whiff. */
+export const BOUNCE = 0.12
 /** Lanes, left to right in the player's layout: left, down, up, right. */
 export const LANES = 4
 /** Lane centres (red's layout) and the pad row. */
@@ -53,9 +55,13 @@ export interface Dancer {
   perfects: number
   goods: number
   misses: number
+  /** Taps on a pad with no arrow to hit (they break the combo: no free mashing). */
+  whiffs: number
   /** The last judgement and when it happened. */
   judge: 'perfect' | 'good' | 'miss' | ''
   judgeAt: number
+  /** Signed timing error of the last hit (s): negative = early, positive = late. */
+  err: number
   /** Game time of the last tap that landed in each lane (-1 never). */
   laneAt: number[]
 }
@@ -114,8 +120,10 @@ export function dancerNew(chart: Note[]): Dancer {
     perfects: 0,
     goods: 0,
     misses: 0,
+    whiffs: 0,
     judge: '',
     judgeAt: -1,
+    err: 0,
     laneAt: [-1, -1, -1, -1],
   }
 }
@@ -139,6 +147,9 @@ function skip(d: Dancer): void {
 /**
  * A tap in `lane` at `now`: resolves the closest pending arrow in that lane
  * inside the good window. Returns the judgement, or null for a stray tap.
+ * A stray tap is a whiff and breaks the combo (mashing every pad must not
+ * out-score dancing on the beat), unless it is a finger bouncing on a pad it
+ * just hit.
  */
 export function press(d: Dancer, lane: number, now: number): 'perfect' | 'good' | null {
   let best = -1
@@ -153,7 +164,17 @@ export function press(d: Dancer, lane: number, now: number): 'perfect' | 'good' 
       bestErr = e
     }
   }
-  if (best < 0) return null
+  if (best < 0) {
+    if (now - (d.laneAt[lane] as number) > BOUNCE || (d.laneAt[lane] as number) < 0) {
+      d.whiffs++
+      if (d.combo > 0) {
+        d.combo = 0
+        d.judge = 'miss'
+        d.judgeAt = now
+      }
+    }
+    return null
+  }
   const h = d.hits[best] as Hit
   const j = bestErr <= PERFECT ? 'perfect' : 'good'
   h.r = j === 'perfect' ? 1 : 2
@@ -164,6 +185,7 @@ export function press(d: Dancer, lane: number, now: number): 'perfect' | 'good' 
   else d.goods++
   d.judge = j
   d.judgeAt = now
+  d.err = now - h.t
   d.laneAt[lane] = now
   skip(d)
   return j
@@ -205,8 +227,19 @@ export function laneAt(side: Side, x: number, y: number): number | null {
   return Math.abs(l.x - (LANE_X[best] as number)) <= 112 ? best : null
 }
 
-/** Winner by score at the end; 'draw' on a tie. */
+/**
+ * Winner at the end: the higher score; on equal scores the cleaner dance
+ * (more perfects, then the longer best combo, then fewer misses and whiffs);
+ * 'draw' only when all of that is equal too.
+ */
 export function winnerOf(s: State): Side | 'draw' {
-  if (s.p[0].score === s.p[1].score) return 'draw'
-  return s.p[0].score > s.p[1].score ? 0 : 1
+  const [a, b] = s.p
+  const keys: [number, number][] = [
+    [a.score, b.score],
+    [a.perfects, b.perfects],
+    [a.best, b.best],
+    [-(a.misses + a.whiffs), -(b.misses + b.whiffs)],
+  ]
+  for (const [x, y] of keys) if (x !== y) return x > y ? 0 : 1
+  return 'draw'
 }

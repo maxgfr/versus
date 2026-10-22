@@ -191,8 +191,10 @@ function stage(
   now: number,
   end: 'play' | 'win' | 'lose',
   endT: number,
+  o: DiscoOpts,
 ): void {
   const ang = textAngle(g, side)
+  const pads = o.pads[side]
   const ph = (now % BEAT) / BEAT
   const beat = Math.pow(1 - ph, 2)
   for (let lane = 0; lane < LANES; lane++) {
@@ -213,14 +215,59 @@ function stage(
       if (!h || h.t - now > GOOD) break
       if (h.r === 0 && h.lane === lane && Math.abs(h.t - now) <= GOOD) ready = true
     }
+    // The pad squashes into the table when pressed (spring, harder on a clean hit).
+    const p = Math.max(0.6, Math.min(1.25, pads[lane] ?? 1))
     g.circle(x, PAD_Y + 12, PAD_R + 6, alpha('#000000', 0.4))
-    g.disc(x, PAD_Y, PAD_R + f * 8, mix(shade(col, -0.35), C.white, f * 0.5), 10)
-    g.ring(x, PAD_Y, PAD_R - 8, alpha(C.white, 0.35 + beat * 0.3), 5)
-    g.at(x, PAD_Y, DIR[lane] as number, () =>
-      g.poly(arrowPts(30), alpha(C.white, 0.6 + f * 0.4), alpha(C.ink, 0.4), 5),
+    g.at(
+      x,
+      PAD_Y + (1 - p) * 10,
+      0,
+      () => {
+        g.disc(0, 0, PAD_R + f * 8, mix(shade(col, -0.35), C.white, f * 0.5), 10 * p)
+        g.ring(0, 0, PAD_R - 8, alpha(C.white, 0.35 + beat * 0.3), 5)
+        g.at(0, 0, DIR[lane] as number, () =>
+          g.poly(arrowPts(30), alpha(C.white, 0.6 + f * 0.4), alpha(C.ink, 0.4), 5),
+        )
+      },
+      2 - p,
+      p,
     )
-    if (ready) g.ring(x, PAD_Y, PAD_R + 14, alpha(C.yellow, 0.85), 6)
+    if (ready) g.ring(x, PAD_Y, PAD_R + 14 + beat * 4, alpha(C.yellow, 0.85), 6)
     if (f > 0) g.ring(x, PAD_Y, PAD_R + 26 + (1 - f) * 44, alpha(col, f), 8)
+  }
+  // Missed arrows keep sliding past the pad, grey and tumbling, then fade.
+  if (end === 'play') {
+    for (let i = d.cursor - 1; i >= 0; i--) {
+      const h = d.hits[i]
+      if (!h || now - h.t > 0.5) break
+      if (h.r !== 3) continue
+      const t = (now - h.t - GOOD) / (0.5 - GOOD)
+      if (t < 0) continue
+      const y = arrowY(h, now)
+      const x = LANE_X[h.lane] as number
+      g.alpha(0.7 * (1 - t), () =>
+        g.at(x + Math.sin(t * 9) * 6, y, (DIR[h.lane] as number) + t * 0.9, () =>
+          arrow(g, ARROW * (1 - t * 0.3), '#5d5770'),
+        ),
+      )
+    }
+  }
+  // Hit arrows burst out of the pad: a quick expanding ghost (bigger on a clean hit).
+  for (const gh of o.ghosts) {
+    if (gh.side !== side) continue
+    const t = (now - gh.at) / 0.32
+    if (t < 0 || t >= 1) continue
+    const x = LANE_X[gh.lane] as number
+    const col = gh.perfect ? C.yellow : (LANE_COL[gh.lane] as string)
+    g.alpha((1 - t) * (0.5 + gh.k * 0.5), () =>
+      g.at(
+        x,
+        PAD_Y - t * 40,
+        DIR[gh.lane] as number,
+        () => g.poly(arrowPts(ARROW), alpha(col, 0.35), col, 8),
+        1 + outBack(t) * (0.4 + gh.k * 0.5),
+      ),
+    )
   }
   // Arrows on their way (or just past the pad, before they expire).
   if (end === 'play') {
@@ -234,6 +281,21 @@ function stage(
       const fade = Math.min(1, (y - SPAWN_Y) / 90)
       const near = Math.max(0, 1 - Math.abs(y - PAD_Y) / 120)
       const x = LANE_X[h.lane] as number
+      const lc = LANE_COL[h.lane] as string
+      // A motion streak behind each arrow, toward where it came from.
+      const tl = Math.min(110, y - SPAWN_Y)
+      if (tl > 10)
+        g.rrect(
+          x - 18,
+          y - tl - 20,
+          36,
+          tl,
+          18,
+          g.lin(0, y - tl - 20, 0, y - 20, [
+            [0, alpha(lc, 0)],
+            [1, alpha(lc, 0.32 * fade)],
+          ]),
+        )
       g.alpha(fade, () =>
         g.at(
           x,
@@ -252,23 +314,35 @@ function stage(
     const a = since > 0.45 ? 1 - (since - 0.45) / 0.25 : 1
     const label = d.judge === 'perfect' ? 'PERFECT' : d.judge === 'good' ? 'GOOD' : 'MISS'
     const col = d.judge === 'perfect' ? C.yellow : d.judge === 'good' ? C.cyan : C.redLight
+    // A clean hit pops bigger; a miss sags.
+    const k = d.judge === 'miss' ? 0 : Math.max(0, 1 - Math.abs(d.err) / GOOD)
+    const drop = d.judge === 'miss' ? since * 40 : 0
     g.alpha(a, () =>
-      g.at(W / 2, PAD_Y - 190, ang, () =>
+      g.at(W / 2, PAD_Y - 190 + drop, ang, () => {
         g.text(label, 0, 0, {
-          size: 62 * (0.6 + 0.4 * outBack(t)),
+          size: (56 + k * 14) * (0.6 + 0.4 * outBack(t)),
           weight: 700,
           color: col,
           stroke: alpha(C.ink, 0.85),
           strokeWidth: 12,
-        }),
-      ),
+        })
+        if (d.judge === 'good')
+          g.text(d.err < 0 ? 'early' : 'late', 0, -60, {
+            size: 34,
+            weight: 700,
+            color: alpha(C.white, 0.8),
+            stroke: alpha(C.ink, 0.8),
+            strokeWidth: 8,
+          })
+      }),
     )
   }
   if (d.combo >= 4 && end === 'play') {
     const mult = 1 + Math.min(3, Math.floor(d.combo / 10))
+    const pop = d.judge !== 'miss' && since < 0.15 ? 1 - since / 0.15 : 0
     g.at(W / 2, PAD_Y - 122, ang, () =>
       g.text(mult > 1 ? `${d.combo} combo  x${mult}` : `${d.combo} combo`, 0, 0, {
-        size: 40,
+        size: 40 * (1 + pop * 0.15),
         weight: 700,
         color: mult > 1 ? C.yellow : C.white,
         stroke: alpha(C.ink, 0.7),
@@ -276,7 +350,7 @@ function stage(
       }),
     )
   }
-  dancer(g, side, d, now, end, endT, ang, ph)
+  dancer(g, side, d, now, end, endT, ang, ph, o.lean[side], o.hop[side], o.squash[side])
 }
 
 /** The dancer: bounces and sways on the beat, waves its arms, shades on at a x2 combo. */
@@ -289,6 +363,9 @@ function dancer(
   endT: number,
   ang: number,
   ph: number,
+  leanK: number,
+  hopK: number,
+  squashK: number,
 ): void {
   const col = SIDE[side].main
   const beatNo = Math.floor(now / BEAT + 1e-6)
@@ -311,8 +388,13 @@ function dancer(
   }
   const shades = (d.combo >= 10 && end === 'play') || end === 'win'
   const R = 56
-  const lean = end === 'lose' ? 0 : sway
-  g.shadow(W / 2, BLOB_Y + 60, 56 + bob * 0.3, 14)
+  // Dance moves from the springs: lean toward a side arrow, jump on up, squat on down.
+  const lean = (end === 'lose' ? 0 : sway) + leanK * 0.35
+  const dx = leanK * 40
+  bob -= hopK * 60
+  const sx = (1 + sq) * (2 - squashK)
+  const sy = (1 - sq) * squashK
+  g.shadow(W / 2 + dx, BLOB_Y + 60, Math.max(30, 56 + bob * 0.3), 14)
   if (end === 'win') {
     // Spotlight cone onto the winner.
     g.poly(
@@ -330,7 +412,7 @@ function dancer(
     )
     g.ellipse(W / 2, BLOB_Y + 62, 170, 40, alpha(C.yellow, 0.22))
   }
-  g.at(W / 2, BLOB_Y + bob, ang + lean, () => {
+  g.at(W / 2 + dx, BLOB_Y + bob, ang + lean, () => {
     // Arms pump on the beat.
     const up = end === 'lose' ? -0.2 : 0.9 - ph * 1.2
     for (const sd of [-1, 1]) {
@@ -340,7 +422,7 @@ function dancer(
       g.line(sd * R * 0.8, 6, hx, hy, shade(col, -0.25), 14)
       g.circle(hx, hy, 14, shade(col, 0.15))
     }
-    g.blob(0, 0, R, col, { mood, sx: 1 + sq, sy: 1 - sq, look: [0, 0.3] })
+    g.blob(0, 0, R, col, { mood, sx, sy, look: [leanK * 0.6, 0.3] })
     if (shades) {
       const ey = -R * 0.12
       for (const sd of [-1, 1]) g.rrect(sd * R * 0.36 - 18, ey - 12, 36, 24, 9, C.ink)
@@ -384,6 +466,26 @@ export interface DiscoOpts {
   bots: [boolean, boolean]
   /** Seconds the music plays (the clock's full circle). */
   total: number
+  /** Cosmetic springs (from index.ts), per side: pad press per lane, dancer lean / hop / squash. */
+  pads: [number[], number[]]
+  lean: [number, number]
+  hop: [number, number]
+  squash: [number, number]
+  /** 0..1 score pulse. */
+  pulse: [number, number]
+  /** Score as displayed (rolls up toward the real one). */
+  shown: [number, number]
+  ghosts: readonly Ghost[]
+}
+
+/** A hit arrow bursting out of its pad (cosmetic). */
+export interface Ghost {
+  side: Side
+  lane: number
+  at: number
+  perfect: boolean
+  /** 0..1 timing cleanliness. */
+  k: number
 }
 
 /** The whole table: dance floors, the disco ball, both stages, the HUD and the clock. */
@@ -397,16 +499,17 @@ export function renderDisco(g: Draw, s: State, now: number, o: DiscoOpts): void 
         : o.winner === side
           ? 'win'
           : 'lose'
-    inFrame(g, side, () => stage(g, side, s.p[side], now, end, endT))
+    inFrame(g, side, () => stage(g, side, s.p[side], now, end, endT, o))
   }
   discoBall(g, s, now)
   for (const side of [0, 1] as Side[]) {
     const d = s.p[side]
     const mult = 1 + Math.min(3, Math.floor(d.combo / 10))
     namePill(g, side, o.names[side], { active: mult > 1 })
-    const since = d.judgeAt >= 0 ? now - d.judgeAt : 99
-    const pop = d.judge !== 'miss' && since < 0.2 ? 1 - since / 0.2 : 0
-    bigScore(g, side, d.score, { x: frame(side, 150, 0).x, size: 62 * (1 + pop * 0.25) })
+    bigScore(g, side, o.shown[side], {
+      x: frame(side, 150, 0).x,
+      size: 62 * (1 + Math.min(1, o.pulse[side]) * 0.3),
+    })
   }
   timer(g, o.total - now, o.total)
   // Start-up prompt, upright for each player.
