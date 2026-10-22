@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Difficulty, Side } from '../../core/game.ts'
-import { shouldJump } from './bot.ts'
+import { decide, newPlan, type Plan } from './bot.ts'
 import {
   BUFFER,
   type Chicken,
@@ -247,24 +247,69 @@ describe('chicken jump judging', () => {
 })
 
 /** One round: both bots play until the round is judged. */
-function playRound(seed: number, d: Difficulty): { winner: Side | 'draw' | null; steps: number } {
+function playRound(
+  seed: number,
+  d: Difficulty,
+  d1: Difficulty = d,
+): { winner: Side | 'draw' | null; steps: number; cs: [Chicken, Chicken] } {
   const cs: [Chicken, Chicken] = [newChicken(), newChicken()]
+  const plans: [Plan, Plan] = [newPlan(), newPlan()]
   let t = 0
   for (let n = 1; n <= ROUND_CAP * 60 + 60; n++) {
     t += DT
     const speed = speedAt(t)
     for (const side of [0, 1] as Side[]) {
       const c = cs[side]
-      const jump = c.alive && shouldJump(seed, c, speed, d, side * 0x9e3779b1)
-      stepChicken(seed, c, DT, speed, jump, false, t)
+      const i = decide(seed, c, speed, side === 0 ? d : d1, t, plans[side], side * 0x9e3779b1)
+      stepChicken(seed, c, DT, speed, i.tap, i.hold, t)
     }
     const w = judge(cs[0], cs[1], t)
-    if (w !== null) return { winner: w, steps: n }
+    if (w !== null) return { winner: w, steps: n, cs }
   }
-  return { winner: null, steps: Infinity }
+  return { winner: null, steps: Infinity, cs }
+}
+
+/** Seconds one bot survives alone on a course (capped at the round cap). */
+function survive(seed: number, d: Difficulty): { t: number; eggs: number } {
+  const c = newChicken()
+  const p = newPlan()
+  let t = 0
+  while (c.alive && t < ROUND_CAP) {
+    t += DT
+    const speed = speedAt(t)
+    const i = decide(seed, c, speed, d, t, p)
+    stepChicken(seed, c, DT, speed, i.tap, i.hold, t)
+  }
+  return { t, eggs: c.eggs }
 }
 
 describe('chicken jump bot', () => {
+  const seeds = [11, 22, 33, 44, 55, 66]
+  let memo: { t: number; eggs: number }[] | null = null
+  const hardRuns = () => (memo ??= seeds.map((s) => survive(s, 'hard')))
+
+  it('plans with the real rules: a hard bot runs a long way', () => {
+    const runs = hardRuns().map((r) => r.t)
+    expect(runs.reduce((a, b) => a + b) / runs.length).toBeGreaterThan(40)
+  })
+
+  it('spreads the levels: easy falls sooner and grabs fewer eggs than hard', () => {
+    const easy = seeds.map((s) => survive(s, 'easy'))
+    const hard = hardRuns()
+    const sum = (xs: number[]) => xs.reduce((a, b) => a + b)
+    expect(sum(easy.map((r) => r.t))).toBeLessThan(sum(hard.map((r) => r.t)))
+    // Per second alive, the hard bot goes for the eggs.
+    expect(sum(hard.map((r) => r.eggs)) / sum(hard.map((r) => r.t))).toBeGreaterThan(
+      sum(easy.map((r) => r.eggs)) / sum(easy.map((r) => r.t)),
+    )
+  })
+
+  it('hard beats easy most rounds', () => {
+    let hard = 0
+    for (let k = 0; k < 8; k++) if (playRound(300 + k * 7, 'easy', 'hard').winner === 1) hard++
+    expect(hard).toBeGreaterThanOrEqual(6)
+  })
+
   it('an easy bot loses rounds, so it is beatable', () => {
     const steps = [1, 2, 3, 4, 5, 6].map((s) => playRound(s * 97, 'easy').steps)
     expect(Math.min(...steps)).toBeLessThan(ROUND_CAP * 60)

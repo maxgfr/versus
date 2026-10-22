@@ -71,6 +71,8 @@ export interface Chicken {
   buf: number
   flipAt: number
   landAt: number
+  /** How hard the last landing was, 0..1 (the squash and the dust scale with it). */
+  landK: number
   deadAt: number
   /** When the last egg was collected (the counter bumps). */
   scoreAt: number
@@ -93,6 +95,7 @@ export function newChicken(): Chicken {
     buf: 0,
     flipAt: -10,
     landAt: -10,
+    landK: 0,
     deadAt: -1,
     scoreAt: -10,
   }
@@ -234,6 +237,7 @@ export function stepChicken(
     c.vh -= g * dt
     c.h += c.vh * dt
     if (c.h <= 0 && c.vh <= 0) {
+      c.landK = Math.min(1, -c.vh / 1400)
       c.h = 0
       c.vh = 0
       c.grounded = true

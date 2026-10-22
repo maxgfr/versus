@@ -1,8 +1,9 @@
-import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { type GameContext, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { clamp, lerp } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
-import { RunnerGame, toWorld } from '../../engines/runner/index.ts'
-import { shouldJump } from './bot.ts'
+import { mirrorFx, RunnerGame, toWorld } from '../../engines/runner/index.ts'
+import { decide, newPlan, type Plan } from './bot.ts'
 import { drawLane, type LaneView } from './render.ts'
 import {
   type ChickEvent,
@@ -40,8 +41,34 @@ const FINAL = 2.4
 export const match: MatchSpec = { unit: 'wins', default: TARGET, min: 1, max: 5 }
 
 class ChickenJump extends RunnerGame<State> {
+  /** The computer's plans (host only, never in the state). */
+  private plans: [Plan, Plan] = [newPlan(), newPlan()]
+  /** Cosmetic: each chicken's height and distance at the previous step, for interpolation. */
+  private prev: [{ h: number; d: number }, { h: number; d: number }] = [
+    { h: 0, d: 0 },
+    { h: 0, d: 0 },
+  ]
+  private stepped = false
+  private alpha = 1
+
   private get target(): number {
     return this.ctx.target || match.default
+  }
+
+  override init(ctx: GameContext): void {
+    super.init(ctx)
+    // Effects land where each lane is drawn, also when a half is shown turned (online).
+    mirrorFx(ctx, this.frames)
+  }
+
+  protected override step(dt: number): void {
+    for (const side of [0, 1] as Side[]) {
+      const c = this.s.chickens[side]
+      this.prev[side].h = c.h
+      this.prev[side].d = c.dist
+    }
+    this.stepped = true
+    super.step(dt)
   }
 
   protected setup(): State {
@@ -85,16 +112,21 @@ class ChickenJump extends RunnerGame<State> {
     const s = this.s
     const c = s.chickens[side]
     const speed = speedAt(s.flyT)
-    if (this.isBot(side) && shouldJump(s.seed, c, speed, this.ctx.difficulty, side * 0x9e3779b1))
-      this.botTap(side)
+    let held = this.held(side) !== undefined
+    if (this.isBot(side)) {
+      const salt = side * 0x9e3779b1
+      const i = decide(s.seed, c, speed, this.ctx.difficulty, this.time, this.plans[side], salt)
+      if (i.tap) this.botTap(side)
+      held = i.hold
+    }
     const tap = this.taps(side) > 0
-    const held = this.held(side) !== undefined
-    this.react(side, stepChicken(s.seed, c, dt, speed, tap, held, this.time))
+    const vh = c.vh
+    this.react(side, stepChicken(s.seed, c, dt, speed, tap, held, this.time), vh, speed)
     // Decide the round once both lanes have stepped (both may crash on the same step).
     if (side === 1) this.judgeRound()
   }
 
-  private react(side: Side, events: ChickEvent[]): void {
+  private react(side: Side, events: ChickEvent[], vh: number, speed: number): void {
     const c = this.s.chickens[side]
     const f = this.frames[side]
     const feet = toWorld(f, RUN_X, GROUND - c.h)
@@ -103,11 +135,20 @@ class ChickenJump extends RunnerGame<State> {
     const col = SIDE[side]
     for (const e of events) {
       if (e === 'jump') {
-        this.ctx.audio.play('boing', 1.05 + Math.random() * 0.1)
-        fx.puff(feet.x, feet.y, alpha('#f4e3c9', 0.8), 6)
+        // A held press is a big jump: a deeper boing and more dust.
+        const big = c.hold > 0
+        this.ctx.audio.play('boing', (big ? 0.9 : 1.1) + Math.random() * 0.08)
+        fx.puff(feet.x, feet.y, alpha('#f4e3c9', 0.8), big ? 9 : 5)
+        if (big) this.ctx.audio.buzz(8)
       } else if (e === 'land') {
-        this.ctx.audio.play('thud', 1.4)
-        fx.puff(feet.x, feet.y, alpha('#f4e3c9', 0.7), 5)
+        // The harder the landing, the bigger the thump.
+        const k = clamp(-vh / 1400, 0, 1)
+        this.ctx.audio.play('thud', 1.6 - k * 0.6)
+        fx.puff(feet.x, feet.y, alpha('#f4e3c9', 0.7), Math.round(3 + k * 7))
+        if (k > 0.75) {
+          fx.shake(0.08 + (k - 0.75) * 0.5)
+          this.ctx.audio.buzz(10)
+        }
       } else if (e === 'egg') {
         c.scoreAt = this.time
         this.ctx.audio.play('coin', 1 + Math.min(0.5, c.eggs * 0.03))
@@ -117,12 +158,18 @@ class ChickenJump extends RunnerGame<State> {
         fx.float('+1', up.x, up.y, C.yellow, 56, side)
       } else if (e === 'die') {
         const pit = c.h <= 0 && pitUnder(this.s.seed, c.dist + RUN_X - 14, c.dist + RUN_X + 14)
-        this.ctx.audio.play(pit ? 'whoosh' : 'slap', pit ? 0.55 : 1)
-        this.ctx.audio.play('hit')
-        this.ctx.audio.buzz(40)
-        fx.burst(body.x, body.y, col.main, { count: 16, speed: 520, size: 13 })
+        // Running into a fence at full tilt hurts more than at the start of the round.
+        const k = pit ? 0.6 : clamp(Math.hypot(speed, vh) / 900, 0.4, 1)
+        this.ctx.audio.play(pit ? 'whoosh' : 'slap', pit ? 0.55 : 1.15 - k * 0.3)
+        this.ctx.audio.play('hit', 1.1 - k * 0.25)
+        this.ctx.audio.buzz(Math.round(25 + k * 30))
+        fx.burst(body.x, body.y, col.main, {
+          count: Math.round(10 + k * 10),
+          speed: 380 + k * 240,
+          size: 13,
+        })
         fx.burst(body.x, body.y, C.white, {
-          count: 9,
+          count: Math.round(5 + k * 6),
           kind: 'emoji',
           glyph: '🪶',
           size: 46,
@@ -130,9 +177,9 @@ class ChickenJump extends RunnerGame<State> {
           gravity: 260,
           life: 1.3,
         })
-        fx.ring(body.x, body.y, col.light, 170)
-        fx.shake(0.5)
-        fx.stop(6)
+        fx.ring(body.x, body.y, col.light, 120 + k * 80)
+        fx.shake(0.25 + k * 0.3)
+        fx.stop(Math.round(3 + k * 4))
       }
     }
   }
@@ -173,11 +220,23 @@ class ChickenJump extends RunnerGame<State> {
     s.round++
     s.seed = this.courseSeed()
     s.chickens = [newChicken(), newChicken()]
+    this.plans = [newPlan(), newPlan()]
     s.phase = 'wait'
     s.phaseAt = this.time
     s.flyT = 0
     s.roundWinner = null
     this.ctx.audio.play('count')
+  }
+
+  override render(g: Draw, alpha = 1): void {
+    // Hit-stop freezes the world: no blending between two steps that are not moving.
+    this.alpha = this.stepped && this.ctx.fx.hitstop === 0 ? alpha : 1
+    super.render(g)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.stepped = false
   }
 
   protected renderLane(
@@ -186,8 +245,14 @@ class ChickenJump extends RunnerGame<State> {
     view: { x0: number; y0: number; x1: number; y1: number },
   ): void {
     const s = this.s
+    const c = s.chickens[side]
+    const p = this.prev[side]
+    // Blend toward the latest step, unless the chicken just jumped back (a new round).
+    const a = Math.abs(c.dist - p.d) > 200 ? 1 : this.alpha
     const o: LaneView = {
-      chicken: s.chickens[side],
+      chicken: c,
+      h: lerp(p.h, c.h, a),
+      dist: lerp(p.d, c.dist, a),
       seed: s.seed,
       time: this.time,
       phase: s.phase,

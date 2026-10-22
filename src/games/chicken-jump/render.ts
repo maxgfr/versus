@@ -1,5 +1,5 @@
 import type { Side } from '../../core/game.ts'
-import { outCubic, prog } from '../../core/fx/ease.ts'
+import { outBack, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { LANE_W, repeatX } from '../../engines/runner/index.ts'
@@ -8,6 +8,9 @@ import { type Chicken, eggsIn, GROUND, obstaclesIn, type Obstacle, RUN_X } from 
 
 export interface LaneView {
   chicken: Chicken
+  /** Interpolated height and distance for this frame. */
+  h: number
+  dist: number
   seed: number
   time: number
   phase: 'wait' | 'fly' | 'end'
@@ -234,26 +237,45 @@ function chicken(g: Draw, owner: Side, c: Chicken, o: LaneView): void {
   const time = o.time
   const airborne = c.alive && !c.grounded
   const running = c.alive && c.grounded && o.phase === 'fly'
-  const run = running ? Math.sin(c.dist * 0.075) : 0
+  const ch = o.h
+  const run = running ? Math.sin(o.dist * 0.075) : 0
   const flapT = airborne ? Math.sin(time * 26) : 0
   const tilt = c.alive
     ? Math.max(-0.3, Math.min(0.35, -c.vh / 1600))
     : Math.min(Math.PI * 0.75, (time - c.deadAt) * 5)
-  // Squash on landing, stretch on take-off.
+  // Squash on landing (deeper the harder it came down), stretch on take-off
+  // (longer while a high jump is held), a wobble that settles after it.
   const sl = time - c.landAt
   const sj = time - c.flipAt
-  const land = c.alive && sl < 0.18 ? Math.sin((sl / 0.18) * Math.PI) * 0.2 : 0
-  const jump = c.alive && sj < 0.2 ? Math.sin((sj / 0.2) * Math.PI) * 0.16 : 0
-  const sx = 1 + land - jump
-  const sy = 1 - land + jump
+  const lk = 0.12 + c.landK * 0.22
+  const land =
+    c.alive && sl < 0.32
+      ? sl < 0.14
+        ? Math.sin((sl / 0.14) * Math.PI * 0.5) * lk
+        : Math.cos(((sl - 0.14) / 0.18) * Math.PI) * lk * 0.5 * (1 - (sl - 0.14) / 0.18)
+      : 0
+  const jump =
+    c.alive && sj < 0.24 ? Math.sin((sj / 0.24) * Math.PI) * (c.hold > 0 ? 0.22 : 0.15) : 0
+  // Waiting to start: a little idle bounce on the spot.
+  const idle = o.phase === 'wait' && c.alive ? Math.sin(time * 6) * 0.04 : 0
+  const sx = 1 + land - jump - idle
+  const sy = 1 - land + jump + idle
   const bob = running ? Math.abs(run) * 5 : 0
-  const cy = GROUND - c.h - 58 - bob
-  const hgt = Math.max(0, c.h)
-  if (c.h > -20) g.shadow(RUN_X, GROUND + 6, 50 * Math.max(0.3, 1 - hgt / 500), 10, 0.3)
+  const cy = GROUND - ch - 58 - bob
+  const hgt = Math.max(0, ch)
+  if (ch > -20) g.shadow(RUN_X, GROUND + 6, 50 * Math.max(0.3, 1 - hgt / 500), 10, 0.3)
+  // Speed lines behind a chicken in the air.
+  if (airborne) {
+    for (let k = 0; k < 3; k++) {
+      const y = cy - 30 + k * 26
+      const len = 50 + ((k * 37) % 3) * 22
+      g.alpha(0.35, () => g.line(RUN_X - 70 - len, y, RUN_X - 64, y, '#ffffff', 5))
+    }
+  }
   // Dust kicked up while running.
   if (running) {
     for (let k = 0; k < 3; k++) {
-      const p = (c.dist * 0.012 + k / 3) % 1
+      const p = (o.dist * 0.012 + k / 3) % 1
       g.alpha((1 - p) * 0.5, () =>
         g.circle(RUN_X - 40 - p * 110, GROUND - 8 - p * 20, 8 + p * 16, '#f4e3c9'),
       )
@@ -351,14 +373,14 @@ function eggs(g: Draw, c: Chicken, seed: number, dist: number, v: View, time: nu
   }
 }
 
-function crown(g: Draw, c: Chicken, t: number): void {
-  const s = outCubic(prog(t, 0, 0.35))
-  g.emoji('👑', RUN_X + 36, GROUND - c.h - 168 + Math.sin(t * 5) * 8, 60 * s, 0.15)
+function crown(g: Draw, h: number, t: number): void {
+  const s = outBack(prog(t, 0, 0.35))
+  g.emoji('👑', RUN_X + 36, GROUND - h - 168 + Math.sin(t * 5) * 8, 60 * s, 0.15)
 }
 
 export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const c = o.chicken
-  const dist = c.dist
+  const dist = o.dist
   backdrop(g, side, v, dist, o.time)
   const lo = dist + v.x0 - 120
   const hi = dist + v.x1 + 120
@@ -370,20 +392,29 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   chicken(g, side, c, o)
 
   const won = o.phase === 'end' && o.roundWinner === side
-  if (won) crown(g, c, o.since)
+  if (won) crown(g, o.h, o.since)
 
   counterPill(g, side, c.eggs, o.bot ? 'Computer' : o.name, LANE_W / 2 - 60, 70, o.time - c.scoreAt)
   winPips(g, side, o.wins, o.target, pipsX(o.target), 66, won ? o.since : 9)
 
   const cx = LANE_W / 2 + 90
   if (o.phase === 'wait') {
-    const label = o.round > 1 ? `Round ${o.round}` : o.bot ? 'Ready…' : 'Tap to jump!'
+    // Online, each phone only coaches its own player: the rival's lane just says Ready.
+    const coach = !o.bot && (g.viewer === null || g.viewer === side)
+    const label = o.round > 1 ? `Round ${o.round}` : coach ? 'Tap to jump!' : 'Ready…'
     laneCard(g, label, cx, CARD_Y, {
       t: o.since,
-      sub: o.bot ? '' : o.round > 1 ? `${o.wins} – ${o.rivalWins}` : 'Hold for a higher jump',
+      sub:
+        o.round > 1
+          ? o.bot
+            ? ''
+            : `${o.wins} – ${o.rivalWins}`
+          : coach
+            ? 'Hold for a higher jump'
+            : '',
       accent: SIDE[side].main,
     })
-    if (!o.bot) g.emoji('👆', RUN_X + 150, GROUND - 120 + Math.sin(o.time * 8) * 14, 84)
+    if (coach) g.emoji('👆', RUN_X + 150, GROUND - 120 + Math.sin(o.time * 8) * 14, 84)
   } else if (o.phase === 'end') {
     const w = o.roundWinner
     const done = o.matchOver
