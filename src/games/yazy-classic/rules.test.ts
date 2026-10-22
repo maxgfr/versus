@@ -156,6 +156,36 @@ describe('classic yazy bonus and joker', () => {
     expect(total(s)).toBe(50 + 40 + 100)
   })
 
+  it('a joker must take an open lower row before any other upper row', () => {
+    // Fours filled, Aces and the lower rows Full house and Chance open.
+    const s = sheetWithOpen([0, row('house'), row('chance')])
+    s.rows[YAZY_ROW] = 50
+    s.rows[3] = 12
+    const dice = [4, 4, 4, 4, 4]
+    expect(legalRows(dice, s)).toEqual([row('house'), row('chance')])
+    expect(isLegal(dice, s, 0)).toBe(false)
+  })
+
+  it('a joker may only zero an upper row once every lower row is filled', () => {
+    const s = sheetWithOpen([0, 1])
+    s.rows[YAZY_ROW] = 50
+    s.rows[3] = 12
+    expect(legalRows([4, 4, 4, 4, 4], s)).toEqual([0, 1])
+    expect(scoreRow(s, [4, 4, 4, 4, 4], 0)).toEqual({ points: 0, bonus: 100 })
+  })
+
+  it('joker rules still apply after a zeroed Yazy row, without the bonus', () => {
+    const s = emptySheet()
+    s.rows[YAZY_ROW] = 0
+    // Its own upper row first.
+    expect(legalRows([3, 3, 3, 3, 3], s)).toEqual([2])
+    s.rows[2] = 9
+    // Then the lower rows at full joker value, but no +100.
+    expect(legalRows([3, 3, 3, 3, 3], s)).not.toContain(0)
+    expect(scoreRow(s, [3, 3, 3, 3, 3], row('house'))).toEqual({ points: 25, bonus: 0 })
+    expect(s.yazyBonus).toBe(0)
+  })
+
   it('scores a real yazy normally into its own row', () => {
     const s = emptySheet()
     const res = scoreRow(s, [6, 6, 6, 6, 6], YAZY_ROW)
@@ -219,8 +249,8 @@ describe('classic bot', () => {
     })
   }
 
-  it('hard plays a better game than easy on average', () => {
-    const play = (difficulty: 'easy' | 'hard', seed: number) => {
+  it('normal and hard play far better games than easy on average', () => {
+    const play = (difficulty: 'easy' | 'normal' | 'hard', seed: number) => {
       const rng = new Rng(seed)
       const sheet = emptySheet()
       while (!full(sheet)) {
@@ -242,11 +272,16 @@ describe('classic bot', () => {
       return total(sheet)
     }
     let hard = 0
+    let normal = 0
     let easy = 0
-    for (let seed = 1; seed <= 12; seed++) {
+    for (let seed = 1; seed <= 60; seed++) {
       hard += play('hard', seed)
+      normal += play('normal', seed)
       easy += play('easy', seed)
     }
-    expect(hard / 12).toBeGreaterThan(easy / 12)
-  })
+    // Measured over 400 seeded games: easy 130, normal 236, hard 242. The
+    // hard-normal gap is real but too small to show reliably over 60 games.
+    expect(normal / 60).toBeGreaterThan(easy / 60 + 60)
+    expect(hard / 60).toBeGreaterThan(easy / 60 + 60)
+  }, 60_000)
 })

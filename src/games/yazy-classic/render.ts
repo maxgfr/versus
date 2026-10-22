@@ -3,7 +3,6 @@ import { outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, mix, shade, SIDE } from '../../core/render/palette.ts'
 import {
-  drawDice,
   drawRollButton,
   drawTray,
   inFrame,
@@ -13,10 +12,11 @@ import {
   textAngle,
   trayLayout,
 } from '../../engines/dice/index.ts'
+import { drawThrownDice, TAP_POW } from '../yazy/throw.ts'
 import type { State } from './index.ts'
 import {
   isYazy,
-  jokerOn,
+  jokerRules,
   legalRows,
   MAX_ROLLS,
   ROWS,
@@ -152,7 +152,7 @@ function cellView(
   if (v !== null) return { kind: 'filled', label, value: String(v), pts: v, face, chip }
   if (canScore && legal.includes(row)) {
     const pts = valueOf(s.dice, sheet, row).points
-    const forced = legal.length === 1 && jokerOn(s.dice, sheet)
+    const forced = legal.length === 1 && jokerRules(s.dice, sheet)
     return { kind: 'preview', label, value: String(pts), pts, face, forced, chip }
   }
   return { kind: 'open', label, value: '–', pts: 0, face, chip }
@@ -502,6 +502,7 @@ export function renderClassic(
   over: boolean,
   isBot: (side: Side) => boolean,
   rounds: number,
+  rattle = 0,
 ): void {
   for (const side of [0, 1] as Side[]) {
     const mine = s.turn === side && !over
@@ -510,15 +511,22 @@ export function renderClassic(
     const left = mine ? MAX_ROLLS - s.rolls : MAX_ROLLS
     const out = mine && s.rolls >= MAX_ROLLS
     const label = out ? 'Pick a row' : 'Roll'
-    drawRollButton(g, side, ROLL, label, {
-      enabled: mine && (s.rolls < MAX_ROLLS || isBot(side)),
-      pulse: mine && !isBot(side) && s.rolls === 0,
-    })
+    // Online, each phone shows only its own Roll button.
+    if (g.viewer === null || g.viewer === side)
+      drawRollButton(g, side, ROLL, label, {
+        enabled: mine && (s.rolls < MAX_ROLLS || isBot(side)),
+        pulse: mine && !isBot(side) && s.rolls === 0,
+      })
     drawRollsLeft(g, side, left, mine)
     drawTotal(g, side, s, now, rounds)
   }
   drawTray(g, TRAY, over ? null : s.turn)
-  drawDice(g, TRAY, s, now, { turn: s.turn, dim: s.rolls === 0 && !over })
+  // Before the first roll the dice jiggle a little: they are waiting to be thrown.
+  const idle = !over && s.rolls === 0 && !isBot(s.turn) ? 0.25 : 0
+  drawThrownDice(g, TRAY, s, now, s.pow ?? TAP_POW, {
+    dim: s.rolls === 0 && !over,
+    rattle: Math.max(rattle, idle),
+  })
   drawYazyMoment(g, s, now)
   drawEnding(g, s, now)
 }

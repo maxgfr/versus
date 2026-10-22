@@ -74,9 +74,16 @@ export function total(s: Sheet): number {
 export const isYazy = (dice: readonly number[]): boolean =>
   dice.length > 0 && dice.every((v) => v === dice[0])
 
-/** A five-of-a-kind after the Yazy row already holds its 50: joker rules apply. */
+/** A five-of-a-kind after the Yazy row already holds its 50: it earns the +100 bonus. */
 export const jokerOn = (dice: readonly number[], s: Sheet): boolean =>
   isYazy(dice) && s.rows[YAZY_ROW] === 50
+
+/**
+ * A five-of-a-kind once the Yazy row is filled, with 50 or with a 0: joker
+ * rules apply either way (only the 50 earns the bonus).
+ */
+export const jokerRules = (dice: readonly number[], s: Sheet): boolean =>
+  isYazy(dice) && s.rows[YAZY_ROW] !== null
 
 const yazyId = (id: string): number => YAZY_CATS.findIndex((c) => c.id === id)
 
@@ -103,15 +110,18 @@ export function rowScore(dice: readonly number[], row: number, joker = false): n
 }
 
 /**
- * Rows the dice may be scored in. Joker rule (forced): a bonus Yazy must go in
- * its upper row if that row is open; otherwise any open row is allowed.
+ * Rows the dice may be scored in. Joker rules (forced), once the Yazy row is
+ * filled: a five-of-a-kind goes in its own upper row if that is open; else in
+ * any open lower row (full value); only when every lower row is filled may it
+ * go in another upper row, for zero.
  */
 export function legalRows(dice: readonly number[], s: Sheet): number[] {
-  if (jokerOn(dice, s)) {
-    const upper = (dice[0] ?? 1) - 1
-    if (s.rows[upper] === null) return [upper]
-  }
-  return openRows(s)
+  const open = openRows(s)
+  if (!jokerRules(dice, s)) return open
+  const upper = (dice[0] ?? 1) - 1
+  if (s.rows[upper] === null) return [upper]
+  const lower = open.filter((r) => r >= UPPER_ROWS)
+  return lower.length ? lower : open
 }
 
 export const isLegal = (dice: readonly number[], s: Sheet, row: number): boolean =>
@@ -123,8 +133,10 @@ export function valueOf(
   s: Sheet,
   row: number,
 ): { points: number; bonus: number } {
-  const joker = jokerOn(dice, s)
-  return { points: rowScore(dice, row, joker), bonus: joker ? YAZY_BONUS : 0 }
+  return {
+    points: rowScore(dice, row, jokerRules(dice, s)),
+    bonus: jokerOn(dice, s) ? YAZY_BONUS : 0,
+  }
 }
 
 /** Score `row` into the sheet (mutates `s`). Caller checks `isLegal`. */
