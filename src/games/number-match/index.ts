@@ -20,9 +20,11 @@ import {
   ADDS,
   anyPair,
   CAPACITY,
+  canAdd,
   canPair,
   COLS,
   cross,
+  isStuck,
   left,
   START,
   startNumbers,
@@ -31,8 +33,9 @@ import {
 interface Board {
   /** Digits in rows of nine; 0 is a crossed-out cell. */
   vals: number[]
-  /** The first number of a pair being chosen, or -1. */
+  /** The first number of a pair being chosen, or -1, and when it was picked (for its bounce). */
   sel: number
+  selAt: number
   /** Adds used so far, where the last copy starts and when (for the pop-in), and the last press. */
   adds: number
   addFrom: number
@@ -48,8 +51,14 @@ interface Board {
   noPair: boolean
   stuck: boolean
   stuckAt: number
+  /** Pairs crossed out in quick succession, and when the last one went (the streak window). */
+  streak: number
+  streakAt: number
   botT: number
 }
+
+/** Seconds between two pairs that keep a streak going. */
+const STREAK_WINDOW = 2
 
 export interface State extends RaceBase {
   boards: [Board, Board]
@@ -70,6 +79,7 @@ class NumberMatch extends PuzzleRace<State> {
     const board = (): Board => ({
       vals: start.slice(),
       sel: -1,
+      selAt: -10,
       adds: 0,
       addFrom: 0,
       addAt: -0.4,
@@ -81,6 +91,8 @@ class NumberMatch extends PuzzleRace<State> {
       noPair,
       stuck: false,
       stuckAt: -1,
+      streak: 0,
+      streakAt: -10,
       botT: 0,
     })
     return { race: newRace(), boards: [board(), board()], endAt: -1 }
@@ -171,7 +183,8 @@ class NumberMatch extends PuzzleRace<State> {
     const b = this.s.boards[side]
     if (b.sel < 0) {
       b.sel = i
-      this.ctx.audio.play('tick', 1.1)
+      b.selAt = this.time
+      this.ctx.audio.play('tick', 1.1 + (b.vals[i] ?? 0) * 0.02)
       return
     }
     if (i === b.sel) {
@@ -186,6 +199,9 @@ class NumberMatch extends PuzzleRace<State> {
     b.bad = i
     b.badAt = this.time
     b.sel = i
+    b.selAt = this.time
+    // A miss breaks the streak.
+    b.streak = 0
     this.ctx.audio.play('error', 1.3)
     this.ctx.audio.buzz(15)
   }
@@ -193,6 +209,7 @@ class NumberMatch extends PuzzleRace<State> {
   /** Cross out a pair (both cells are valid), collapse empty rows and check for the end. */
   private cross(side: Side, i: number, j: number): void {
     const b = this.s.boards[side]
+    const { fx, audio } = this.ctx
     const f = this.frames[side]
     const geo = this.geo(side)
     const ci = cellCenter(geo, i)
@@ -202,6 +219,11 @@ class NumberMatch extends PuzzleRace<State> {
     const da = b.vals[i] ?? 0
     const db = b.vals[j] ?? 0
     const r = cross(b.vals, i, j)
+    const now = this.time
+    // Quick pairs build a streak: everything below scales with it.
+    b.streak = now - b.streakAt < STREAK_WINDOW ? b.streak + 1 : 1
+    b.streakAt = now
+    const k = Math.min(1, (b.streak - 1) / 5)
     b.vals = r.vals
     b.sel = -1
     b.hit = {
@@ -212,26 +234,37 @@ class NumberMatch extends PuzzleRace<State> {
       a: da,
       b: db,
       size: geo.p - 10,
-      at: this.time,
+      at: now,
+      k,
     }
-    b.shift = r.rows ? { rows: r.removed, p: geo.p, at: this.time } : b.shift
+    b.shift = r.rows ? { rows: r.removed, p: geo.p, at: now } : b.shift
     // Rows that collapsed move the newest copy up with them.
     b.addFrom = Math.max(0, b.addFrom - r.rows * COLS)
-    const pitch = 0.9 + Math.min(0.5, (START - left(b.vals)) * 0.012)
-    this.ctx.audio.play('pop', pitch)
-    this.ctx.fx.burst(a.x, a.y, SIDE[side].light, { count: 10, speed: 320, size: 9, life: 0.4 })
-    this.ctx.fx.burst(c.x, c.y, C.yellow, { count: 10, speed: 320, size: 9, life: 0.4 })
+    const cleared = Math.max(0, START - left(b.vals)) / START
+    audio.play('pop', 0.9 + k * 0.5 + cleared * 0.2)
+    if (b.streak >= 2) audio.play('coin', 0.9 + k * 0.6)
+    const n = Math.round(8 + k * 14)
+    const sp = 300 + k * 260
+    fx.burst(a.x, a.y, SIDE[side].light, { count: n, speed: sp, size: 9, life: 0.4 })
+    fx.burst(c.x, c.y, C.yellow, { count: n, speed: sp, size: 9, life: 0.4 })
+    const mid = toWorld(f, (ci.x + cj.x) / 2, (ci.y + cj.y) / 2)
+    if (b.streak >= 3) {
+      fx.float(`×${b.streak}`, mid.x, mid.y, C.yellow, 50 + k * 20, side)
+      fx.shake(0.05 + k * 0.15)
+      audio.buzz(8 + Math.round(k * 14))
+    }
     if (r.rows) {
-      const mid = toWorld(f, (ci.x + cj.x) / 2, (ci.y + cj.y) / 2)
-      this.ctx.audio.play('score', 1.05 + r.rows * 0.1)
-      this.ctx.fx.float(r.rows > 1 ? `Rows ×${r.rows}` : 'Row!', mid.x, mid.y, C.yellow, 60, side)
-      this.ctx.fx.ring(mid.x, mid.y, C.yellow, 200)
-      this.ctx.fx.shake(0.12 + r.rows * 0.06)
+      audio.play('score', 1.05 + r.rows * 0.1 + k * 0.2)
+      audio.buzz(20 + r.rows * 10)
+      fx.float(r.rows > 1 ? `Rows ×${r.rows}` : 'Row!', mid.x, mid.y, C.yellow, 60, side)
+      fx.ring(mid.x, mid.y, C.yellow, 200 + r.rows * 60)
+      fx.shake(0.12 + r.rows * 0.06 + k * 0.1)
+      fx.stop(2 + r.rows * 2)
       for (const rm of r.removed) {
         const y = geo.y0 + (rm + 0.5) * geo.p
         for (let x = 0; x < COLS; x += 2) {
           const w = toWorld(f, geo.x0 + (x + 0.5) * geo.p, y)
-          this.ctx.fx.sparks(w.x, w.y, C.yellow, 3)
+          fx.sparks(w.x, w.y, C.yellow, 3 + Math.round(k * 3))
         }
       }
     }
@@ -244,34 +277,48 @@ class NumberMatch extends PuzzleRace<State> {
     const b = this.s.boards[side]
     b.noPair = left(b.vals) > 0 && !anyPair(b.vals)
     const wasStuck = b.stuck
-    b.stuck = b.noPair && b.adds >= ADDS
+    // No pair and no Add that would put a number down: nothing left to do.
+    b.stuck = isStuck(b.vals, ADDS - b.adds)
     if (b.stuck && !wasStuck) {
       b.stuckAt = this.time
       this.ctx.audio.play('lose', 1.1)
+      this.ctx.audio.buzz(40)
       this.ctx.fx.shake(0.25)
     }
   }
 
-  /** Copy the numbers left after the last one (up to ADDS times). */
+  /** Copy the numbers left after the last one (up to ADDS times, and only if one fits). */
   private add(side: Side): void {
     const b = this.s.boards[side]
-    if (b.adds >= ADDS || this.over || left(b.vals) === 0) {
+    if (this.over || !canAdd(b.vals, ADDS - b.adds)) {
+      b.pressAt = this.time
       this.ctx.audio.play('error')
       return
     }
     const r = addRest(b.vals)
+    const added = left(r.vals) - left(b.vals)
     b.vals = r.vals
     b.addFrom = r.from
     b.adds++
     b.addAt = this.time
     b.pressAt = this.time
     b.sel = -1
+    b.streak = 0
     const f = this.frames[side]
     const geo = this.geo(side)
     const bc = toWorld(f, geo.btn.x + geo.btn.w / 2, geo.btn.y + geo.btn.h / 2)
     this.ctx.audio.play('whoosh')
     this.ctx.audio.play('powerup', 1.1)
-    this.ctx.fx.burst(bc.x, bc.y, C.yellow, { count: 14, speed: 380, size: 9, life: 0.4 })
+    this.ctx.audio.buzz(14)
+    this.ctx.fx.burst(bc.x, bc.y, C.yellow, {
+      count: 14 + Math.min(16, Math.round(added / 2)),
+      speed: 420,
+      size: 9,
+      life: 0.45,
+      spread: Math.PI * 0.9,
+      dir: f.angle ? Math.PI / 2 : -Math.PI / 2,
+    })
+    this.ctx.fx.ring(bc.x, bc.y, C.yellow, 160)
     this.check(side)
   }
 
@@ -284,6 +331,7 @@ class NumberMatch extends PuzzleRace<State> {
       side,
       vals: b.vals,
       sel: b.sel,
+      selAt: b.selAt,
       partner,
       bad: b.bad,
       badAt: b.badAt,
@@ -293,7 +341,12 @@ class NumberMatch extends PuzzleRace<State> {
       shift: b.shift,
       now: this.time,
     })
-    drawAdd(g, geo, side, b.adds, { stuck: b.noPair, now: this.time, pressAt: b.pressAt })
+    drawAdd(g, geo, side, b.adds, {
+      stuck: b.noPair,
+      can: canAdd(b.vals, ADDS - b.adds),
+      now: this.time,
+      pressAt: b.pressAt,
+    })
     if (b.sel < 0 && b.adds === 0 && this.time < 7 && !this.isBot(side) && !b.hit) {
       g.text('Tap two that match or make 10', w / 2, geo.btn.y - 36, {
         size: 34,

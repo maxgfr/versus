@@ -5,11 +5,14 @@ import {
   addRest,
   ADDS,
   anyPair,
+  canAdd,
   canPair,
   CAPACITY,
   collapse,
   COLS,
   cross,
+  inSight,
+  isStuck,
   left,
   pairs,
   START,
@@ -20,6 +23,10 @@ import {
 
 /** A row of nine: the digits as text, zeros are crossed out cells. */
 const row = (s: string): number[] => s.split('').map(Number)
+
+/** n cells where no two neighbours (king moves, or end of row to start of next) match. */
+const noPairs = (n: number): number[] =>
+  Array.from({ length: n }, (_, i) => 1 + ((i % COLS) % 2) + 2 * (Math.floor(i / COLS) % 2))
 
 describe('number match pairs', () => {
   it('pairs equal digits and digits that sum to ten', () => {
@@ -34,8 +41,9 @@ describe('number match pairs', () => {
   it('needs touching cells, or only crossed-out cells between them in reading order', () => {
     const open = [1, ...Array.from({ length: 16 }, () => 0), 9]
     expect(canPair(open, 0, 17)).toBe(true)
-    const blocked = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 9]
-    expect(canPair(blocked, 0, 18)).toBe(false) // 1 + 9, but the 2 lies between them
+    // 1 + 9, but a 2 lies between them in reading order and a 3 down the column.
+    const blocked = [1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 2, 9]
+    expect(canPair(blocked, 0, 18)).toBe(false)
   })
 
   it('a number between them in reading order blocks a pair that is not touching', () => {
@@ -69,6 +77,53 @@ describe('number match pairs', () => {
       [0, 1],
       [1, 2],
     ])
+  })
+})
+
+describe('number match lines of sight', () => {
+  /** A board of `rows` rows, all crossed out except the given cells. */
+  const board = (rows: number, cells: Record<number, number>): number[] =>
+    Array.from({ length: rows * COLS }, (_, i) => cells[i] ?? 0)
+
+  it('pairs down a column across crossed-out cells', () => {
+    // 3 at (0, 4), 7 at (3, 4), only crossed-out cells between them in the column.
+    const v = board(4, { 4: 3, 31: 7, 10: 5, 20: 5 })
+    expect(canPair(v, 4, 31)).toBe(true)
+    v[13] = 2 // (1, 4) now holds a number
+    expect(canPair(v, 4, 31)).toBe(false)
+  })
+
+  it('pairs along both diagonals across crossed-out cells', () => {
+    // Down-right: (0, 0) -> (3, 3), with (1, 1) and (2, 2) crossed out.
+    const v = board(4, { 0: 6, 30: 4, 5: 1, 9: 8 })
+    expect(canPair(v, 0, 30)).toBe(true)
+    v[20] = 9 // (2, 2) blocks
+    expect(canPair(v, 0, 30)).toBe(false)
+    // Down-left: (0, 8) -> (2, 6).
+    const w = board(3, { 8: 5, 24: 5, 3: 1, 12: 2 })
+    expect(canPair(w, 8, 24)).toBe(true)
+    w[16] = 1 // (1, 7) blocks
+    expect(canPair(w, 8, 24)).toBe(false)
+  })
+
+  it('a diagonal never wraps around the edge of the board', () => {
+    // (0, 8) and (1, 0) are reading-order neighbours, but (0, 7) and (2, 0) are not on one line.
+    const v = board(3, { 7: 2, 18: 8, 8: 4, 9: 4 })
+    expect(inSight(v, 7, 18)).toBe(false)
+    expect(canPair(v, 7, 18)).toBe(false)
+  })
+
+  it('a knight-move apart is not a line', () => {
+    const v = board(3, { 0: 5, 11: 5, 4: 3 }) // (0, 0) and (1, 2); a 3 blocks reading order
+    expect(canPair(v, 0, 11)).toBe(false)
+  })
+
+  it('anyPair agrees with the full list on sparse boards (long columns and diagonals)', () => {
+    const rng = new Rng(4)
+    for (let n = 0; n < 300; n++) {
+      const v = Array.from({ length: 9 * COLS }, () => (rng.chance(0.18) ? rng.int(1, 9) : 0))
+      expect(anyPair(v)).toBe(pairs(v).length > 0)
+    }
   })
 })
 
@@ -156,7 +211,64 @@ describe('number match rows', () => {
   })
 })
 
+describe('number match Add and running out of moves', () => {
+  it('Add is possible while Adds are left and the board has room below its last number', () => {
+    expect(canAdd(row('123412341'), 1)).toBe(true)
+    expect(canAdd(row('123412341'), 0)).toBe(false)
+    expect(canAdd(row('000000000'), 3)).toBe(false) // nothing to copy
+  })
+
+  it('a board whose last number sits in the last cell cannot Add, even with Adds left', () => {
+    const full = noPairs(CAPACITY)
+    expect(addRest(full).vals).toEqual(full) // an Add would copy nothing
+    expect(canAdd(full, 3)).toBe(false)
+  })
+
+  it('out of moves: no pair and no Add that helps, even with Adds left (no soft lock)', () => {
+    const full = noPairs(CAPACITY)
+    expect(anyPair(full)).toBe(false)
+    expect(isStuck(full, 3)).toBe(true)
+    expect(nextMove(full, 3, 'hard', new Rng(1))).toBeNull()
+    const open = row('123412341')
+    expect(isStuck(open, 1)).toBe(false)
+    expect(isStuck(open, 0)).toBe(true)
+    expect(isStuck(row('000000000'), 0)).toBe(false) // cleared is not stuck
+  })
+})
+
 describe('number match bot', () => {
+  it('normal and hard take a pair that clears a row over a closer one', () => {
+    // Row 0 holds only 1 and 9 (far apart, reading order); row 1 holds a touching 5 5.
+    const vals = [...row('100000009'), ...row('557300000')]
+    for (const d of ['normal', 'hard'] as const) {
+      expect(nextMove(vals, ADDS, d, new Rng(2))).toEqual({ kind: 'pair', i: 0, j: 8 })
+    }
+  })
+
+  it('hard leaves fewer numbers than easy over many boards', () => {
+    const finish = (d: 'easy' | 'hard', seed: number): number => {
+      let vals = startNumbers(seed)
+      let adds = 0
+      const rng = new Rng(seed * 7)
+      for (let steps = 0; steps < 500 && left(vals) > 0; steps++) {
+        const m = nextMove(vals, ADDS - adds, d, rng)
+        if (!m) break
+        if (m.kind === 'add') {
+          vals = addRest(vals).vals
+          adds++
+        } else vals = cross(vals, m.i, m.j).vals
+      }
+      return left(vals)
+    }
+    let easy = 0
+    let hard = 0
+    for (let seed = 1; seed <= 12; seed++) {
+      easy += finish('easy', seed)
+      hard += finish('hard', seed)
+    }
+    expect(hard).toBeLessThan(easy)
+  })
+
   it('only plays legal pairs', () => {
     const vals = startNumbers(12)
     for (const d of ['easy', 'normal', 'hard'] as const) {

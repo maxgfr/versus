@@ -71,6 +71,8 @@ export interface Hit {
   b: number
   size: number
   at: number
+  /** Streak intensity 0..1 when it was crossed out: a hotter link and a bigger pop. */
+  k?: number
 }
 
 /** Rows that just collapsed: their original indices and the pitch at the time. */
@@ -84,6 +86,7 @@ export interface BoardView {
   side: Side
   vals: readonly number[]
   sel: number
+  selAt: number
   /** Cells that would pair with the selection. */
   partner: readonly boolean[]
   bad: number
@@ -96,8 +99,10 @@ export interface BoardView {
 }
 
 const CELL_GAP = 10
-const HIT_T = 0.38
-const SHIFT_T = 0.24
+const HIT_T = 0.42
+const SHIFT_T = 0.26
+/** Seconds a freshly added number takes to fly from the Add button to its cell. */
+const ADD_FLY = 0.34
 
 /** How far down a cell in row r was before the last collapse moved it up (in pitches). */
 function lifted(shift: Shift, r: number): number {
@@ -131,28 +136,57 @@ export function drawBoard(g: Draw, geo: Geo, v: BoardView): void {
   const sh = v.shift && v.now - v.shift.at < SHIFT_T ? v.shift : null
   const slide = sh ? 1 - outCubic(prog(v.now - sh.at, 0, SHIFT_T)) : 0
   const pulse = 0.5 + 0.5 * Math.sin(v.now * 8)
+  const btnX = geo.btn.x + geo.btn.w / 2
+  const btnY = geo.btn.y + geo.btn.h / 2
+  // Wells first, so numbers flying in from the Add button pass over them.
   v.vals.forEach((val, i) => {
+    if (val) return
     const o = cellOrigin(geo, i)
     const dy = sh ? lifted(sh, Math.floor(i / COLS)) * sh.p * slide : 0
     const cx = o.x + p / 2
     const cy = o.y + p / 2 + dy
-    if (!val) {
-      g.rrect(cx - c / 2, cy - c / 2, c, c, c * 0.24, alpha('#000000', 0.32))
-      g.circle(cx, cy, c * 0.06, alpha(C.white, 0.1))
-      return
+    g.rrect(cx - c / 2, cy - c / 2, c, c, c * 0.24, alpha('#000000', 0.32))
+    g.circle(cx, cy, c * 0.06, alpha(C.white, 0.1))
+  })
+  if (sh) drawSeams(g, geo, sh, v.now)
+  v.vals.forEach((val, i) => {
+    if (!val) return
+    const o = cellOrigin(geo, i)
+    const dy = sh ? lifted(sh, Math.floor(i / COLS)) * sh.p * slide : 0
+    let cx = o.x + p / 2
+    let cy = o.y + p / 2 + dy
+    let s = 1
+    let spin = 0
+    const age = v.now - v.addAt
+    if (i >= v.addFrom && age < 1.4) {
+      // A copied number flies from the Add button to its cell, one after another.
+      const t = prog(age - Math.min(i - v.addFrom, 30) * 0.025, 0, ADD_FLY)
+      if (t <= 0) return
+      const e = outCubic(t)
+      cx = btnX + (cx - btnX) * e
+      cy = btnY + (cy - btnY) * e - Math.sin(t * Math.PI) * 60
+      s = 0.4 + 0.6 * outBack(t)
+      spin = (1 - e) * 0.6
     }
-    const fresh = i >= v.addFrom && v.now - v.addAt < 1.2
-    const s = fresh
-      ? outBack(prog(v.now - v.addAt - Math.min(i - v.addFrom, 25) * 0.022, 0, 0.28))
-      : 1
-    if (s <= 0) return
     const sel = i === v.sel
     const hot = v.bad === i && v.now - v.badAt < 0.35
-    const wob = hot ? Math.sin((v.now - v.badAt) * 60) * 0.12 * (1 - (v.now - v.badAt) / 0.35) : 0
+    let wob = 0
+    if (hot) {
+      const d = 1 - (v.now - v.badAt) / 0.35
+      const w = Math.sin((v.now - v.badAt) * 60) * d
+      cx += w * 12
+      wob = w * 0.1
+    }
+    if (sel) {
+      // Picked: a springy hop that settles a touch bigger than the rest.
+      const t = prog(v.now - v.selAt, 0, 0.3)
+      s *= 1.06 + Math.sin(t * Math.PI) * 0.12 * (1 - t)
+    }
+    const lift = sel ? 5 + Math.sin(v.now * 6) * 2 : 0
     g.at(
       cx,
       cy,
-      wob,
+      wob + spin,
       () => {
         if (v.partner[i] && v.sel >= 0) {
           g.rrect(
@@ -167,44 +201,65 @@ export function drawBoard(g: Draw, geo: Geo, v: BoardView): void {
           )
         }
         if (sel) g.rrect(-c / 2 - 8, -c / 2 - 6, c + 16, c + 16, c * 0.32, alpha(C.yellow, 0.3))
-        numberTile(
-          g,
-          c,
-          val,
-          hot ? mix(C.cream, C.red, 0.55) : sel ? C.yellow : C.cream,
-          sel ? 5 : 0,
-        )
+        numberTile(g, c, val, hot ? mix(C.cream, C.red, 0.55) : sel ? C.yellow : C.cream, lift)
       },
-      s * (sel ? 1.06 : 1),
+      s,
     )
   })
   if (v.hit) drawHit(g, v.hit, v.now, col.light)
 }
 
-/** The crossed-out pair: a link flashes between them as both tiles spin away. */
+/** Where rows just collapsed: a bright seam that flares and closes. */
+function drawSeams(g: Draw, geo: Geo, sh: Shift, now: number): void {
+  const t = prog(now - sh.at, 0, SHIFT_T)
+  const w = COLS * geo.p
+  sh.rows.forEach((rm, n) => {
+    // Rows above it that also went: the seam sits that many rows higher.
+    const y = geo.y0 + (rm - n) * geo.p
+    const hgt = geo.p * (1 - outCubic(t)) + 6
+    g.alpha(1 - t, () => {
+      g.rrect(geo.x0 - 6, y - hgt / 2, w + 12, hgt, hgt / 2, alpha(C.yellow, 0.45))
+      g.rect(geo.x0 + w * t * 0.5, y - 3, w * (1 - t), 6, C.white)
+    })
+  })
+}
+
+/**
+ * The crossed-out pair: the two tiles lean toward each other, a spark zips
+ * from one to the other along a hot link, then both spin away. A streak (`k`)
+ * makes the link thicker and the pop bigger.
+ */
 function drawHit(g: Draw, h: Hit, now: number, light: string): void {
   const age = now - h.at
   if (age < 0 || age > HIT_T) return
   const t = age / HIT_T
-  const link = 1 - prog(t, 0.2, 0.8)
+  const k = h.k ?? 0
+  const zip = outCubic(prog(t, 0, 0.45))
+  const link = 1 - prog(t, 0.35, 0.85)
   if (link > 0) {
-    g.line(h.ax, h.ay, h.bx, h.by, alpha(C.yellow, link), 14 * link + 2)
-    g.line(h.ax, h.ay, h.bx, h.by, alpha(C.white, link * 0.8), 5 * link + 1)
+    const zx = h.ax + (h.bx - h.ax) * zip
+    const zy = h.ay + (h.by - h.ay) * zip
+    const lw = (12 + k * 10) * link + 2
+    g.line(h.ax, h.ay, zx, zy, alpha(C.yellow, link), lw)
+    g.line(h.ax, h.ay, zx, zy, alpha(C.white, link * 0.85), lw * 0.4 + 1)
+    if (zip < 1) g.circle(zx, zy, 12 + k * 8, alpha(C.white, 0.9))
   }
-  const s = 1 - outCubic(prog(t, 0.1, 1))
+  const s = 1 - outCubic(prog(t, 0.3, 1))
   if (s <= 0.02) return
-  const spin = outCubic(t) * 0.9
-  const pair: [number, number, number, number][] = [
-    [h.ax, h.ay, h.a, -1],
-    [h.bx, h.by, h.b, 1],
+  // Lean in (anticipation), then fly up and spin away.
+  const lean = Math.sin(prog(t, 0, 0.3) * Math.PI) * 0.12
+  const away = outCubic(prog(t, 0.3, 1))
+  const pair: [number, number, number, number, number, number][] = [
+    [h.ax, h.ay, h.bx, h.by, h.a, -1],
+    [h.bx, h.by, h.ax, h.ay, h.b, 1],
   ]
-  for (const [x, y, val, dir] of pair) {
+  for (const [x, y, ox, oy, val, dir] of pair) {
     g.at(
-      x,
-      y - outCubic(t) * 30,
-      spin * dir,
+      x + (ox - x) * lean,
+      y + (oy - y) * lean - away * (30 + k * 30),
+      away * (0.9 + k * 0.6) * dir,
       () => numberTile(g, h.size, val, mix(C.yellow, light, t), 0),
-      0.2 + s * 0.95,
+      (0.2 + s * 0.95) * (1 + (1 - s) * k * 0.3),
     )
   }
 }
@@ -215,12 +270,12 @@ export function drawAdd(
   geo: Geo,
   side: Side,
   adds: number,
-  o: { stuck: boolean; now: number; pressAt: number },
+  o: { stuck: boolean; can: boolean; now: number; pressAt: number },
 ): void {
   const b = geo.btn
   const col = SIDE[side]
   const left = ADDS - adds
-  const on = left > 0
+  const on = left > 0 && o.can
   const call = on && o.stuck
   const pulse = call ? 0.5 + 0.5 * Math.sin(o.now * 7) : 0
   const pressed = Math.max(0, 1 - (o.now - o.pressAt) / 0.18)
@@ -231,7 +286,8 @@ export function drawAdd(
   g.tile(b.x, b.y, b.w, b.h, 34, face, 14, pressed)
   const ty = b.y + (b.h - 14) / 2 + 14 * pressed
   const ink = call ? C.ink : on ? C.white : alpha(C.white, 0.45)
-  g.text(on ? 'Add numbers' : 'No adds left', b.x + b.w / 2 - (on ? 40 : 0), ty, {
+  const label = on ? 'Add numbers' : left > 0 ? 'Board full' : 'No adds left'
+  g.text(label, b.x + b.w / 2 - (on ? 40 : 0), ty, {
     size: 40,
     weight: 700,
     color: ink,

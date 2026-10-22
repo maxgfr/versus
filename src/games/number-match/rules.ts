@@ -3,9 +3,11 @@ import { Rng } from '../../core/rng.ts'
 /**
  * Pure rules for Number Match. The board is a list of digits in rows of nine
  * (0 = crossed out). Two numbers pair when they are equal or sum to ten and
- * either touch (including diagonally) or have only crossed-out numbers between
- * them in reading order. A row that is entirely crossed out collapses. Add
- * (three per game) copies every number still on the board after the last one.
+ * see each other: they touch (including diagonally), or only crossed-out cells
+ * lie between them along a row, a column or a diagonal, or in reading order
+ * (the end of a row runs on to the start of the next). A row that is entirely
+ * crossed out collapses. Add (three per game) copies every number still on the
+ * board after the last one.
  */
 
 export const COLS = 9
@@ -43,18 +45,37 @@ export function touching(a: number, b: number): boolean {
   return a !== b && Math.abs(row(a) - row(b)) <= 1 && Math.abs(col(a) - col(b)) <= 1
 }
 
+/** Only crossed-out cells strictly between lo and hi, stepping by `by`. */
+function clearBetween(vals: readonly number[], lo: number, hi: number, by: number): boolean {
+  for (let k = lo + by; k < hi; k += by) if (vals[k]) return false
+  return true
+}
+
+/**
+ * Do cells lo < hi see each other: touching, or only crossed-out cells between
+ * them in reading order, down a column, or along a diagonal (never wrapping)?
+ */
+export function inSight(vals: readonly number[], lo: number, hi: number): boolean {
+  if (touching(lo, hi)) return true
+  if (clearBetween(vals, lo, hi, 1)) return true
+  const dr = row(hi) - row(lo)
+  const dc = col(hi) - col(lo)
+  if (dc === 0) return clearBetween(vals, lo, hi, COLS)
+  if (dr === dc) return clearBetween(vals, lo, hi, COLS + 1)
+  if (dr === -dc) return clearBetween(vals, lo, hi, COLS - 1)
+  return false
+}
+
+/** Equal digits, or two that make ten. */
+export function matches(a: number, b: number): boolean {
+  return a > 0 && b > 0 && (a === b || a + b === 10)
+}
+
 /** Can the numbers at i and j be crossed out together? */
 export function canPair(vals: readonly number[], i: number, j: number): boolean {
   if (i === j) return false
-  const a = vals[i] ?? 0
-  const b = vals[j] ?? 0
-  if (!a || !b) return false
-  if (a !== b && a + b !== 10) return false
-  const lo = Math.min(i, j)
-  const hi = Math.max(i, j)
-  if (touching(lo, hi)) return true
-  for (let k = lo + 1; k < hi; k++) if (vals[k]) return false
-  return true
+  if (!matches(vals[i] ?? 0, vals[j] ?? 0)) return false
+  return inSight(vals, Math.min(i, j), Math.max(i, j))
 }
 
 /** Every pair (i < j) that can be crossed out now. */
@@ -69,15 +90,27 @@ export function pairs(vals: readonly number[]): [number, number][] {
 
 /** Is there any pair to cross out? (Stops at the first one.) */
 export function anyPair(vals: readonly number[]): boolean {
+  // Columns and diagonals reach any distance, so every later cell is a candidate.
   for (let i = 0; i < vals.length; i++) {
-    if (!vals[i]) continue
-    for (let j = i + 1; j < vals.length; j++) {
-      if (canPair(vals, i, j)) return true
-      // Past the next number in reading order and out of touch: nothing further can pair.
-      if (vals[j] && j > i + COLS + 1) break
-    }
+    const a = vals[i] ?? 0
+    if (!a) continue
+    for (let j = i + 1; j < vals.length; j++)
+      if (matches(a, vals[j] ?? 0) && inSight(vals, i, j)) return true
   }
   return false
+}
+
+/** Would an Add put at least one number on the board (Adds left, and room below the last number)? */
+export function canAdd(vals: readonly number[], addsLeft: number): boolean {
+  if (addsLeft <= 0 || left(vals) === 0) return false
+  let end = vals.length
+  while (end > 0 && !vals[end - 1]) end--
+  return end < CAPACITY
+}
+
+/** Out of moves for good: numbers left, no pair to cross out and no Add that would help. */
+export function isStuck(vals: readonly number[], addsLeft: number): boolean {
+  return left(vals) > 0 && !anyPair(vals) && !canAdd(vals, addsLeft)
 }
 
 /**
