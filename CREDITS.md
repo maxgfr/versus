@@ -21,6 +21,11 @@ versus is MIT licensed. Every game, rule set, name and picture in it is original
 | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)  | room invite QR codes                                    | MIT          |
 | [workbox](https://github.com/GoogleChrome/workbox) via vite-plugin-pwa | offline cache                                           | MIT          |
 
+## Services
+
+- Public [Nostr](https://nostr.com) relays help the two phones find each other for online play.
+- Public MQTT brokers ([EMQX](https://www.emqx.com/en/mqtt/public-mqtt5-broker), [HiveMQ](https://www.hivemq.com/mqtt/public-mqtt-broker/)) carry the moves when no direct connection is possible.
+
 ## Tools
 
 Vite, TypeScript, Vitest, Playwright, oxlint, Prettier, @vite-pwa/assets-generator.

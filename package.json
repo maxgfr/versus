@@ -1,7 +1,7 @@
 {
   "name": "versus",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Face-to-face mini-games for two players on one phone, plus vs-AI and peer-to-peer online play. Free, offline, installable.",
   "license": "MIT",
   "type": "module",

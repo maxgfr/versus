@@ -159,7 +159,7 @@ export function lobby(root: HTMLElement, code: string): () => void {
         ),
         h(
           'p.fine',
-          'The two phones connect directly. A public relay only helps them find each other; no game data or personal data is stored anywhere.',
+          'The two phones connect directly when they can; otherwise moves pass through a public relay. Nothing is stored anywhere.',
         ),
       )
       return

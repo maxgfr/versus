@@ -138,7 +138,7 @@ export class Session {
       this.input.applyLocal = false
       this.input.tap = (k, id, x, y) => {
         if (this.phase === 'play' && !this.paused)
-          link.send('in', [k, id, Math.round(x), Math.round(y)])
+          link.send('in', [k, id, Math.round(x), Math.round(y)], k === 'm' ? `m${id}` : undefined)
       }
     }
     const ctx: GameContext = {
@@ -194,7 +194,8 @@ export class Session {
     this.game.update(dt)
     this.input.endStep()
     this.steps++
-    if (this.host && this.o.link && this.steps % 2 === 0) this.broadcast(this.o.link)
+    if (this.host && this.o.link && this.steps % (this.o.link.relayed ? 6 : 2) === 0)
+      this.broadcast(this.o.link)
     if (this.game.result) {
       if (this.host && this.o.link) this.broadcast(this.o.link)
       this.showResult(this.game.result)

@@ -4,6 +4,12 @@ import { VitePWA } from 'vite-plugin-pwa'
 import { execSync } from 'node:child_process'
 import pkg from './package.json' with { type: 'json' }
 
+// Every deploy gets its own number: major.minor from package.json, the patch
+// from the deploy run, so the version shown in Settings moves with each release.
+const APP_VERSION = process.env.GITHUB_RUN_NUMBER
+  ? pkg.version.replace(/\d+$/, process.env.GITHUB_RUN_NUMBER)
+  : pkg.version
+
 // Short commit of this build, shown in Settings so a phone can tell which one it runs.
 const BUILD_ID = (() => {
   try {
@@ -53,7 +59,7 @@ const contentSecurityPolicy = (): Plugin => ({
 export default defineConfig({
   base: BASE,
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
     __BUILD_ID__: JSON.stringify(BUILD_ID),
   },
   // Dev servers on an explicit port are agents' test servers: many of them edit

@@ -38,7 +38,7 @@ Two-player mini-games for one phone, played face to face: put the phone flat on 
 
 ## Privacy
 
-Everything runs in your browser. Nothing is collected or sent anywhere. Online play connects the two phones directly over WebRTC; public Nostr relays are only used for the two phones to find each other, and no game data passes through them.
+Everything runs in your browser. Nothing is collected or sent anywhere. Online play connects the two phones directly over WebRTC; public Nostr relays are only used for the two phones to find each other. When no direct connection is possible (some Wi-Fi networks block it), moves pass through public MQTT brokers instead. Nothing is stored.
 
 ## Develop
 

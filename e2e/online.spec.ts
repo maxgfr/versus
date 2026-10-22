@@ -100,3 +100,36 @@ test('the invite still works after the host tab reloads, and a reloaded guest la
   await guest.locator('.ready-btn').click()
   await expect(guest.locator('.overlay.ready')).toBeHidden({ timeout: 10_000 })
 })
+
+test('without a direct connection, the phones play through the relay', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const open = async () => {
+    const ctx = await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 760 } })
+    // Like two iPhones whose Wi-Fi blocks WebRTC: no direct channel ever opens.
+    await ctx.addInitScript(() => {
+      Object.defineProperty(window, 'RTCPeerConnection', { value: undefined })
+    })
+    return ctx.newPage()
+  }
+  const host = await open()
+  const guest = await open()
+  await host.goto('./#/online')
+  await host.getByRole('button', { name: 'Create a room' }).click()
+  const code = (await host.locator('.code span').allTextContents()).join('')
+  await guest.goto(`./#/online/${code}`)
+  await expect(host.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 60_000 })
+  await host.locator('.card[data-id="pull-the-rope"]').click()
+  await guest.waitForURL(/play\/pull-the-rope/)
+  await host.locator('.ready-btn').click()
+  await guest.locator('.ready-btn').click()
+  await host.waitForTimeout(4000)
+  const until = Date.now() + 150_000
+  for (let i = 0; Date.now() < until && !(await host.locator('.overlay.result').isVisible()); i++) {
+    await host.mouse.click(195, 600)
+    await host.waitForTimeout(40)
+    if (i % 3 === 0) await guest.mouse.click(195, 600)
+  }
+  await expect(host.locator('.overlay.result')).toBeVisible()
+  await expect(guest.locator('.overlay.result')).toBeVisible({ timeout: 5000 })
+  await expect(host.locator('.result-title').first()).toHaveText('You win!')
+})
