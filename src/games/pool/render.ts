@@ -318,7 +318,8 @@ function drawAim(g: Draw, w: World, aim: Aim, turn: Side): void {
   const cue = w.balls[0]
   if (!cue || !cue.on) return
   const col = SIDE[turn]
-  if (!aim.bot) {
+  // The finger's rubber band is a control: online, only its owner's phone shows it.
+  if (!aim.bot && (g.viewer === null || g.viewer === turn)) {
     g.line(aim.ox, aim.oy, aim.fx, aim.fy, alpha(col.light, 0.35), 8)
     g.circle(aim.fx, aim.fy, 22, alpha(col.main, 0.85))
   }
@@ -384,7 +385,7 @@ function drawInHand(g: Draw, w: World, turn: Side, human: boolean, hand: Look['h
   )
   const ring = hand && !hand.ok ? C.red : C.yellow
   g.ring(at.x, at.y, BR + 12 + k * 8, alpha(ring, 0.8), 6)
-  if (human && !hand) {
+  if (human && !hand && (g.viewer === null || g.viewer === turn)) {
     const y = turn === 0 ? MID + 360 : MID - 360
     banner(g, turn, 'Ball in hand: drag or tap', y, { size: 44, color: C.yellow, alpha: 0.95 })
   }
