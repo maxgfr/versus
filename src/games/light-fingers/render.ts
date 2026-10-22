@@ -55,7 +55,11 @@ export function renderLight(g: Draw, v: View, now: number): void {
   const gd = v.table.guard
   table(g, gd, now)
   for (const side of [0, 1] as Side[]) {
-    inFrame(g, side, () => mat(g, side, v.table.thieves[side].holding, gd, now, !v.over && now < 6))
+    // Online, each phone coaches only its own player.
+    const own = g.viewer === null || g.viewer === side
+    inFrame(g, side, () =>
+      mat(g, side, v.table.thieves[side].holding, gd, now, own && !v.over && now < 6),
+    )
   }
   heap(g, v.table.pile, now)
   searchlights(g, gd, now, v.over)
@@ -237,7 +241,7 @@ function heap(g: Draw, pile: number, now: number): void {
 
 /** Seconds since the guard's current phase began (sleep: unknown, 99). */
 function phaseAge(gd: Guard): number {
-  if (gd.phase === 'stir') return STIR - gd.left
+  if (gd.phase === 'stir') return (gd.span ?? STIR) - gd.left
   if (gd.phase === 'awake') return AWAKE - gd.left
   return 99
 }

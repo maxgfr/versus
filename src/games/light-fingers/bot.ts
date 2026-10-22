@@ -5,8 +5,19 @@ import type { Guard, GuardPhase } from './rules.ts'
 /** Reaction time (s) after each guard cue, by difficulty. */
 const REACT: Record<Difficulty, [number, number]> = {
   easy: [0.62, 1.1],
-  normal: [0.4, 0.74],
-  hard: [0.24, 0.44],
+  normal: [0.3, 0.5],
+  hard: [0.16, 0.26],
+}
+
+/**
+ * A hard thief knows the warning's length and holds on until just before the
+ * eyes open (this much before), gambling on a false alarm; others let go as
+ * soon as they react to the stir.
+ */
+const LAST_SECOND: Record<Difficulty, [number, number] | null> = {
+  easy: null,
+  normal: null,
+  hard: [0.1, 0.17],
 }
 
 /**
@@ -18,6 +29,8 @@ export class ThiefBot {
   private phase: GuardPhase = 'sleep'
   private cueAt = 0
   private react: number
+  /** When, after a stir starts, this thief lets go. */
+  private letGo = 0
 
   constructor(
     private rng: Rng,
@@ -37,10 +50,16 @@ export class ThiefBot {
       this.phase = guard.phase
       this.cueAt = time
       this.react = this.sample()
+      const last = LAST_SECOND[this.d]
+      // The warning's length is on show (the eyes' timer), so a sharp thief can time it.
+      this.letGo =
+        guard.phase === 'stir' && last
+          ? Math.max(this.react, (guard.span ?? guard.left) - this.rng.range(last[0], last[1]))
+          : this.react
     }
     const since = time - this.cueAt
     if (this.phase === 'sleep') return since >= this.react
-    if (this.phase === 'stir') return since < this.react
+    if (this.phase === 'stir') return since < this.letGo
     return false
   }
 }

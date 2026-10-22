@@ -183,6 +183,14 @@ class LightFingers extends BaseGame<State> {
           ctx.audio.play('swish', 0.7)
           fx.puff(GUARD.x + 90, GUARD.y - 90, alpha(C.white, 0.4), 4)
           break
+        case 'settle':
+          // False alarm: he rolls over and snores on. The ones who held on win the gamble.
+          ctx.audio.play('swish', 0.6)
+          ctx.audio.play('slide', 0.8)
+          fx.puff(GUARD.x + 90, GUARD.y - 90, alpha(C.white, 0.5), 6)
+          for (const side of [0, 1] as Side[])
+            fx.float('Phew…', GUARD.x, towardMid(side, GUARD.y, -170), C.white, 52, side)
+          break
       }
     }
   }

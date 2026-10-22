@@ -13,8 +13,16 @@ import type { Rng } from '../../core/rng.ts'
 export const LIMIT = 40
 /** Gems dragged per second while a finger is on your part of the pile. */
 export const DRAG_RATE = 4
-/** Warning before the guard wakes: eyes flicker, "hmm?". */
+/** Warning before the guard wakes: eyes flicker, "hmm?". It gets shorter each time he wakes. */
 export const STIR = 1
+export const STIR_MIN = 0.55
+/**
+ * Sometimes the guard only stirs, rolls over and goes back to sleep: whoever
+ * let go early lost drag time, whoever held on gambled and won. More likely as
+ * the night wears on.
+ */
+export const FALSE_STIR = 0.08
+export const FALSE_STIR_MAX = 0.3
 /** How long the guard stays awake. */
 export const AWAKE = 1.6
 export const PILE_START = 300
@@ -30,6 +38,8 @@ export interface Guard {
   phase: GuardPhase
   /** Seconds left in the current phase. */
   left: number
+  /** Full length of the current phase (the stir's warning shrinks over the match). */
+  span?: number
   /** Times the guard has woken; later naps are shorter. */
   wakes: number
 }
@@ -69,6 +79,8 @@ export type Ev =
   | { k: 'stir' }
   | { k: 'wake' }
   | { k: 'sleep' }
+  /** A stir that came to nothing: he rolled over and is asleep again. */
+  | { k: 'settle' }
 
 const thief = (): Thief => ({
   bag: 0,
@@ -102,23 +114,40 @@ export function inZone(x: number, y: number): boolean {
   return x >= ZONE.x0 && x <= ZONE.x1 && y >= ZONE.y0 && y <= ZONE.y1
 }
 
+/** The stir's warning after `wakes` wake-ups: shorter and shorter. */
+export const stirLength = (wakes: number): number => Math.max(STIR_MIN, STIR - 0.06 * wakes)
+
+/** Chance a stir comes to nothing after `wakes` wake-ups. */
+export const falseStir = (wakes: number): number =>
+  Math.min(FALSE_STIR_MAX, FALSE_STIR + 0.04 * wakes)
+
 /** Advance the guard. Returns the transition this step, if any. */
-export function guardStep(g: Guard, dt: number, rng: Rng): 'stir' | 'wake' | 'sleep' | null {
+export function guardStep(
+  g: Guard,
+  dt: number,
+  rng: Rng,
+): 'stir' | 'wake' | 'sleep' | 'settle' | null {
   g.left -= dt
   if (g.left > 0) return null
   if (g.phase === 'sleep') {
     g.phase = 'stir'
-    g.left = STIR
+    g.left = g.span = stirLength(g.wakes)
     return 'stir'
   }
   if (g.phase === 'stir') {
+    // Decided only now, from the seeded stream: nobody can read it in advance.
+    if (rng.chance(falseStir(g.wakes))) {
+      g.phase = 'sleep'
+      g.left = g.span = napLength(g.wakes, rng) * 0.6
+      return 'settle'
+    }
     g.phase = 'awake'
-    g.left = AWAKE
+    g.left = g.span = AWAKE
     g.wakes++
     return 'wake'
   }
   g.phase = 'sleep'
-  g.left = napLength(g.wakes, rng)
+  g.left = g.span = napLength(g.wakes, rng)
   return 'sleep'
 }
 
@@ -142,6 +171,7 @@ export function tableStep(
   const tr = guardStep(t.guard, dt, rng)
   if (tr === 'stir') out.push({ k: 'stir' })
   if (tr === 'sleep') out.push({ k: 'sleep' })
+  if (tr === 'settle') out.push({ k: 'settle' })
   if (tr === 'wake') {
     out.push({ k: 'wake' })
     // Anyone still holding when the guard opens his eyes loses the stash.

@@ -11,6 +11,10 @@ import {
   napLength,
   PILE_START,
   STIR,
+  STIR_MIN,
+  stirLength,
+  falseStir,
+  FALSE_STIR_MAX,
   type Table,
   tableNew,
   tableStep,
@@ -101,8 +105,43 @@ describe('light fingers rules', () => {
       const tr = guardStep(g, STEP, rng)
       if (tr) seen.push(tr)
     }
-    expect(seen.slice(0, 3)).toEqual(['stir', 'wake', 'sleep'])
+    // Every stir ends in a wake or a false alarm; every wake ends in sleep.
+    seen.forEach((tr, i) => {
+      if (tr === 'stir') expect(['wake', 'settle', undefined]).toContain(seen[i + 1])
+      if (tr === 'wake') expect(['sleep', undefined]).toContain(seen[i + 1])
+    })
+    expect(seen).toContain('wake')
+    expect(seen).toContain('sleep')
     expect(g.wakes).toBeGreaterThan(0)
+  })
+
+  it('the warning shrinks each wake, and false alarms get likelier (capped)', () => {
+    expect(stirLength(0)).toBe(STIR)
+    expect(stirLength(4)).toBeLessThan(STIR)
+    expect(stirLength(50)).toBe(STIR_MIN)
+    expect(falseStir(5)).toBeGreaterThan(falseStir(0))
+    expect(falseStir(99)).toBe(FALSE_STIR_MAX)
+  })
+
+  it('a false alarm sends the guard back to sleep without waking or catching anyone', () => {
+    let settled = 0
+    for (let seed = 1; seed <= 40; seed++) {
+      const rng = new Rng(seed)
+      const t = tableNew(rng)
+      t.guard = { phase: 'stir', left: STEP / 2, wakes: 5 }
+      t.thieves[0].stash = 7
+      t.thieves[0].holding = true
+      const ev = tableStep(t, STEP, 1, [true, false], rng)
+      if (ev.some((e) => e.k === 'settle')) {
+        settled++
+        expect(t.guard.phase).toBe('sleep')
+        expect(t.guard.wakes).toBe(5)
+        expect(ev.some((e) => e.k === 'caught')).toBe(false)
+        expect(t.thieves[0].stash).toBeGreaterThanOrEqual(7)
+      } else expect(t.guard.phase).toBe('awake')
+    }
+    expect(settled).toBeGreaterThan(0)
+    expect(settled).toBeLessThan(40)
   })
 
   it('keeps every gem accounted for', () => {
@@ -195,6 +234,25 @@ describe('light fingers bot vs bot', () => {
       if (play(100 + seed, 'hard', 'easy').winner === 0) hard++
     }
     expect(hard).toBeGreaterThanOrEqual(18)
+  })
+
+  it('hard out-thieves normal, and normal out-thieves easy, over a night', () => {
+    let hard = 0
+    let normal = 0
+    let hb = 0
+    let nb = 0
+    for (let seed = 0; seed < 20; seed++) {
+      const a = play(300 + seed, 'hard', 'normal')
+      const b = play(300 + seed, 'normal', 'easy')
+      if (a.winner === 0) hard++
+      if (b.winner === 0) normal++
+      hb += a.bags[0] - a.bags[1]
+      nb += b.bags[0] - b.bags[1]
+    }
+    expect(hb).toBeGreaterThan(0)
+    expect(nb).toBeGreaterThan(0)
+    expect(hard).toBeGreaterThanOrEqual(11)
+    expect(normal).toBeGreaterThanOrEqual(11)
   })
 
   it('both sides earn gems in a match', () => {
