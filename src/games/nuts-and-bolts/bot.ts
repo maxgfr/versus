@@ -3,13 +3,13 @@ import type { Rng } from '../../core/rng.ts'
 import { type Bolts, move, moves, solve } from './rules.ts'
 
 /** Seconds between the computer's taps (a move is one lift and one drop). */
-export const PACE: Record<Difficulty, number> = { easy: 1.25, normal: 0.85, hard: 0.5 }
+export const PACE: Record<Difficulty, number> = { easy: 1.4, normal: 0.7, hard: 0.5 }
 
 /**
  * Chance, before each move, that the computer wanders off its plan: a legal
  * move it then has to recover from. Easy wanders often, hard never.
  */
-export const DETOUR: Record<Difficulty, number> = { easy: 0.3, normal: 0.1, hard: 0 }
+export const DETOUR: Record<Difficulty, number> = { easy: 0.35, normal: 0.06, hard: 0 }
 
 /**
  * The bolt the computer taps next, following its plan. With nothing in hand

@@ -29,9 +29,9 @@ import {
   misplaced,
   outlook,
   type Puzzle,
+  level,
   roundSeed,
   solve,
-  SWAPS,
   topRun,
 } from './rules.ts'
 
@@ -129,7 +129,9 @@ class NutsAndBolts extends PuzzleRace<State> {
 
   /** The puzzle of a round, from its seed: both phones get the same one. */
   private load(round: number): Puzzle {
-    const p = buildPuzzle(roundSeed(this.ctx.seed, round), SWAPS[this.ctx.difficulty])
+    // Harder levels, and later rounds of a match, get more colours and a deeper scramble.
+    const l = level(this.ctx.difficulty, round)
+    const p = buildPuzzle(roundSeed(this.ctx.seed, round), l.swaps, l.colours)
     this.start = Math.max(1, misplaced(p.start))
     this.startBolts = p.start.map((b) => b.slice())
     this.loaded = round

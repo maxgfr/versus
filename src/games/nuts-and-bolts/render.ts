@@ -6,7 +6,7 @@ import { floodlight } from './ending.ts'
 import { CAP } from './rules.ts'
 
 /** Nut colours: distinct hues, and each also carries its own engraved mark (never colour alone). */
-export const NUT_COLOURS = [C.pink, C.cyan, C.yellow, C.green, C.purple, C.orange] as const
+export const NUT_COLOURS = [C.pink, C.cyan, C.yellow, C.green, C.purple, C.orange, C.white] as const
 
 /** Nut radius (centre to corner), half the height of its sides, and the stack pitch. */
 const R = 54
@@ -96,7 +96,7 @@ export function boltUnder(g: Geo, bolts: number, px: number, py: number): number
 
 /** The engraved mark of a colour, centred on (0, 0) with radius r. */
 function mark(g: Draw, kind: number, r: number, ink: string): void {
-  switch (kind % 6) {
+  switch (kind % 7) {
     case 0:
       g.ring(0, 0, r * 0.62, ink, r * 0.32)
       break
@@ -111,6 +111,11 @@ function mark(g: Draw, kind: number, r: number, ink: string): void {
       break
     case 4:
       g.poly([0, -r * 0.8, r * 0.66, 0, 0, r * 0.8, -r * 0.66, 0], ink)
+      break
+    case 6:
+      // Two bars.
+      g.line(-r * 0.62, -r * 0.3, r * 0.62, -r * 0.3, ink, r * 0.28, 'round')
+      g.line(-r * 0.62, r * 0.3, r * 0.62, r * 0.3, ink, r * 0.28, 'round')
       break
     default:
       g.line(-r * 0.66, 0, r * 0.66, 0, ink, r * 0.34, 'round')

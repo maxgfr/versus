@@ -8,6 +8,7 @@ import {
   canDrop,
   COLOURS,
   isSolved,
+  level,
   move,
   moves,
   outlook,
@@ -186,6 +187,43 @@ const DEADLOCK: Bolts = [
   [5],
 ]
 
+describe('nuts and bolts levels', () => {
+  it('harder levels use more colours and less spare room; later rounds ramp up', () => {
+    expect(level('easy', 0).colours).toBe(5)
+    expect(level('normal', 0).colours).toBe(6)
+    expect(level('hard', 0).colours).toBe(7)
+    expect(level('easy', 2).colours).toBe(6)
+    expect(level('hard', 4).colours).toBe(7)
+    expect(level('normal', 3).swaps).toBeGreaterThan(level('normal', 0).swaps)
+  })
+
+  it('a hard puzzle has seven colours of four and a single spare bolt, and is solvable', () => {
+    for (const seed of [3, 8, 13]) {
+      const l = level('hard', 0)
+      const p = buildPuzzle(seed, l.swaps, l.colours)
+      expect(p.start.filter((b) => b.length === 0)).toHaveLength(1)
+      const count = new Map<number, number>()
+      for (const bolt of p.start) for (const c of bolt) count.set(c, (count.get(c) ?? 0) + 1)
+      expect(count.size).toBe(7)
+      for (const n of count.values()) expect(n).toBe(CAP)
+      expect(replay(p.start, p.plan)).toBe(true)
+    }
+  })
+
+  it('harder levels take longer to sort', () => {
+    const avg = (d: 'easy' | 'normal' | 'hard') => {
+      let n = 0
+      for (let seed = 1; seed <= 6; seed++) {
+        const l = level(d, 0)
+        n += buildPuzzle(seed * 11, l.swaps, l.colours).plan.length
+      }
+      return n / 6
+    }
+    expect(avg('normal')).toBeGreaterThan(avg('easy'))
+    expect(avg('hard')).toBeGreaterThan(avg('normal'))
+  })
+})
+
 describe('nuts and bolts dead ends', () => {
   it('sees a board with no legal move as dead', () => {
     expect(moves(DEADLOCK)).toEqual([])
@@ -227,6 +265,38 @@ describe('nuts and bolts bot levels', () => {
     const plan = detour(p.start, new Rng(3))
     expect(plan).not.toBeNull()
     expect(replay(p.start, plan ?? [])).toBe(true)
+  })
+
+  it('hard beats easy in a race on the same puzzle most of the time', () => {
+    /** Seconds a bot takes to sort `start`: two taps per move at its pace. */
+    const race = (start: Bolts, lv: 'easy' | 'hard', seed: number): number => {
+      const rng = new Rng(seed)
+      let b = start
+      let plan = solve(b) ?? []
+      let idx = 0
+      let n = 0
+      while (!isSolved(b) && n < 400) {
+        if (rng.chance(DETOUR[lv])) {
+          const d = detour(b, rng)
+          if (d) {
+            plan = d
+            idx = 0
+          }
+        }
+        const m = plan[idx++]
+        if (!m) break
+        b = move(b, m[0], m[1])
+        n++
+      }
+      return isSolved(b) ? n * 2 * PACE[lv] : Infinity
+    }
+    let hardWins = 0
+    for (let seed = 1; seed <= 10; seed++) {
+      const l = level('normal', 0)
+      const start = buildPuzzle(seed * 37, l.swaps, l.colours).start
+      if (race(start, 'hard', seed) < race(start, 'easy', seed + 100)) hardWins++
+    }
+    expect(hardWins).toBeGreaterThanOrEqual(8)
   })
 
   it('easy wanders more than hard: slower to sort the same puzzles', () => {

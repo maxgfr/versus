@@ -15,12 +15,29 @@ export const COLOURS = 6
 
 export type Bolts = number[][]
 
-/** Nut swaps between full bolts that scramble the solved board: the level of difficulty. */
-export const SWAPS: Record<Difficulty, number> = { easy: 6, normal: 14, hard: 30 }
+/** Nut swaps between full bolts that scramble the solved board (the first round of a match). */
+export const SWAPS: Record<Difficulty, number> = { easy: 5, normal: 20, hard: 40 }
 
-export function solvedBolts(): Bolts {
+/**
+ * Colours per level, out of eight bolts: easy keeps three bolts spare (room to
+ * think), normal two, hard seven colours and a single spare bolt.
+ */
+export const LEVEL_COLOURS: Record<Difficulty, number> = { easy: 5, normal: 6, hard: 7 }
+/** Extra swaps per later round of a match: the puzzles ramp up. */
+const RAMP: Record<Difficulty, number> = { easy: 3, normal: 5, hard: 6 }
+
+/** The puzzle size for a level and a (0-based) round: colours, and how scrambled. */
+export function level(d: Difficulty, round: number): { colours: number; swaps: number } {
+  // Every second round adds a colour (seven at most), and every round a few more swaps.
+  return {
+    colours: Math.min(7, LEVEL_COLOURS[d] + Math.floor(round / 2)),
+    swaps: SWAPS[d] + RAMP[d] * Math.min(round, 4),
+  }
+}
+
+export function solvedBolts(colours = COLOURS): Bolts {
   return Array.from({ length: BOLTS }, (_, i) =>
-    i < COLOURS ? Array.from({ length: CAP }, () => i) : [],
+    i < colours ? Array.from({ length: CAP }, () => i) : [],
   )
 }
 
@@ -230,14 +247,13 @@ export function roundSeed(seed: number, round: number): number {
  * a game. The search then has to confirm the scramble before it is kept, so
  * every puzzle a player gets is solvable. Same seed, same puzzle on both halves.
  */
-export function buildPuzzle(seed: number, swaps: number): Puzzle {
+export function buildPuzzle(seed: number, swaps: number, colours = COLOURS): Puzzle {
   const rng = new Rng(seed)
-  let last: Puzzle | null = null
   for (let attempt = 0; attempt < 50; attempt++) {
-    const b = solvedBolts()
+    const b = solvedBolts(colours)
     for (let s = 0; s < swaps; s++) {
-      const i = rng.int(0, COLOURS - 1)
-      const j = rng.int(0, COLOURS - 1)
+      const i = rng.int(0, colours - 1)
+      const j = rng.int(0, colours - 1)
       const bi = b[i]
       const bj = b[j]
       if (!bi || !bj || i === j) continue
@@ -250,8 +266,10 @@ export function buildPuzzle(seed: number, swaps: number): Puzzle {
     const start = rng.shuffle(b)
     if (isSolved(start)) continue
     const plan = solve(start)
-    last = { start, plan: plan ?? [] }
-    if (plan) return last
+    if (plan) return { start, plan }
   }
-  return last ?? { start: solvedBolts(), plan: [] }
+  // Never hand out a puzzle nobody can be shown to solve: a light scramble always is.
+  return swaps > 4
+    ? buildPuzzle(seed + 1, Math.max(4, swaps >> 1), colours)
+    : { start: solvedBolts(colours), plan: [] }
 }
