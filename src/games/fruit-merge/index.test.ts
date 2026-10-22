@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type GameContext, STEP } from '../../core/game.ts'
+import { PlayerInput } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
 import createGame, { match } from './index.ts'
 
@@ -10,7 +11,7 @@ function botContext(target?: number): GameContext {
     stage: {} as GameContext['stage'],
     input: { player: () => ({ downs: [] }) } as unknown as GameContext['input'],
     fx: new Proxy({}, { get: () => noop }) as GameContext['fx'],
-    audio: { play: noop, unlock: noop } as unknown as GameContext['audio'],
+    audio: { play: noop, unlock: noop, buzz: noop } as unknown as GameContext['audio'],
     rng: new Rng(7),
     mode: '1p',
     difficulty: 'normal',
@@ -40,5 +41,66 @@ describe('fruit merge: match length', () => {
 
   it('defaults to the spec length', () => {
     expect(match.default).toBe(120)
+  })
+})
+
+describe('fruit merge: input', () => {
+  /** Red human against a blue bot, with a real input to press and release. */
+  function humanGame() {
+    const red = new PlayerInput(0)
+    const blue = new PlayerInput(1)
+    const ctx = botContext()
+    ctx.bots = [false, true]
+    ctx.input = { player: (s: number) => (s === 0 ? red : blue) } as unknown as GameContext['input']
+    const game = createGame() as unknown as {
+      init(c: GameContext): void
+      update(dt: number): void
+      s: { wells: { jar: { bodies: { x: number; vx: number; vy: number }[] } }[] }
+    }
+    game.init(ctx)
+    const tick = () => {
+      game.update(STEP)
+      red.endStep()
+    }
+    return { game, red, tick }
+  }
+
+  it('a release during the reload is dropped once the claw is ready, not lost', () => {
+    const { game, red, tick } = humanGame()
+    // Red's half: local y = world y - 900. Tap twice in quick succession.
+    for (const id of [1, 2]) {
+      red.press(id, 400, 900 + 500)
+      tick()
+      red.release(id)
+      tick()
+    }
+    const bodies = () => game.s.wells[0]?.jar.bodies ?? []
+    expect(bodies()).toHaveLength(1)
+    for (let i = 0; i < 20; i++) tick()
+    expect(bodies()).toHaveLength(2)
+  })
+
+  it('a fast sideways flick throws the fruit; a slow release drops it straight', () => {
+    const { game, red, tick } = humanGame()
+    red.press(1, 300, 1400)
+    tick()
+    red.move(1, 305, 1400)
+    tick()
+    red.release(1)
+    tick()
+    const slow = game.s.wells[0]?.jar.bodies[0]
+    expect(slow?.vx).toBe(0)
+    for (let i = 0; i < 20; i++) tick()
+    red.press(2, 300, 1400)
+    tick()
+    for (let i = 1; i <= 4; i++) {
+      red.move(2, 300 + i * 60, 1400 + i * 30)
+      tick()
+    }
+    red.release(2)
+    tick()
+    const fast = game.s.wells[0]?.jar.bodies[1]
+    expect(fast?.vx).toBeGreaterThan(300)
+    expect(fast?.vy).toBeGreaterThan(0)
   })
 })

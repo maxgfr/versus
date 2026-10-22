@@ -3,7 +3,7 @@ import { inCubic, outBack, outCubic, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, mix, shade } from '../../core/render/palette.ts'
 import { fmtTime, HEADER } from '../../engines/puzzle/index.ts'
-import { DANGER_TIME, type Geo, type Jar, landingY, previewY, radius } from './rules.ts'
+import { type Body, DANGER_TIME, type Geo, type Jar, landingY, previewY, radius } from './rules.ts'
 
 export const GLYPH = ['🍒', '🍓', '🍇', '🍊', '🍎', '🍐', '🍑', '🍍', '🍈', '🍉']
 export const FRUIT_COLOR = [
@@ -80,9 +80,32 @@ export function drawHeader(g: Draw, w: number, side: Side, v: HeaderView): void 
   )
 }
 
+/** Two fruit that just fused, sliding together as the new one pops (cosmetic). */
+export interface Ghost {
+  k: number
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  x: number
+  y: number
+  t0: number
+}
+
+/** How long the fused pair takes to slide together. */
+const GHOST = 0.13
+
 export interface JarView {
   jar: Jar
+  /** Interpolated aim for this frame. */
   aim: number
+  /** Pendulum tilt (radians) of the fruit in hand. */
+  swing: number
+  /** Vertical jolt of the jar after a hard landing. */
+  wobble: number
+  ghosts: readonly Ghost[]
+  /** Interpolated position of a fruit for this frame, written into `out`. */
+  pos: (b: Body, out: [number, number]) => void
   next: number
   /** The kind after the one in hand. */
   after: number
@@ -103,6 +126,7 @@ export function fruit(
   r: number,
   scale = 1,
   sq = 0,
+  spin = 0,
 ): void {
   const sx = scale * (1 + sq * 0.14)
   const sy = scale * (1 - sq * 0.14)
@@ -131,7 +155,7 @@ export function fruit(
         ),
       )
       g.ring(0, 0, r - 2, alpha(shade(col, -0.55), 0.7), Math.max(3, r * 0.07))
-      g.emoji(GLYPH[k] ?? '🍒', 0, r * 0.04, r * 2 * 0.86)
+      g.emoji(GLYPH[k] ?? '🍒', 0, r * 0.04, r * 2 * 0.86, spin)
       g.alpha(0.45, () => g.ellipse(-r * 0.4, -r * 0.5, r * 0.3, r * 0.15, '#ffffff', -0.6))
     },
     sx,
@@ -238,15 +262,31 @@ function hand(g: Draw, geo: Geo, side: Side, v: JarView, now: number): void {
   const k = v.next
   const r = radius(k, geo)
   // A fresh fruit drops in from the rail.
-  const fresh = outBack(prog(now - v.dropAt, 0.2, 0.42))
+  const fresh = outBack(prog(now - v.dropAt, 0.12, 0.3))
   const py = previewY(geo, k) + Math.sin(now * 4) * 3
   const landing = landingY(v.jar, geo, v.aim, k)
   g.dashed(v.aim, py + r + 10, v.aim, landing - r - 6, alpha(col.light, 0.45), 6, [14, 14])
   g.alpha(0.35, () => g.ring(v.aim, landing, r, col.light, 4))
-  // Claw.
-  g.line(v.aim, railY, v.aim, py - r * fresh + 4, alpha(C.white, 0.5), 5)
-  g.tile(v.aim - 30, railY - 15, 60, 32, 12, C.yellow, 8)
-  if (fresh > 0.01) fruit(g, k, v.aim, py, r, fresh)
+  // The fruit hangs from the claw and swings when the aim moves fast.
+  const len = py - railY
+  const fx = v.aim + Math.sin(v.swing) * len
+  const fy = railY + Math.cos(v.swing) * len
+  g.line(
+    v.aim,
+    railY,
+    v.aim + Math.sin(v.swing) * (len - r * fresh),
+    railY + Math.cos(v.swing) * (len - r * fresh) + 4,
+    alpha(C.white, 0.5),
+    5,
+  )
+  // The claw's jaws spring open as it lets go, then close on the next fruit.
+  const open = 1 - prog(now - v.dropAt, 0, 0.22)
+  const jaw = 10 + open * 16
+  g.line(v.aim - 8, railY + 10, v.aim - jaw, railY + 30, C.yellow, 7)
+  g.line(v.aim + 8, railY + 10, v.aim + jaw, railY + 30, C.yellow, 7)
+  const pull = 1 + open * 0.12
+  g.at(v.aim, railY + 1, 0, () => g.tile(-30, -16, 60, 32, 12, C.yellow, 8), pull, 2 - pull)
+  if (fresh > 0.01) fruit(g, k, fx, fy, r, fresh, 0, v.swing * 0.6)
 }
 
 /** The next fruit, in a small bubble beside the opening. */
@@ -266,6 +306,9 @@ export function drawJar(g: Draw, geo: Geo, side: Side, w: number, v: JarView, no
   let worst = 0
   for (const b of v.jar.bodies) worst = Math.max(worst, b.hi)
   const warn = Math.min(1, worst / DANGER_TIME)
+  g.save()
+  // A hard landing jolts the whole jar a little.
+  g.ctx.translate(0, v.wobble)
   jarBack(g, geo, side, warn)
   // Clip below the header band only, so a falling fruit is never cut as it enters.
   g.clip(
@@ -275,19 +318,35 @@ export function drawJar(g: Draw, geo: Geo, side: Side, w: number, v: JarView, no
     geo.floor + 60 - geo.header,
     0,
     () => {
+      // The fused pair slides together and shrinks into the new fruit.
+      for (const gh of v.ghosts) {
+        const t = (now - gh.t0) / GHOST
+        if (t < 0 || t >= 1) continue
+        const e = t * t
+        const r = radius(gh.k, geo) * (1 - 0.5 * e)
+        g.alpha(1 - e, () => {
+          fruit(g, gh.k, gh.ax + (gh.x - gh.ax) * e, gh.ay + (gh.y - gh.ay) * e, r)
+          fruit(g, gh.k, gh.bx + (gh.x - gh.bx) * e, gh.by + (gh.y - gh.by) * e, r)
+        })
+      }
+      const at: [number, number] = [0, 0]
       for (const b of v.jar.bodies) {
         const age = now - b.born
-        const s = age < 0.35 ? outBack(prog(age, 0, 0.35)) : 1
+        // Idle life: resting fruit breathe, each on its own beat.
+        const s =
+          age < 0.35 ? outBack(prog(age, 0, 0.35)) : 1 + 0.012 * Math.sin(now * 2.4 + b.x * 0.05)
         const r = radius(b.k, geo)
-        fruit(g, b.k, b.x, b.y, r, s, b.sq)
+        v.pos(b, at)
+        fruit(g, b.k, at[0], at[1], r, s, b.sq, b.a)
         if (b.hi > 0.15) {
           const t = Math.min(1, b.hi / DANGER_TIME)
-          g.arc(b.x, b.y, r + 10, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, C.red, 8)
+          g.arc(at[0], at[1], r + 10, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, C.red, 8)
         }
       }
     },
   )
   jarFront(g, geo, side)
+  g.restore()
   dangerLine(g, geo, warn, now)
   hand(g, geo, side, v, now)
   if (v.live) nextBubble(g, geo, w, v.after, now, v.dropAt)

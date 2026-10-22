@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Difficulty } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { chooseX, PACE } from './bot.ts'
+import { chooseX, PACE, rate } from './bot.ts'
 import {
   type Body,
   BONUS,
   DANGER_TIME,
+  decided,
   drop,
   geometry,
   type Geo,
@@ -13,6 +14,8 @@ import {
   KINDS,
   kindSequence,
   landingY,
+  MAX_THROW_X,
+  MAX_THROW_Y,
   newJar,
   POINTS,
   previewY,
@@ -47,7 +50,7 @@ function run(
 /** Put a fruit at rest on the jar floor, or on top of what is there, at x. */
 function rest(jar: Jar, geo: Geo, k: number, x: number): Body {
   const y = landingY(jar, geo, x, k)
-  const b: Body = { k, x, y, vx: 0, vy: 0, hi: 0, sq: 0, born: -10 }
+  const b: Body = { k, x, y, vx: 0, vy: 0, hi: 0, sq: 0, born: -10, a: 0 }
   jar.bodies.push(b)
   return b
 }
@@ -124,6 +127,7 @@ describe('physics', () => {
       hi: 0,
       sq: 0,
       born: 0,
+      a: 0,
     })
     const out = run(jar, g, 2)
     expect(out.merges).toBe(1)
@@ -155,6 +159,7 @@ describe('physics', () => {
       hi: 0,
       sq: 0,
       born: 0,
+      a: 0,
     })
     run(jar, g, 2)
     expect(jar.score).toBe(BONUS)
@@ -257,5 +262,127 @@ describe('sequence and bot', () => {
       }
     }
     expect(Object.values(seconds).every((s) => s > 0)).toBe(true)
+  })
+})
+
+describe('throws', () => {
+  it('caps a flick and never throws a fruit upward', () => {
+    const g = versus()
+    const jar = newJar()
+    drop(jar, g, 500, 1, 0, 99999, -5000)
+    const b = jar.bodies[0] as Body
+    expect(b.vx).toBe(MAX_THROW_X)
+    expect(b.vy).toBe(0)
+    drop(jar, g, 500, 1, 0, -99999, 99999)
+    const c = jar.bodies[1] as Body
+    expect(c.vx).toBe(-MAX_THROW_X)
+    expect(c.vy).toBe(MAX_THROW_Y)
+    drop(jar, g, 500, 1, 0, Number.NaN, Number.POSITIVE_INFINITY)
+    const d = jar.bodies[2] as Body
+    expect(d.vx).toBe(0)
+    expect(d.vy).toBe(0)
+  })
+
+  it('a sideways throw bounces off the wall, stays inside and rolls', () => {
+    const g = versus()
+    const jar = newJar()
+    drop(jar, g, 500, 2, 0, MAX_THROW_X, 0)
+    let hits = 0
+    for (let i = 0; i < 180; i++) {
+      hits += tick(jar, g, DT, i * DT).hits
+      const b = jar.bodies[0] as Body
+      const r = radius(b.k, g)
+      expect(b.x + r).toBeLessThanOrEqual(g.right + 1e-6)
+    }
+    expect(hits).toBeGreaterThan(0)
+    expect((jar.bodies[0] as Body).a).not.toBe(0)
+  })
+
+  it('a slam into a pile neither tunnels through it nor flings fruit out of the jar', () => {
+    const g = versus()
+    const jar = newJar()
+    const rng = new Rng(11)
+    for (let i = 0; i < 10; i++) rest(jar, g, rng.int(2, 5), rng.range(g.left + 60, g.right - 60))
+    run(jar, g, 3)
+    const before = jar.score
+    for (let i = 0; i < 6; i++) {
+      const vx = rng.range(-MAX_THROW_X, MAX_THROW_X)
+      drop(jar, g, rng.range(g.left, g.right), 0, i, vx, MAX_THROW_Y)
+      for (let s = 0; s < 20; s++) {
+        tick(jar, g, DT, i)
+        for (const b of jar.bodies) {
+          const r = radius(b.k, g)
+          expect(b.y + r).toBeLessThanOrEqual(g.floor + 1e-6)
+          expect(b.y).toBeGreaterThan(g.top - 110 * g.sc)
+        }
+      }
+    }
+    expect(jar.score).toBeGreaterThanOrEqual(before)
+  })
+})
+
+describe('end of the game', () => {
+  const j = (score: number, over: boolean) => ({ score, over })
+  it('waits while both jars are live', () => {
+    expect(decided(j(50, false), j(10, false))).toBeNull()
+  })
+  it('both jars full: the higher score wins, equal scores draw', () => {
+    expect(decided(j(50, true), j(10, true))).toBe(0)
+    expect(decided(j(5, true), j(10, true))).toBe(1)
+    expect(decided(j(20, true), j(20, true))).toBe('draw')
+  })
+  it('one jar full and the live one already ahead: decided at once', () => {
+    expect(decided(j(10, true), j(30, false))).toBe(1)
+    expect(decided(j(30, false), j(10, true))).toBe(0)
+  })
+  it('one jar full but the live one behind or level: keeps playing', () => {
+    expect(decided(j(30, true), j(10, false))).toBeNull()
+    expect(decided(j(10, false), j(10, true))).toBeNull()
+  })
+})
+
+describe('bot judgement', () => {
+  it('prefers a fusion and keeps clear of the danger line', () => {
+    const g = versus()
+    const jar = newJar()
+    rest(jar, g, 3, 300)
+    expect(rate(jar, g, 300, 3, false)).toBeGreaterThan(rate(jar, g, 700, 3, false))
+    // A tower on the right reaching the line: never drop on it.
+    for (const k of [9, 8]) rest(jar, g, k, g.right - 110)
+    expect(rate(jar, g, g.right - 110, 0, false)).toBeLessThan(rate(jar, g, g.left + 60, 0, false))
+  })
+
+  it('hard looks a fusion ahead: it takes the merge that chains', () => {
+    const g = versus()
+    const jar = newJar()
+    rest(jar, g, 2, 300)
+    rest(jar, g, 3, 300 + radius(2, g) + radius(3, g) + 4)
+    rest(jar, g, 2, 760)
+    expect(rate(jar, g, 300, 2, true)).toBeGreaterThan(rate(jar, g, 760, 2, true))
+  })
+
+  it('hard scores more than easy over the same fruit', () => {
+    const total: Record<Difficulty, number> = { easy: 0, normal: 0, hard: 0 }
+    for (const d of ['easy', 'hard'] as const) {
+      for (const seed of [41, 42, 43]) {
+        const g = versus()
+        const seq = kindSequence(seed)
+        const rng = new Rng(seed)
+        const jar = newJar()
+        let t = 0
+        let i = 0
+        // Same pace for both: only the judgement differs.
+        while (t < 90 && !jar.over) {
+          for (let s = 0; s < 60; s++) {
+            t += DT
+            tick(jar, g, DT, t)
+          }
+          const k = seq[i++ % seq.length] ?? 0
+          drop(jar, g, chooseX(jar, g, k, d, rng), k, t)
+        }
+        total[d] += jar.score
+      }
+    }
+    expect(total.hard).toBeGreaterThan(total.easy)
   })
 })

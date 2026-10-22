@@ -29,6 +29,10 @@ const SUBSTEPS = 6
 const AIR = 0.4
 /** Impacts softer than this make no sound and no squash. */
 const IMPACT = 180
+/** Fastest sideways throw a flick on release can give a fruit. */
+export const MAX_THROW_X = 1100
+/** Hardest downward slam a flick can give a fruit (never upward: it would fly out). */
+export const MAX_THROW_Y = 1500
 
 export interface Geo {
   /** Scale of the jar and its fruit. */
@@ -76,6 +80,8 @@ export interface Body {
   sq: number
   /** Game time it was made (pop-in after a merge). */
   born: number
+  /** Spin angle (radians): a fruit rolls as it moves. */
+  a: number
 }
 
 export interface Jar {
@@ -98,17 +104,23 @@ export function clampX(geo: Geo, k: number, x: number): number {
   return Math.min(geo.right - r, Math.max(geo.left + r, x))
 }
 
-/** Drop a fruit of kind `k` at x. */
-export function drop(jar: Jar, geo: Geo, x: number, k: number, time: number): void {
+/**
+ * Drop a fruit of kind `k` at x. A flick on release throws it: `vx` sideways
+ * and `vy` downward, both capped (a fruit is never thrown upward).
+ */
+export function drop(jar: Jar, geo: Geo, x: number, k: number, time: number, vx = 0, vy = 0): void {
+  const tx = Number.isFinite(vx) ? Math.max(-MAX_THROW_X, Math.min(MAX_THROW_X, vx)) : 0
+  const ty = Number.isFinite(vy) ? Math.max(0, Math.min(MAX_THROW_Y, vy)) : 0
   jar.bodies.push({
     k,
     x: clampX(geo, k, x),
     y: previewY(geo, k),
-    vx: 0,
-    vy: 0,
+    vx: tx * geo.sc,
+    vy: ty * geo.sc,
     hi: 0,
     sq: 0,
     born: time,
+    a: 0,
   })
 }
 
@@ -132,6 +144,11 @@ export function landingY(jar: Jar, geo: Geo, x: number, k: number): number {
 export interface Merge {
   x: number
   y: number
+  /** Where the two fruit that fused were (their ghosts slide together). */
+  ax: number
+  ay: number
+  bx: number
+  by: number
   /** Kind created; `KINDS` for a watermelon bonus. */
   k: number
   points: number
@@ -141,8 +158,10 @@ export interface Tick {
   merges: Merge[]
   /** Hard contacts this tick (sound and squash). */
   hits: number
-  /** Strongest contact speed this tick. */
+  /** Strongest contact speed this tick, and where it happened. */
   impact: number
+  ix: number
+  iy: number
   /** The jar ended on this tick (or earlier). */
   over: boolean
 }
@@ -150,12 +169,18 @@ export interface Tick {
 function impact(out: Tick, b: Body, speed: number): void {
   if (speed < IMPACT) return
   out.hits++
-  out.impact = Math.max(out.impact, speed)
+  if (speed > out.impact) {
+    out.impact = speed
+    out.ix = b.x
+    out.iy = b.y
+  }
   b.sq = Math.min(1, b.sq + speed / 900)
 }
 
-/** Gravity, air and motion for one substep. */
-function integrate(jar: Jar, h: number): void {
+const TAU = Math.PI * 2
+
+/** Gravity, air and motion for one substep. Fruit roll: the spin follows the sideways speed. */
+function integrate(jar: Jar, geo: Geo, h: number): void {
   const drag = Math.max(0, 1 - AIR * h)
   for (const b of jar.bodies) {
     b.vy += GRAVITY * h
@@ -163,6 +188,7 @@ function integrate(jar: Jar, h: number): void {
     b.vy *= drag
     b.x += b.vx * h
     b.y += b.vy * h
+    b.a = (b.a + (b.vx * h) / radius(b.k, geo)) % TAU
   }
 }
 
@@ -272,19 +298,19 @@ function merge(jar: Jar, i: number, j: number, time: number, out: Tick): void {
     points = BONUS
   } else {
     points = POINTS[k] ?? 0
-    jar.bodies.push({ k, x, y, vx, vy, hi: 0, sq: 1, born: time })
+    jar.bodies.push({ k, x, y, vx, vy, hi: 0, sq: 1, born: time, a: 0 })
   }
   jar.score += points
-  out.merges.push({ x, y, k, points })
+  out.merges.push({ x, y, k, points, ax: a.x, ay: a.y, bx: b.x, by: b.y })
 }
 
 /** Advance a jar by `dt` seconds (split into substeps). Frozen once it is over. */
 export function tick(jar: Jar, geo: Geo, dt: number, time: number): Tick {
-  const out: Tick = { merges: [], hits: 0, impact: 0, over: jar.over }
+  const out: Tick = { merges: [], hits: 0, impact: 0, ix: 0, iy: 0, over: jar.over }
   if (jar.over) return out
   const h = dt / SUBSTEPS
   for (let s = 0; s < SUBSTEPS; s++) {
-    integrate(jar, h)
+    integrate(jar, geo, h)
     confine(jar, geo, out)
     separate(jar, geo, out)
     separate(jar, geo, out)
@@ -308,6 +334,25 @@ export function tick(jar: Jar, geo: Geo, dt: number, time: number): Tick {
     out.over = true
   }
   return out
+}
+
+/** What the end of the game needs from a jar. */
+export interface JarResult {
+  score: number
+  over: boolean
+}
+
+/**
+ * The winner once the versus game is decided before the clock, else null. Both
+ * jars full: the higher score (equal is a draw). One jar full and the other
+ * already strictly ahead: the live one can only add points, so it has won and
+ * there is nothing left to wait for.
+ */
+export function decided(a: JarResult, b: JarResult): 0 | 1 | 'draw' | null {
+  if (a.over && b.over) return a.score === b.score ? 'draw' : a.score > b.score ? 0 : 1
+  if (a.over && b.score > a.score) return 1
+  if (b.over && a.score > b.score) return 0
+  return null
 }
 
 /** The fruit kinds dropped, in order, for a seed. Both players get the same sequence. */
