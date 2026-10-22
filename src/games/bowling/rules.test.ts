@@ -227,4 +227,33 @@ describe('bowling lane', () => {
     }
     expect(picked).toBeGreaterThanOrEqual(3)
   })
+
+  it('over a full game, hard outscores normal and normal outscores easy', () => {
+    const game = (d: 'easy' | 'normal' | 'hard', seed: number): number => {
+      const rng = new Rng(seed)
+      const lane = newLane(5)
+      for (let guard = 0; guard < 20 && !laneDone(lane); guard++) {
+        if (lane.phase === 'settle') prepare(lane)
+        const t = choose(d, rng, lane)
+        throwBall(lane, t.dx, t.dy, t.speed, t.curve, 0, t.x)
+        let clock = 0
+        while (!rollOver(lane, clock)) {
+          stepRoll(lane, FRAME)
+          clock += FRAME
+        }
+        resolve(lane)
+      }
+      return laneTotal(lane.frames)
+    }
+    let hard = 0
+    let normal = 0
+    let easy = 0
+    for (let seed = 1; seed <= 4; seed++) {
+      hard += game('hard', seed)
+      normal += game('normal', seed)
+      easy += game('easy', seed)
+    }
+    expect(hard).toBeGreaterThan(normal)
+    expect(normal).toBeGreaterThan(easy)
+  })
 })

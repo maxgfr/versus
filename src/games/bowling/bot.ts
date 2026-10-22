@@ -32,8 +32,8 @@ interface Tune {
 
 export const TUNE: Record<Difficulty, Tune> = {
   easy: { plans: 4, aim: 120, speed: 300, curve: 0.35 },
-  normal: { plans: 14, aim: 46, speed: 140, curve: 0.15 },
-  hard: { plans: 40, aim: 14, speed: 50, curve: 0.05 },
+  normal: { plans: 18, aim: 36, speed: 110, curve: 0.12 },
+  hard: { plans: 60, aim: 9, speed: 35, curve: 0.03 },
 }
 
 /** Every throw the bot knows: release points × targets × hooks × speeds. */
