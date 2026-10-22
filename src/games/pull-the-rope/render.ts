@@ -222,6 +222,8 @@ export function renderRope(
   const hint = s.rounds.phase === 'play' ? 1 - Math.max(0, (since - 1.4) / 0.6) : 0
   if (hint > 0) {
     for (const side of [0, 1] as Side[]) {
+      // Online, each phone prompts only its own player.
+      if (g.viewer !== null && side !== g.viewer) continue
       const y = side === 0 ? g.stage.edge(0) - 260 : g.stage.edge(1) + 260
       const xs = o.teams ? [W / 2 - 330, W / 2 + 330] : [W / 2 + 300]
       for (const x of xs) {
