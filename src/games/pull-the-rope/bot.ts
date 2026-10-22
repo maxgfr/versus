@@ -31,10 +31,12 @@ export class RopeBot {
     // Everyone digs in near their own line; hard also closes out and grinds overtime.
     const dig = lead < -0.55 ? (this.d === 'easy' ? 0.06 : 0.12) : 0
     const close = this.d === 'hard' && (lead > 0.6 || roundT > OVERTIME) ? 0.08 : 0
-    this.mash.rate = mashRate(this.d) * (1 - Math.max(0, lead - 0.4) * relax + dig + close)
+    // Normal and hard pull above the engine's base rates (hard near a fast human's pace).
+    const pace = this.d === 'easy' ? 1 : this.d === 'normal' ? 1.1 : 1.07
+    this.mash.rate = mashRate(this.d) * pace * (1 - Math.max(0, lead - 0.4) * relax + dig + close)
     const n = this.mash.step(dt)
     // Some taps are hauls: a fraction of the human maximum, by difficulty.
-    const haul = this.d === 'easy' ? 0 : this.d === 'normal' ? 0.18 : 0.3
+    const haul = this.d === 'easy' ? 0 : this.d === 'normal' ? 0.25 : 0.4
     this.extra = 0
     for (let i = 0; i < n; i++)
       if (this.rng.chance(haul)) this.extra += HAUL * this.rng.range(0.3, 0.8)
