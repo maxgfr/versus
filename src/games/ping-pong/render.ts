@@ -375,7 +375,9 @@ export function render(g: Draw, w: World, look: Look): void {
   const ball = look.ball
   if (w.phase === 'serve' && look.ended < 0) {
     const s = w.server
-    if (!look.bots[s]) banner(g, s, 'Tap to serve', s === 0 ? MID + 140 : MID - 140, { size: 52 })
+    // Online, each phone shows only its own player's prompt.
+    if (!look.bots[s] && (g.viewer === null || g.viewer === s))
+      banner(g, s, 'Tap to serve', s === 0 ? MID + 140 : MID - 140, { size: 52 })
   }
   look.bats.forEach((b, i) => {
     const side = i as Side
