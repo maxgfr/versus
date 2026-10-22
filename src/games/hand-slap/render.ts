@@ -333,12 +333,14 @@ export function renderSlap(
   }
 
   const ready = d.phase === 'rest' && d.cool <= 0 && !o.over
+  // Online, each phone shows only its own player's how-to.
+  const mine = (side: Side) => g.viewer === null || g.viewer === side
   const swapAge = m.kind === 'swap' ? age : 99
   for (const side of [0, 1] as Side[]) {
     if (!o.over) roleChip(g, side, side === d.att, now, swapAge)
     const isAtt = side === d.att
     const a = d.phase === 'rest' || d.phase === 'wind' ? 1 : 0.5
-    if (!o.over && !o.bots[side])
+    if (!o.over && !o.bots[side] && mine(side))
       prompt(
         g,
         side,
@@ -352,6 +354,7 @@ export function renderSlap(
     for (const side of [0, 1] as Side[]) {
       // Only the halves somebody reads (a demo with two bots keeps both).
       if (o.bots[side] && !o.bots[other(side)]) continue
+      if (!mine(side)) continue
       const p = frame(side, W / 2, MID + 520)
       banner(g, side, side === d.att ? 'Your turn to slap!' : 'Roles swap!', p.y, {
         size: 50,
