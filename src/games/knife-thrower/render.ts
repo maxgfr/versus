@@ -4,7 +4,7 @@ import type { Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { H } from '../../core/stage.ts'
-import { FLY, type Flying, KNIVES, LOG, type Log, ORIGIN, type State } from './rules.ts'
+import { FLY, type Flying, needOf, LOG, type Log, ORIGIN, type State } from './rules.ts'
 
 /**
  * Everything is drawn in red's frame (log above the thrower, knives flying up)
@@ -292,7 +292,7 @@ export function drawMarker(g: Draw, ready: boolean, t: number): void {
 
 /** Knives still to stick this stage, as a column of small knives beside the log. */
 export function drawQuiver(g: Draw, side: Side, l: Log): void {
-  const need = KNIVES[l.stage - 1] ?? 7
+  const need = needOf(l.stage)
   const used = l.pause > 0 ? need : l.stuck.length
   const x = 92
   const y0 = 1650

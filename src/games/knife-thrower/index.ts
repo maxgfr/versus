@@ -67,6 +67,7 @@ class KnifeThrower extends BaseGame<State> {
     for (const e of advance(s, dt, this.ctx.rng)) this.juice(e)
     if (s.ended && !this.over) {
       const out = s.logs[0].lives <= 0 ? 0 : s.logs[1].lives <= 0 ? 1 : null
+      if (s.winner === 'draw') this.ctx.fx.confetti()
       this.finish(s.winner ?? 'draw', {
         score: [...s.cleared] as [number, number],
         // Say whose lives ran out: the score is stages cleared, so a 2–2 needs the reason.
@@ -107,8 +108,11 @@ class KnifeThrower extends BaseGame<State> {
     switch (e.kind) {
       case 'stick': {
         const p = this.contact(e.side)
+        // The last knives of a stage land harder: the count builds to the clear.
+        const k = e.count / e.of
         audio.play('thud', 0.95 + e.count * 0.05)
-        audio.play('tick', 1.4)
+        audio.play('tick', 1.3 + k * 0.4)
+        audio.buzz(Math.round(6 + k * 10))
         fx.burst(p.x, p.y, C.wood, {
           count: 12,
           speed: 380,
@@ -121,7 +125,10 @@ class KnifeThrower extends BaseGame<State> {
           kind: 'square',
           colors: [C.wood, '#e2b277', C.woodDark],
         })
-        fx.shake(0.06)
+        fx.sparks(p.x, p.y, C.white, Math.round(3 + k * 6))
+        fx.shake(0.05 + k * 0.08)
+        if (e.of - e.count === 1)
+          fx.float('1 left!', p.x, frame(e.side, 0, 1520).y, C.yellow, 44, e.side)
         return
       }
       case 'fail': {
@@ -196,13 +203,16 @@ class KnifeThrower extends BaseGame<State> {
     }
   }
 
-  render(g: Draw): void {
+  render(g: Draw, alpha = 1): void {
     const s = this.s
-    const now = s.now
+    // Between two steps: the logs keep turning and the knives keep flying smoothly.
+    const back = (1 - alpha) / 60
+    const now = s.now - (s.ended ? 0 : back)
     const t = this.time
     drawTable(g)
     for (const side of [0, 1] as Side[]) {
-      const l = s.logs[side]
+      const sl = s.logs[side]
+      const l = s.ended ? sl : { ...sl, a: sl.a - sl.w * back }
       const lost = s.ended && s.winner === other(side)
       const live = !s.ended && l.pause === 0 && l.burst.length === 0
       inFrame(g, side, () => {
@@ -253,6 +263,11 @@ class KnifeThrower extends BaseGame<State> {
         const end = now - Math.max(l.clearAt, l.failAt, 0)
         if (end < 0.15) continue
         if (s.winner === side) banner(g, side, 'Winner!', at(LOG.y), { size: 80, color: C.yellow })
+        else if (s.winner === 'draw')
+          banner(g, side, l.lives <= 0 ? 'Both out!' : 'Dead heat!', at(LOG.y), {
+            size: 64,
+            color: C.yellow,
+          })
         else if (s.winner !== null) {
           banner(g, side, l.lives <= 0 ? 'Out of lives' : 'Too slow!', at(LOG.y), {
             size: 56,
@@ -275,7 +290,14 @@ class KnifeThrower extends BaseGame<State> {
           size: 46,
           alpha: Math.min(1, (l.stage === 1 ? 1.6 - now : 1.3 - born) * 3),
         })
-      } else if (l.stage === 1 && l.stuck.length === 0 && !this.isBot(side) && now < 9) {
+      } else if (
+        l.stage === 1 &&
+        l.stuck.length === 0 &&
+        !this.isBot(side) &&
+        now < 9 &&
+        // Online, each phone coaches only its own player.
+        (g.viewer === null || g.viewer === side)
+      ) {
         banner(g, side, 'Tap to throw', at(LOG.y), {
           size: 44,
           alpha: 0.75 + 0.25 * Math.sin(this.time * 4),

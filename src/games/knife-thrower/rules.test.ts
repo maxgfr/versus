@@ -4,7 +4,10 @@ import { Rng } from '../../core/rng.ts'
 import { KnifeBot } from './bot.ts'
 import {
   advance,
+  angleIn,
   arrivalPhi,
+  needOf,
+  rampOf,
   blocked,
   CLEAR_PAUSE,
   circDist,
@@ -271,5 +274,84 @@ describe('knife thrower: computer players', () => {
       expect(r.winner).not.toBeNull()
       expect(r.steps).toBeLessThan(60 * 60 * 6)
     }
+  })
+})
+
+describe('knife thrower: fairness and pace', () => {
+  it('two knives clashing in the same step put both players out: a draw, not list order', () => {
+    const rng = new Rng(40)
+    const s = newState(rng)
+    for (const side of [0, 1] as Side[]) {
+      const l = s.logs[side]
+      freeze(l)
+      l.lives = 1
+      l.stuck = [frontOf(l.a)]
+    }
+    expect(throwKnife(s, 0)).toBe(true)
+    expect(throwKnife(s, 1)).toBe(true)
+    run(s, rng, FLY + STEP * 2)
+    expect(s.ended).toBe(true)
+    expect(s.winner).toBe('draw')
+  })
+
+  it('both clearing the last stage in the same step is a draw', () => {
+    const rng = new Rng(41)
+    const s = newState(rng, 1)
+    for (const side of [0, 1] as Side[]) {
+      const l = s.logs[side]
+      freeze(l)
+      l.stuck = Array.from({ length: needOf(1) - 1 }, (_, i) => frontOf(l.a) + 1 + i * 0.3)
+    }
+    throwKnife(s, 0)
+    throwKnife(s, 1)
+    run(s, rng, FLY + STEP * 2)
+    expect(s.winner).toBe('draw')
+  })
+
+  it('clearing the last stage beats a rival going out in the same step', () => {
+    const rng = new Rng(42)
+    const s = newState(rng, 1)
+    const a = s.logs[0]
+    const b = s.logs[1]
+    freeze(a)
+    freeze(b)
+    a.stuck = Array.from({ length: needOf(1) - 1 }, (_, i) => frontOf(a.a) + 1 + i * 0.3)
+    b.lives = 1
+    b.stuck = [frontOf(b.a)]
+    throwKnife(s, 1)
+    throwKnife(s, 0)
+    run(s, rng, FLY + STEP * 2)
+    expect(s.winner).toBe(0)
+  })
+
+  it('stages past the table still need the last count, and the quiver agrees', () => {
+    expect(needOf(1)).toBe(KNIVES[0])
+    expect(needOf(6)).toBe(KNIVES[KNIVES.length - 1])
+  })
+
+  it('later stages spin faster', () => {
+    expect(rampOf(1)).toBe(1)
+    expect(rampOf(3)).toBeGreaterThan(rampOf(2))
+    expect(rampOf(99)).toBeLessThanOrEqual(1.6)
+  })
+
+  it('reads a flip coming: the predicted angle follows the reversal', () => {
+    const rng = new Rng(43)
+    const s = newState(rng)
+    const l = s.logs[0]
+    l.stage = 2
+    l.sign = 1
+    l.w = 2.8 * rampOf(2)
+    l.flipT = 1.95 // flips 0.05 s from now
+    const naive = l.a + l.w * 0.3
+    const real = angleIn(l, 0.3)
+    expect(real).toBeCloseTo(l.a + l.w * 0.05 - l.w * 0.25, 1)
+    expect(Math.abs(real - naive)).toBeGreaterThan(0.5)
+  })
+
+  it('hard beats easy bot-vs-bot most of the time', () => {
+    let wins = 0
+    for (let seed = 1; seed <= 6; seed++) if (playMatch('hard', 'easy', seed).winner === 0) wins++
+    expect(wins).toBeGreaterThanOrEqual(5)
   })
 })

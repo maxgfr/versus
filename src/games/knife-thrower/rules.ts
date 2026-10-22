@@ -25,6 +25,9 @@ export const STAGES = 3
 export const KNIVES = [6, 8, 10]
 export const CLEAR_PAUSE = 1.6
 
+/** Knives to stick on a 1-based stage; stages past the table keep the last count. */
+export const needOf = (stage: number): number => KNIVES[stage - 1] ?? KNIVES[KNIVES.length - 1] ?? 7
+
 export type Pattern = 'steady' | 'flip' | 'wave'
 /** One rotation pattern per stage. */
 export const PATTERNS: readonly { kind: Pattern; w: number; period: number; amp: number }[] = [
@@ -35,6 +38,9 @@ export const PATTERNS: readonly { kind: Pattern; w: number; period: number; amp:
 
 /** The pattern for a 1-based stage. Stages past the last one repeat the cycle. */
 export const patternOf = (stage: number) => PATTERNS[(stage - 1) % PATTERNS.length]
+
+/** Each stage spins a little faster than the one before: the match tightens as it goes. */
+export const rampOf = (stage: number): number => Math.min(1.6, 1 + 0.1 * (stage - 1))
 
 export interface Log {
   /** Current rotation of the log (rad). */
@@ -128,7 +134,7 @@ export function newState(rng: Rng, target = STAGES): State {
 /** The rotation for the log's current stage. */
 function setPattern(l: Log): void {
   const p = patternOf(l.stage)
-  l.w = p ? p.w * l.sign : 0
+  l.w = p ? p.w * l.sign * rampOf(l.stage) : 0
   l.flipT = 0
 }
 
@@ -136,8 +142,37 @@ function setPattern(l: Log): void {
 export function spinAt(l: Log): number {
   const p = patternOf(l.stage)
   if (!p) return 0
-  if (p.kind === 'wave') return p.w * l.sign + p.amp * Math.sin(l.t * 1.3)
+  if (p.kind === 'wave') return (p.w * l.sign + p.amp * Math.sin(l.t * 1.3)) * rampOf(l.stage)
   return l.w
+}
+
+/** The spin part of a log: what `turn` reads and writes. */
+type Spin = Pick<Log, 'a' | 'w' | 't' | 'flipT' | 'stage' | 'sign'>
+
+/** Turn a log by `dt` following its stage's pattern (flips and wobbles included). */
+function turn(l: Spin, dt: number): void {
+  l.t += dt
+  const p = patternOf(l.stage)
+  if (p?.kind === 'flip') {
+    l.flipT += dt
+    if (l.flipT >= p.period) {
+      l.w = -l.w
+      l.flipT = 0
+    }
+  }
+  if (p?.kind === 'wave') l.w = spinAt(l as Log)
+  l.a += l.w * dt
+}
+
+/**
+ * The log's rotation `dt` seconds from now, following the real pattern (a flip
+ * due before then is included). What a player sees coming, so bots may use it.
+ */
+export function angleIn(l: Log, dt: number): number {
+  const c: Spin = { a: l.a, w: l.w, t: l.t, flipT: l.flipT, stage: l.stage, sign: l.sign }
+  const n = Math.max(1, Math.ceil(dt / (1 / 120)))
+  for (let i = 0; i < n; i++) turn(c, dt / n)
+  return c.a
 }
 
 /** Throw a knife from `side`'s edge. False when the log cannot take one now. */
@@ -149,8 +184,8 @@ export function throwKnife(s: State, side: Side): boolean {
   return true
 }
 
-/** Angle the knife would stick at, if it arrived now (for bots and previews). */
-export const arrivalPhi = (l: Log, dt = 0): number => frontOf(l.a + spinAt(l) * dt)
+/** Angle a knife arriving `dt` seconds from now would stick at (for bots and previews). */
+export const arrivalPhi = (l: Log, dt = 0): number => frontOf(dt > 0 ? angleIn(l, dt) : l.a)
 
 /** Whether a knife arriving at log-relative `phi` would hit one already stuck. */
 export function blocked(l: Log, phi: number, margin = 0): boolean {
@@ -165,18 +200,8 @@ export function advance(s: State, dt: number, rng: Rng): Event[] {
   if (s.ended) return ev
   for (const side of [0, 1] as Side[]) {
     const l = s.logs[side]
-    l.t += dt
     l.cool = Math.max(0, l.cool - dt)
-    const p = patternOf(l.stage)
-    if (p?.kind === 'flip') {
-      l.flipT += dt
-      if (l.flipT >= p.period) {
-        l.w = -l.w
-        l.flipT = 0
-      }
-    }
-    if (p?.kind === 'wave') l.w = spinAt(l)
-    l.a += l.w * dt
+    turn(l, dt)
     if (l.pause > 0) {
       l.pause = Math.max(0, l.pause - dt)
       if (l.pause === 0) {
@@ -187,40 +212,54 @@ export function advance(s: State, dt: number, rng: Rng): Event[] {
   }
   const arrive = s.flying.filter((f) => f.at <= s.now)
   s.flying = s.flying.filter((f) => f.at > s.now)
-  for (const f of arrive) land(s, f.side, ev)
+  // Knives landing in the same step land together: whatever they decide is
+  // settled after all of them, so neither player wins on list order.
+  const done: [boolean, boolean] = [false, false]
+  const out: [boolean, boolean] = [false, false]
+  for (const f of arrive) land(s, f.side, ev, done, out)
+  const won = (side: Side): void => {
+    ev.push({ kind: 'win', side })
+  }
+  if (done[0] || done[1] || out[0] || out[1]) {
+    s.ended = true
+    for (const side of [0, 1] as Side[]) if (out[side]) ev.push({ kind: 'out', side })
+    if (done[0] && done[1]) s.winner = 'draw'
+    else if (done[0] || done[1]) s.winner = done[0] ? 0 : 1
+    else if (out[0] && out[1]) s.winner = 'draw'
+    else s.winner = out[0] ? 1 : 0
+    if (s.winner !== 'draw') won(s.winner)
+  }
   return ev
 }
 
-function land(s: State, side: Side, ev: Event[]): void {
+function land(
+  s: State,
+  side: Side,
+  ev: Event[],
+  done: [boolean, boolean],
+  out: [boolean, boolean],
+): void {
   const l = s.logs[side]
-  if (l.pause > 0 || s.ended) return
+  if (l.pause > 0 || s.ended || done[side] || out[side]) return
   const phi = frontOf(l.a)
   if (blocked(l, phi)) {
     l.lives--
     l.failAt = s.now
     ev.push({ kind: 'fail', side, lives: l.lives })
-    if (l.lives <= 0) {
-      s.ended = true
-      s.winner = side === 0 ? 1 : 0
-      ev.push({ kind: 'out', side })
-      ev.push({ kind: 'win', side: s.winner })
-    }
+    if (l.lives <= 0) out[side] = true
     return
   }
   l.stuck.push(phi)
   l.hitAt = s.now
-  const need = KNIVES[l.stage - 1] ?? KNIVES[KNIVES.length - 1] ?? 7
+  const need = needOf(l.stage)
   ev.push({ kind: 'stick', side, phi, count: l.stuck.length, of: need })
   if (l.stuck.length >= need) {
     s.cleared[side]++
     l.clearAt = s.now
     l.burst = [...l.stuck]
     ev.push({ kind: 'cleared', side, stage: l.stage })
-    if (l.stage >= s.target) {
-      s.ended = true
-      s.winner = side
-      ev.push({ kind: 'win', side })
-    } else {
+    if (l.stage >= s.target) done[side] = true
+    else {
       // The stuck knives stay up while the stage-clear banner plays.
       l.pause = CLEAR_PAUSE
     }

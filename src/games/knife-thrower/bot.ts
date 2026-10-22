@@ -1,6 +1,7 @@
 import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import {
+  angleIn,
   arrivalPhi,
   blocked,
   circDist,
@@ -13,14 +14,20 @@ import {
 
 /** Seconds the computer takes between noticing a free gap and throwing. */
 export function reaction(d: Difficulty, rng: Rng): number {
-  return (d === 'easy' ? 0.7 : d === 'normal' ? 0.5 : 0.36) * rng.range(0.8, 1.25)
+  return (d === 'easy' ? 0.7 : d === 'normal' ? 0.36 : 0.2) * rng.range(0.8, 1.25)
 }
 
 /** Timing error: the throw leaves up to this many seconds after the bot saw its gap (s). */
-export const TIMING: Record<Difficulty, number> = { easy: 0.17, normal: 0.075, hard: 0.05 }
+export const TIMING: Record<Difficulty, number> = { easy: 0.17, normal: 0.035, hard: 0.018 }
 
 /** Extra clearance (rad) the computer wants beside a stuck knife before it throws. */
-export const MARGIN: Record<Difficulty, number> = { easy: 0.03, normal: 0.08, hard: 0.09 }
+export const MARGIN: Record<Difficulty, number> = { easy: 0.03, normal: 0.08, hard: 0.06 }
+
+/**
+ * Whether it reads the log's pattern ahead (a flip due mid-flight, the wobble)
+ * or assumes the spin it sees right now just carries on.
+ */
+export const LOOKAHEAD: Record<Difficulty, boolean> = { easy: false, normal: true, hard: true }
 
 /**
  * The computer for one log. Each step it asks whether a knife thrown now would
@@ -62,11 +69,15 @@ export class KnifeBot {
   private free(s: State): boolean {
     const l = s.logs[this.side]
     const margin = MARGIN[this.difficulty]
-    const phi = arrivalPhi(l, FLY)
+    // Aim for the middle of its timing window, reading the pattern ahead if it can.
+    const lead = FLY + TIMING[this.difficulty] / 2
+    const ahead = (dt: number): number =>
+      LOOKAHEAD[this.difficulty] ? angleIn(l, dt) : l.a + l.w * dt
+    const phi = LOOKAHEAD[this.difficulty] ? arrivalPhi(l, lead) : frontOf(ahead(lead))
     if (blocked(l, phi, margin)) return false
     for (const f of s.flying) {
       if (f.side !== this.side) continue
-      const p = frontOf(l.a + l.w * (f.at - s.now))
+      const p = frontOf(ahead(f.at - s.now))
       if (circDist(p, phi) < KNIFE_W + margin) return false
     }
     return true
