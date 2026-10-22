@@ -227,6 +227,30 @@ describe('guard and thief bots', () => {
     }
   })
 
+  it('hard wins more rounds than easy, playing both roles on every map', () => {
+    let hard = 0
+    let easy = 0
+    for (let seed = 0; seed < 36; seed++) {
+      const lv = levelOf(seed % MAPS.length)
+      const thief = (seed % 2) as 0 | 1
+      const hardSide = (Math.floor(seed / 2) % 2) as 0 | 1
+      const rng = new Rng(seed * 7 + 1)
+      const w = newWorld(lv, thief)
+      const bots = [0, 1].map((s) => new CatBot(rng.fork(), s === hardSide ? 'hard' : 'easy'))
+      for (let i = 0; i < 60 * (ROUND_T + 5) && roundWinner(w) === null; i++)
+        stepWorld(
+          w,
+          lv,
+          [0, 1].map((s) => bots[s]?.decide(w, lv, s as 0 | 1, STEP) ?? idle),
+          STEP,
+          [],
+        )
+      if (roundWinner(w) === hardSide) hard++
+      else easy++
+    }
+    expect(hard).toBeGreaterThan(easy)
+  })
+
   for (const d of ['easy', 'normal', 'hard'] as const) {
     it(`bot vs bot reaches a round result on every map (${d})`, () => {
       for (let map = 0; map < MAPS.length; map++) {

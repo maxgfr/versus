@@ -368,6 +368,13 @@ function stamp(g: Draw, title: string, sub: string, age: number, color: string, 
   })
 }
 
+/** Cosmetic extras from the game (never in the state). */
+export interface Look {
+  alpha: number
+  /** Last step's position of each pawn (by side), for interpolation. */
+  prev: readonly ({ x: number; y: number } | undefined)[]
+}
+
 export function renderGuard(
   g: Draw,
   s: State,
@@ -375,11 +382,18 @@ export function renderGuard(
   names: [string, string],
   now: number,
   over: boolean,
+  look: Look,
 ): void {
   const w = s.w
   const guardSide: Side = w.thief === 0 ? 1 : 0
-  const guard = w.pawns[guardSide]
-  const thief = w.pawns[w.thief]
+  // Each pawn blended between the last two steps.
+  const blend = (side: Side) => {
+    const p = w.pawns[side]
+    const q = look.prev[side]
+    return q ? { ...p, x: q.x + (p.x - q.x) * look.alpha, y: q.y + (p.y - q.y) * look.alpha } : p
+  }
+  const guard = blend(guardSide)
+  const thief = blend(w.thief)
   floor(g, lv, now)
   cone(g, lv, guard, w.t - guard.seen < 0.35, guardSide)
   walls(g, lv)
@@ -395,15 +409,17 @@ export function renderGuard(
     if (l.got >= 0) loot(g, l, i, now, w.t, slot(g, w.thief, i, w.loot.length))
   })
   const canHide = s.phase === 'play' && !hide && inShadow(lv, thief.x, thief.y)
+  // Online, each phone shows only its own player's stick and button.
   for (const c of s.ctl)
-    pad(
-      g,
-      c,
-      c.side === w.thief ? '👻' : '💨',
-      c.side === w.thief ? canHide : true,
-      c.side === w.thief,
-      now,
-    )
+    if (g.viewer === null || c.side === g.viewer)
+      pad(
+        g,
+        c,
+        c.side === w.thief ? '👻' : '💨',
+        c.side === w.thief ? canHide : true,
+        c.side === w.thief,
+        now,
+      )
   for (const side of [0, 1] as Side[]) {
     const role = side === w.thief ? 'Thief' : 'Guard'
     // The role is what each player needs at a glance; "name · role" ran the pill

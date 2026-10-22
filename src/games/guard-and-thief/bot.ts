@@ -29,8 +29,8 @@ interface Skill {
 
 const SKILL: Record<Difficulty, Skill> = {
   easy: { think: 0.5, hide: 0.45, lead: 0, err: 60, flee: 2, intercept: false, stroll: 0.6 },
-  normal: { think: 0.2, hide: 0.8, lead: 0.3, err: 22, flee: 3, intercept: false, stroll: 0.65 },
-  hard: { think: 0.08, hide: 1, lead: 0.6, err: 0, flee: 3, intercept: true, stroll: 0.9 },
+  normal: { think: 0.14, hide: 0.9, lead: 0.45, err: 12, flee: 3, intercept: false, stroll: 0.75 },
+  hard: { think: 0.06, hide: 1, lead: 0.7, err: 0, flee: 3, intercept: true, stroll: 0.95 },
 }
 
 /** Breadth-first search over floor cells. `dist` is -1 where unreachable. */

@@ -9,7 +9,7 @@ import {
   snapControl,
 } from '../../engines/arena/index.ts'
 import { CatBot } from './bot.ts'
-import { renderGuard } from './render.ts'
+import { type Look, renderGuard } from './render.ts'
 import {
   type Drive,
   type Ev,
@@ -53,6 +53,9 @@ class GuardAndThief extends BaseGame<State> {
   private controls: SideControl[] = []
   private bots: (CatBot | null)[] = []
   private ev: Ev[] = []
+  // Cosmetic only (never synced): last step's positions for interpolation.
+  private prev: ({ x: number; y: number } | undefined)[] = []
+  private look: Look = { alpha: 1, prev: this.prev }
   private lv: Level | null = null
   private lvIndex = -1
 
@@ -94,6 +97,7 @@ class GuardAndThief extends BaseGame<State> {
       if (this.time - s.at >= BETWEEN) {
         s.map = ctx.rng.int(0, MAPS.length - 1)
         s.w = newWorld(this.level(), thiefOf(s.score.played))
+        this.prev.length = 0
         s.phase = 'play'
         s.at = this.time
         s.text = ''
@@ -102,6 +106,13 @@ class GuardAndThief extends BaseGame<State> {
       return
     }
     const level = this.level()
+    s.w.pawns.forEach((p, i) => {
+      const q = this.prev[i]
+      if (q) {
+        q.x = p.x
+        q.y = p.y
+      } else this.prev[i] = { x: p.x, y: p.y }
+    })
     const drives: Drive[] = ([0, 1] as Side[]).map((side) => {
       const c = this.controls[side] as SideControl
       const bot = this.bots[side]
@@ -150,7 +161,8 @@ class GuardAndThief extends BaseGame<State> {
   }
 
   private feedback(e: Ev): void {
-    const { fx, audio, rng } = this.ctx
+    // Cosmetic pitch jitter uses Math.random: the seeded rng picks the maps.
+    const { fx, audio } = this.ctx
     const guard: Side = this.s.w.thief === 0 ? 1 : 0
     const n = this.s.w.loot.length
     switch (e.k) {
@@ -174,7 +186,7 @@ class GuardAndThief extends BaseGame<State> {
         fx.shake(0.18)
         break
       case 'hide':
-        audio.play('whoosh', 0.8 + rng.next() * 0.1)
+        audio.play('whoosh', 0.8 + Math.random() * 0.1)
         fx.puff(e.x, e.y, 'rgba(20,14,34,0.7)', 12)
         break
       case 'nohide':
@@ -182,7 +194,7 @@ class GuardAndThief extends BaseGame<State> {
         fx.float('No shadow!', e.x, e.y - 80, C.white, 40, this.s.w.thief)
         break
       case 'sprint':
-        audio.play('whoosh', 1.25 + rng.next() * 0.1)
+        audio.play('whoosh', 1.25 + Math.random() * 0.1)
         fx.puff(e.x, e.y, 'rgba(255,255,255,0.45)', 6)
         break
       case 'catch':
@@ -213,10 +225,13 @@ class GuardAndThief extends BaseGame<State> {
   override restore(snap: unknown): void {
     super.restore(snap)
     this.lv = null
+    // The guest has no previous step to blend from.
+    this.prev.length = 0
   }
 
-  render(g: Draw): void {
-    renderGuard(g, this.s, this.level(), this.ctx.names, this.time, this.over)
+  render(g: Draw, alpha: number): void {
+    this.look.alpha = alpha
+    renderGuard(g, this.s, this.level(), this.ctx.names, this.time, this.over, this.look)
   }
 }
 
