@@ -1,30 +1,37 @@
 import type { Difficulty } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
-import { BOARD, type Drive, idx, type Roller, type World } from './rules.ts'
+import { BOARD, type Drive, idx, type Roller, splashCell, type World } from './rules.ts'
 
 interface Skill {
   pace: number
   /** Seconds between new targets. */
   retarget: number
-  /** Fresh tiles a splash must cover (of its 3 × 3) to be worth the cooldown. */
+  /** Tile value a splash must win (of its 3 × 3) to be worth the cooldown. */
   splashMin: number
+  /**
+   * What a rival tile is worth next to a blank one: taking it also costs the
+   * rival a tile, so a sharp painter hunts the rival's paint.
+   */
+  steal: number
 }
 
 const SKILL: Record<Difficulty, Skill> = {
-  easy: { pace: 0.7, retarget: 0.9, splashMin: 6 },
-  normal: { pace: 0.9, retarget: 0.6, splashMin: 5 },
-  hard: { pace: 1, retarget: 0.4, splashMin: 4 },
+  easy: { pace: 0.7, retarget: 0.9, splashMin: 6, steal: 1 },
+  normal: { pace: 1, retarget: 0.45, splashMin: 5, steal: 1.6 },
+  hard: { pace: 1, retarget: 0.3, splashMin: 5.5, steal: 2.2 },
 }
 
 /**
- * One computer roller: heads for the nearest big patch of floor it does not
- * own yet (unpainted or rival tiles, weighted by how many are around them), and
- * splashes when a 3 × 3 burst would win enough. Bots run on the host only.
+ * One computer roller (one per roller, so 2 vs 2 teammates each keep their own
+ * goal): heads for the best nearby patch of floor it does not own yet (rival
+ * paint weighted by `steal`), keeps away from its teammate's patch, and
+ * splashes when the 3 × 3 it would throw from where it rolls wins enough.
+ * Bots run on the host only.
  */
 export class PaintBot {
   private sk: Skill
-  private goalX = 0
-  private goalY = 0
+  goalX = 0
+  goalY = 0
   private t = 0
   private has = false
 
@@ -35,18 +42,18 @@ export class PaintBot {
     this.sk = SKILL[d]
   }
 
-  decide(w: World, me: Roller, dt: number): Drive {
+  decide(w: World, me: Roller, dt: number, mate?: { x: number; y: number }): Drive {
     this.t -= dt
     if (this.t <= 0 || !this.has) {
-      this.pick(w, me)
+      this.pick(w, me, mate)
       this.t = this.sk.retarget * this.rng.range(0.8, 1.2)
     }
     const dx = this.goalX - me.x
     const dy = this.goalY - me.y
     const m = Math.hypot(dx, dy)
     const near = m < 14
-    const fresh = this.freshAround(w, me, 1)
-    const splash = me.cd <= 0 && fresh >= this.sk.splashMin
+    const { c, r } = splashCell(me)
+    const splash = me.cd <= 0 && this.value(w, me, c, r) >= this.sk.splashMin
     return {
       jx: near ? 0 : (dx / m) * this.sk.pace,
       jy: near ? 0 : (dy / m) * this.sk.pace,
@@ -54,23 +61,23 @@ export class PaintBot {
     }
   }
 
-  /** Tiles in the 3 × 3 around the roller that its side does not own yet. */
-  private freshAround(w: World, me: Roller, radius: number): number {
-    const c = Math.floor((me.x - BOARD.x0) / BOARD.cell)
-    const r = Math.floor((me.y - BOARD.y0) / BOARD.cell)
-    let n = 0
-    for (let dr = -radius; dr <= radius; dr++)
-      for (let dc = -radius; dc <= radius; dc++) {
+  /** What the 3 × 3 around (c, r) is worth to `me`: blank tiles 1, rival tiles `steal`. */
+  private value(w: World, me: Roller, c: number, r: number): number {
+    let v = 0
+    for (let dr = -1; dr <= 1; dr++)
+      for (let dc = -1; dc <= 1; dc++) {
         const cc = c + dc
         const rr = r + dr
         if (cc < 0 || rr < 0 || cc >= BOARD.cols || rr >= BOARD.rows) continue
-        if (w.own[idx(cc, rr)] !== me.side + 1) n++
+        const o = w.own[idx(cc, rr)]
+        if (o === 0) v++
+        else if (o !== me.side + 1) v += this.sk.steal
       }
-    return n
+    return v
   }
 
-  /** Best goal: many fresh tiles around it, not too far away. */
-  private pick(w: World, me: Roller): void {
+  /** Best goal: worth a lot around it, not too far away, not on the teammate's patch. */
+  private pick(w: World, me: Roller, mate?: { x: number; y: number }): void {
     let best = -Infinity
     let bx = me.x
     let by = me.y
@@ -78,18 +85,11 @@ export class PaintBot {
       for (let c = 0; c < BOARD.cols; c++) {
         const x = BOARD.x0 + (c + 0.5) * BOARD.cell
         const y = BOARD.y0 + (r + 0.5) * BOARD.cell
-        const own = w.own[idx(c, r)]
-        if (own === me.side + 1) continue
-        let gain = 0
-        for (let dr = -1; dr <= 1; dr++)
-          for (let dc = -1; dc <= 1; dc++) {
-            const cc = c + dc
-            const rr = r + dr
-            if (cc < 0 || rr < 0 || cc >= BOARD.cols || rr >= BOARD.rows) continue
-            if (w.own[idx(cc, rr)] !== me.side + 1) gain++
-          }
+        if (w.own[idx(c, r)] === me.side + 1) continue
+        const gain = this.value(w, me, c, r)
         const d = Math.hypot(x - me.x, y - me.y)
-        const score = gain / (1 + d / (BOARD.cell * 4))
+        let score = gain / (1 + d / (BOARD.cell * 4))
+        if (mate && Math.hypot(x - mate.x, y - mate.y) < BOARD.cell * 3) score *= 0.4
         if (score > best) {
           best = score
           bx = x

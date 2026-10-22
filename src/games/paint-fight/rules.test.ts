@@ -4,6 +4,7 @@ import { Rng } from '../../core/rng.ts'
 import { PaintBot } from './bot.ts'
 import {
   BOARD,
+  BUMP_R,
   type Ev,
   matchWinner,
   newWorld,
@@ -122,6 +123,76 @@ describe('paint splash', () => {
   })
 })
 
+describe('paint contests', () => {
+  it('a tile both rollers reach on the same step keeps its colour (no list-order tie-break)', () => {
+    const w = newWorld(false)
+    const [red, blue] = w.rollers
+    if (!red || !blue) throw new Error('rollers')
+    // Both discs reach tile (5, 10) from either side.
+    const p = cellCentre(5, 10)
+    red.x = p.x - BUMP_R
+    red.y = p.y
+    blue.x = p.x + BUMP_R
+    blue.y = p.y
+    stepWorld(w, [undefined, undefined], STEP, [])
+    expect(owner(w, 5, 10)).toBe(NONE)
+    // Red alone on it takes it.
+    blue.x = cellCentre(11, 19).x
+    blue.y = cellCentre(11, 19).y
+    stepWorld(w, [undefined, undefined], STEP, [])
+    expect(owner(w, 5, 10)).toBe(1)
+  })
+
+  it('rollers shove each other instead of rolling through, and a hard knock bumps', () => {
+    const w = newWorld(false)
+    const [red, blue] = w.rollers
+    if (!red || !blue) throw new Error('rollers')
+    red.x = 400
+    red.y = 900
+    blue.x = 400 + BUMP_R * 2 + 4
+    blue.y = 900
+    const ev: Ev[] = []
+    for (let i = 0; i < 30; i++)
+      stepWorld(
+        w,
+        [
+          { jx: 1, jy: 0, splash: false },
+          { jx: -1, jy: 0, splash: false },
+        ],
+        STEP,
+        ev,
+      )
+    expect(Math.hypot(blue.x - red.x, blue.y - red.y)).toBeGreaterThanOrEqual(BUMP_R * 2 - 1e-6)
+    expect(blue.x).toBeGreaterThan(red.x)
+    expect(ev.some((e) => e.k === 'bump')).toBe(true)
+  })
+
+  it('a splash thrown while rolling lands ahead and counts the tiles it steals', () => {
+    const w = at(3, 10)
+    const red = w.rollers[0]
+    if (!red) throw new Error('red')
+    // Blue owns the floor ahead.
+    for (let c = 4; c <= 7; c++) for (let r = 9; r <= 11; r++) w.own[r * BOARD.cols + c] = 2
+    for (let i = 0; i < 5; i++) stepWorld(w, [{ jx: 1, jy: 0, splash: false }, undefined], STEP, [])
+    const ev: Ev[] = []
+    stepWorld(w, [{ jx: 1, jy: 0, splash: true }, undefined], STEP, ev)
+    const sp = ev.find((e) => e.k === 'splash')
+    if (sp?.k !== 'splash') throw new Error('no splash')
+    expect(sp.power).toBeGreaterThan(0.9)
+    // Thrown 1.5 cells ahead of a roller near (3, 10): centred on column 4 or 5.
+    expect(sp.x).toBeGreaterThan(cellCentre(4, 10).x - 1)
+    expect(sp.stolen).toBeGreaterThan(3)
+    expect(owner(w, 5, 9)).toBe(1)
+  })
+
+  it('in the frenzy a splash reloads twice as fast', () => {
+    const w = at(6, 10)
+    w.frenzy = true
+    stepWorld(w, [{ jx: 0, jy: 0, splash: true }, undefined], STEP, [])
+    expect(w.rollers[0]?.cd).toBeCloseTo(SPLASH_CD / 2, 6)
+  })
+})
+
 describe('paint result', () => {
   it('the side with more painted tiles wins, a tie is a draw', () => {
     const w = newWorld(false)
@@ -139,6 +210,27 @@ describe('paint result', () => {
 })
 
 describe('paint bot vs bot', () => {
+  it('hard out-paints easy over a minute, from either side', () => {
+    let wins = 0
+    for (let seed = 0; seed < 8; seed++) {
+      const rng = new Rng(seed * 11 + 5)
+      const w = newWorld(false)
+      const side = seed % 2
+      const bots = w.rollers.map((r) => new PaintBot(rng.fork(), r.side === side ? 'hard' : 'easy'))
+      while (w.t < 60) {
+        w.frenzy = w.t > 45
+        stepWorld(
+          w,
+          w.rollers.map((r, i) => bots[i]?.decide(w, r, STEP)),
+          STEP,
+          [],
+        )
+      }
+      if (matchWinner(w) === side) wins++
+    }
+    expect(wins).toBeGreaterThanOrEqual(7)
+  })
+
   for (const difficulty of ['easy', 'normal', 'hard'] as const) {
     it(`a ${difficulty} 60 s match paints both sides`, () => {
       for (const teams of [false, true]) {

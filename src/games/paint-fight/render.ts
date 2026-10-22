@@ -6,6 +6,18 @@ import { type ControlLook, drawStrip } from '../../engines/arena/index.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { State } from './index.ts'
 import { BOARD, BOARD_BOTTOM, ROLL_R, type Roller, shares } from './rules.ts'
+import { lerp } from '../../core/fx/ease.ts'
+
+/** Cosmetic extras from the game (never in the state). */
+export interface Look {
+  alpha: number
+  /** Last step's position of each roller (by id), for interpolation. */
+  prev: readonly ({ x: number; y: number } | undefined)[]
+  /** Squash of each roller (by id): 1 at rest. */
+  squash: readonly number[]
+  /** Pulse (0..1) of each side's share bar, red first. */
+  pulse: [number, number]
+}
 
 const FLOOR_A = '#2b3050'
 const FLOOR_B = '#262a47'
@@ -84,14 +96,16 @@ function paint(g: Draw, own: readonly number[], at: readonly number[], now: numb
  * A roller and its painter: the roller is coated in team paint and lies across
  * the direction of travel; the blob behind it stays upright and looks where it goes.
  */
-function roller(g: Draw, ro: Roller, now: number): void {
+function roller(g: Draw, ro: Roller, now: number, squash = 1): void {
   const col = SIDE[ro.side]
+  // Rolling fast, the painter leans in and the cylinder stretches across the floor.
+  const speed = Math.min(1, Math.hypot(ro.vx, ro.vy) / 230)
   const fx = Math.cos(ro.a)
   const fy = Math.sin(ro.a)
   const bx = ro.x - fx * 38
   const by = ro.y - fy * 38
   const kick = clamp01(1 - (now - ro.splashT) / 0.35)
-  const bob = Math.sin(now * 14 + ro.id) * 2
+  const bob = Math.sin(now * (6 + speed * 10) + ro.id) * (1.5 + speed * 2.5)
   g.shadow(ro.x + 6, ro.y + 12, ROLL_R + 16, ROLL_R * 0.7, 0.32)
   g.shadow(bx + 4, by + 24, 32, 12, 0.3)
   // The painter walks behind the roller; whichever is lower on screen is drawn in front.
@@ -99,8 +113,8 @@ function roller(g: Draw, ro: Roller, now: number): void {
     g.blob(bx, by - 8 + bob, 32, col.main, {
       mood: kick > 0 ? 'grin' : 'happy',
       look: [fx, fy],
-      sx: 1 + kick * 0.2,
-      sy: 1 - kick * 0.2,
+      sx: (1 + kick * 0.2) * squash,
+      sy: (1 - kick * 0.2) / squash,
       outline: true,
     })
   if (fy >= 0) painter()
@@ -109,7 +123,7 @@ function roller(g: Draw, ro: Roller, now: number): void {
     g.line(-38, 0, 2, 0, '#4a4458', 8)
     g.line(2, -30, 2, 30, '#4a4458', 6)
     // The paint-soaked cylinder, its axis across the travel.
-    const len = 50 * (1 + kick * 0.15)
+    const len = 50 * (1 + kick * 0.15) * (0.6 + 0.4 * squash)
     g.rrect(4, -len, 30, len * 2, 14, shade(col.main, -0.45))
     g.rrect(
       2,
@@ -203,11 +217,14 @@ function shareBar(
   other: number,
   name: string,
   y: number,
+  pulse = 0,
 ): void {
   const col = SIDE[side]
   const w = 780
   const lead = share > other
-  g.forSide(side, W / 2, y, () => {
+  // A big swing (a splash, a steal) pumps the bar.
+  g.at(W / 2, y, g.orient(side), () => {
+    if (pulse > 0) g.ctx.scale(1 + pulse * 0.05, 1 + pulse * 0.12)
     g.rrect(-w / 2 - 6, -25, w + 12, 50, 25, alpha(C.ink, 0.85))
     g.rrect(-w / 2, -20, w, 40, 20, shade(col.main, -0.62))
     const fill = Math.max(40, w * Math.min(1, share))
@@ -251,22 +268,49 @@ export interface View {
 }
 
 /** The paint floor: painted regions, rollers, the controls, share bars, the clock and the final call. */
-export function renderPaint(g: Draw, s: State, now: number, v: View): void {
+export function renderPaint(g: Draw, s: State, now: number, v: View, look: Look): void {
   g.fillView(C.ink)
   drawStrip(g, BOARD.y0 - 16, BOARD_BOTTOM + 16)
   slab(g)
   paint(g, s.w.own, s.w.at, s.w.t)
-  // Rollers further down the screen draw on top.
-  const order = [...s.w.rollers].sort((a, b) => a.y - b.y)
-  for (const ro of order) roller(g, ro, s.w.t)
+  if (s.w.frenzy) {
+    // Paint frenzy: the slab's rim throbs yellow.
+    const w = BOARD.cols * BOARD.cell
+    const h = BOARD.rows * BOARD.cell
+    g.alpha(0.35 + 0.25 * Math.sin(g.t * 9), () =>
+      g.rrect(BOARD.x0 - 10, BOARD.y0 - 10, w + 20, h + 20, 22, undefined, C.yellow, 8),
+    )
+  }
+  // Each roller blended between the last two steps; further down the screen draws on top.
+  const order = s.w.rollers
+    .map((ro) => {
+      const p = look.prev[ro.id]
+      return p ? { ...ro, x: lerp(p.x, ro.x, look.alpha), y: lerp(p.y, ro.y, look.alpha) } : ro
+    })
+    .sort((a, b) => a.y - b.y)
+  for (const ro of order) roller(g, ro, s.w.t, look.squash[ro.id] ?? 1)
   g.vignette(0.3)
-  for (const c of s.ctl) controls(g, c)
+  // Online, each phone shows only its own player's sticks and buttons.
+  for (const c of s.ctl) if (g.viewer === null || c.side === g.viewer) controls(g, c)
   const [red, blue] = shares(s.w)
   // Snug against the slab, so the joystick ring below never runs under the bar.
-  shareBar(g, 0, red, blue, v.names[0], BOARD_BOTTOM + 26)
-  shareBar(g, 1, blue, red, v.names[1], BOARD.y0 - 26)
-  if (!v.over) clock(g, v.duration - now, MID)
-  else if (v.winner !== null) {
+  shareBar(g, 0, red, blue, v.names[0], BOARD_BOTTOM + 26, look.pulse[0])
+  shareBar(g, 1, blue, red, v.names[1], BOARD.y0 - 26, look.pulse[1])
+  if (!v.over) {
+    // The last ten seconds: the clock throbs.
+    const left = v.duration - now
+    const beat = left <= 10 ? Math.max(0, 1 - (left % 1) * 4) : 0
+    g.at(
+      W / 2,
+      MID,
+      0,
+      () => {
+        g.ctx.translate(-W / 2, -MID)
+        clock(g, left, MID)
+      },
+      1 + beat * 0.12,
+    )
+  } else if (v.winner !== null) {
     const col = v.winner === 'draw' ? C.white : mix(C.white, SIDE[v.winner].light, 0.5)
     banner(g, undefined, 'Time!', MID, { size: 72, color: col })
   }
