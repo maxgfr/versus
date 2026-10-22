@@ -37,6 +37,11 @@ class BeachBall extends BaseGame<State> {
   private bumpAt: number[] = []
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
   private spin = 0
+  /** Ball squash (1 = round), kicked by bumps and landings. */
+  private ballSquash = new Spring(1, 300, 11)
+  private trail: { x: number; y: number; z: number }[] = []
+  /** The net sags and springs back when the ball hits it. */
+  private net = new Spring(0, 160, 6)
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -53,7 +58,6 @@ class BeachBall extends BaseGame<State> {
   protected step(dt: number): void {
     const w = this.s.w
     this.prev = { ball: { ...w.ball }, blobs: w.blobs.map((b) => ({ ...b })) }
-    this.spin += (Math.hypot(w.ball.vx, w.ball.vy) * dt) / 90
     const botTargets: ({ x: number; y: number } | null)[][] = [[], []]
     for (const side of [0, 1] as Side[]) {
       if (this.isBot(side)) {
@@ -80,17 +84,30 @@ class BeachBall extends BaseGame<State> {
     const { fx, audio } = this.ctx
     const w = this.s.w
     if (e.kind === 'bump') {
-      audio.play('boing', 0.9 + Math.min(0.5, e.count * 0.12))
-      fx.puff(e.x, e.y, SAND, 6)
-      fx.ring(e.x, e.y, SIDE[e.side].light, 120)
-      fx.burst(e.x, e.y, C.white, {
-        count: 8,
-        speed: 520,
+      // Intensity: the pace it leaves at, and how hard the blob charged (a spike).
+      const p = e.power
+      const k = Math.min(1, e.speed / 1400)
+      audio.play(p > 0.5 ? 'slap' : 'boing', 0.85 + k * 0.3 + Math.min(0.3, e.count * 0.1))
+      fx.puff(e.x, e.y, SAND, 5 + Math.round(p * 6))
+      fx.ring(e.x, e.y, p > 0.6 ? C.yellow : SIDE[e.side].light, 110 + p * 90)
+      fx.burst(e.x, e.y, p > 0.5 ? C.yellow : C.white, {
+        count: Math.round(7 + p * 14),
+        speed: 520 + p * 600,
         size: 6,
         life: 0.3,
         gravity: 0,
+        spread: Math.PI * (2 - p),
+        dir: e.side === 0 ? -Math.PI / 2 : Math.PI / 2,
         kind: 'spark',
       })
+      if (p > 0.35) fx.shake(0.08 + p * 0.22)
+      if (p > 0.6) {
+        fx.stop(2 + Math.round(p * 3))
+        fx.float('SPIKE!', e.x, e.y + (e.side === 0 ? -150 : 150), C.yellow, 56, e.side)
+      }
+      if (p > 0.3) audio.buzz(Math.round(8 + p * 20))
+      this.ballSquash.kick(-5 - p * 7)
+      this.trail.length = 0
       if (e.count === MAX_TOUCH) audio.play('tick', 1.4)
       let best = -1
       let bd = Infinity
@@ -103,21 +120,35 @@ class BeachBall extends BaseGame<State> {
         }
       })
       if (best >= 0) {
-        this.squash[best]?.kick(-4)
+        this.squash[best]?.kick(-4 - e.power * 4)
         this.bumpAt[best] = this.time
       }
     } else if (e.kind === 'wall') {
-      audio.play('bounce', 0.95)
+      audio.play('bounce', 0.85 + Math.min(0.4, e.speed / 2000))
+      this.ballSquash.kick(-3)
     } else if (e.kind === 'net') {
       audio.play('slap', 1.2)
       audio.play('thud', 1.4)
       fx.puff(e.x, MID, SAND, 14)
       fx.shake(0.18)
+      this.net.kick(30)
     } else if (e.kind === 'land') {
-      audio.play('thud', 0.8)
-      fx.puff(e.x, e.y, 'rgba(255,255,255,0.7)', 12)
-      fx.shake(0.25)
-      fx.sparks(e.x, e.y, SAND, 8)
+      // A ball slammed into the sand hits harder than one that floats down.
+      const k = Math.min(1, e.speed / 1600)
+      audio.play('thud', 0.7 + k * 0.3)
+      fx.puff(e.x, e.y, 'rgba(255,255,255,0.7)', 8 + Math.round(k * 10))
+      fx.burst(e.x, e.y, SAND, {
+        count: Math.round(10 + k * 16),
+        speed: 380 + k * 500,
+        size: 9,
+        life: 0.6,
+        gravity: 900,
+        drag: 1.4,
+        colors: [SAND, C.sand, '#ffffff'],
+      })
+      fx.ring(e.x, e.y, 'rgba(255,255,255,0.7)', 90 + k * 80)
+      fx.shake(0.18 + k * 0.2)
+      this.ballSquash.kick(-6 - k * 6)
     } else if (e.kind === 'point') {
       const col = SIDE[e.side]
       audio.play('score')
@@ -145,6 +176,10 @@ class BeachBall extends BaseGame<State> {
     const prev = this.prev
     for (const s of this.squash) s.update(1 / 60)
     for (const p of this.pulse) p.update(1 / 60)
+    this.ballSquash.update(1 / 60)
+    this.net.update(1 / 60)
+    const sp = Math.hypot(w.ball.vx, w.ball.vy)
+    if (w.phase === 'rally') this.spin += (sp / 60 / 90) * (w.ball.vx >= 0 ? 1 : -1)
     const ip = (a: Disc, b: Disc | undefined): Disc =>
       b ? { ...a, x: lerp(b.x, a.x, alpha), y: lerp(b.y, a.y, alpha) } : a
     const bp = prev?.ball
@@ -156,9 +191,16 @@ class BeachBall extends BaseGame<State> {
           z: lerp(bp.z, w.ball.z, alpha),
         }
       : w.ball
+    // A trail only behind a ball flying fast (a spike).
+    if (w.phase === 'rally' && sp > 900) this.trail.push({ x: ball.x, y: ball.y, z: ball.z })
+    else this.trail.shift()
+    while (this.trail.length > 6) this.trail.shift()
     const look: Look = {
       w,
       ball,
+      trail: this.trail,
+      ballSquash: this.ballSquash.value,
+      net: this.net.value,
       landing: w.phase === 'rally' ? landingOf(w.ball) : null,
       teams: this.ctx.teams,
       pulse: [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)],

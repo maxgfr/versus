@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { STEP, type Difficulty, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
-import { decide, newMemory, TUNING } from './bot.ts'
+import { decide, intercept, newMemory, TUNING } from './bot.ts'
 import {
   BALL_R,
   BLOB_R,
   G,
   MAX_TOUCH,
+  SPIKE_FULL,
   newWorld,
   step,
   winner,
@@ -78,6 +79,66 @@ describe('beach ball rules', () => {
     red2.y = 1400
     const ev2 = run(w2, rng, [null, null], (e) => e.some((x) => x.kind === 'bump'), 10)
     expect(ev2.some((e) => e.kind === 'bump')).toBe(false)
+  })
+
+  it('charging at the net spikes the ball: faster and flatter than a standing bump', () => {
+    const bump = (charge: number) => {
+      const rng = new Rng(9)
+      const w = newWorld(false, 0, rng)
+      const red = w.blobs[0]
+      if (!red) throw new Error('no blob')
+      red.x = 500
+      red.y = 1400
+      toss(w, 500, 1400 - BLOB_R - BALL_R + 2, 0, 0, 200, -100)
+      const targets: Target[] = [{ x: 500, y: 1400 - charge * STEP }, null]
+      const ev = run(w, rng, targets, (e) => e.some((x) => x.kind === 'bump'), 1)
+      const b = ev.find((e) => e.kind === 'bump')
+      return { w, power: b && b.kind === 'bump' ? b.power : -1 }
+    }
+    const still = bump(0)
+    const spike = bump(SPIKE_FULL)
+    expect(still.power).toBe(0)
+    expect(spike.power).toBeGreaterThan(0.9)
+    expect(-spike.w.ball.vy).toBeGreaterThan(-still.w.ball.vy * 1.8)
+    expect(spike.w.ball.vz).toBeLessThan(still.w.ball.vz * 0.8)
+  })
+
+  it('the ball takes the side of the blob it hits: offset aims the bump', () => {
+    const rng = new Rng(10)
+    const w = newWorld(false, 0, rng)
+    const red = w.blobs[0]
+    if (!red) throw new Error('no blob')
+    red.x = 500
+    red.y = 1400
+    toss(w, 560, 1300, 0, 0, 200, -100)
+    run(w, rng, [null, null], (e) => e.some((x) => x.kind === 'bump'), 30)
+    expect(w.ball.vx).toBeGreaterThan(80)
+  })
+
+  it('each bump of a rally adds pace, so long rallies open up', () => {
+    const pace = (hits: number) => {
+      const rng = new Rng(11)
+      const w = newWorld(false, 0, rng)
+      const red = w.blobs[0]
+      if (!red) throw new Error('no blob')
+      red.x = 500
+      red.y = 1400
+      toss(w, 500, 1300, 0, 0, 200, -100)
+      w.hits = hits
+      run(w, rng, [null, null], (e) => e.some((x) => x.kind === 'bump'), 30)
+      return -w.ball.vy
+    }
+    expect(pace(20)).toBeGreaterThan(pace(0) * 1.4)
+  })
+
+  it('blobs move evenly through the substeps, at the finger speed', () => {
+    const rng = new Rng(12)
+    const w = newWorld(false, 0, rng)
+    const red = w.blobs[0]
+    if (!red) throw new Error('no blob')
+    const x0 = red.x
+    step(w, STEP, [{ x: x0 + 1500 * STEP, y: red.y }, null], speeds(w), rng)
+    expect(red.vx).toBeCloseTo(1500, 0)
   })
 
   it('a fourth touch in a row by one side is a point for the rival', () => {
@@ -170,6 +231,26 @@ describe('beach ball rules', () => {
     const t1 = decide(w1, 1, 'hard', rng, newMemory(), 1)
     expect(t1[1]).not.toBeNull()
     expect(TUNING.hard.speed).toBeGreaterThan(TUNING.easy.speed)
+  })
+
+  it('the bot reads the flight and meets the ball low on its own sand, in time', () => {
+    const rng = new Rng(13)
+    const w = newWorld(false, 1, rng)
+    toss(w, 500, 700, 100, 450, 300, 900)
+    const red = w.blobs[0]
+    if (!red) throw new Error('no blob')
+    const spot = intercept(w, 0, red, TUNING.hard.speed)
+    expect(spot).not.toBeNull()
+    expect((spot as { y: number }).y).toBeGreaterThan(MID)
+    // A ball that comes down on blue's sand is not red's to chase.
+    toss(w, 500, 300, 0, 0, 300, 600)
+    expect(intercept(w, 0, red, TUNING.hard.speed)).toBeNull()
+  })
+
+  it('the harder bot usually wins', () => {
+    let hard = 0
+    for (let s = 1; s <= 6; s++) if (botMatch('hard', 'easy', s, 5, false).w.score[0] >= 5) hard++
+    expect(hard).toBeGreaterThanOrEqual(5)
   })
 })
 

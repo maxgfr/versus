@@ -23,6 +23,12 @@ const LIFT = 0.0006
 export interface Look {
   w: World
   ball: Ball
+  /** Recent ball positions while it flies fast, oldest first. */
+  trail: { x: number; y: number; z: number }[]
+  /** Ball squash spring (1 = round). */
+  ballSquash: number
+  /** Net sag spring (units), kicked when the ball hits it. */
+  net: number
   blobs: Disc[]
   blobSides: Side[]
   squash: number[]
@@ -123,10 +129,10 @@ function drawSand(g: Draw, teams: boolean): void {
 }
 
 /** The net seen from above: its shadow on the sand, a mesh band, the top tape and two posts. */
-function drawNet(g: Draw, shake: number): void {
+function drawNet(g: Draw, shake: number, sag: number): void {
   const x0 = COURT.x0 - 10
   const x1 = COURT.x1 + 10
-  const wob = shake * Math.sin(shake * 30) * 8
+  const wob = shake * Math.sin(shake * 30) * 8 + sag * 0.4
   g.alpha(0.22, () => g.rrect(x0, MID + 8, x1 - x0, 34, 12, '#000000'))
   g.rrect(x0, MID - 22, x1 - x0, 40, 8, alpha(C.ink, 0.35))
   g.clip(x0, MID - 22, x1 - x0, 40, 8, () => {
@@ -163,16 +169,57 @@ function drawBlob(g: Draw, p: Disc, side: Side, squash: number, wow: number, hot
 }
 
 /** A beach ball: six coloured panels, turning as it flies, lifted by its height. */
-function drawBall(g: Draw, b: Ball, spin: number, pop: number): void {
+function drawBall(g: Draw, b: Ball, spin: number, pop: number, squash = 1): void {
   const sh = BALL_R * (1 - Math.min(0.5, b.z / 900))
   g.shadow(b.x, b.y, sh, sh * 0.42, 0.38 * (1 - Math.min(0.7, b.z / 600)))
   const p = lifted(b.x, b.y, b.z)
   const s = (1 + Math.min(0.32, b.z / 1400)) * pop
   if (s <= 0.01) return
   const panels = [C.red, C.white, C.yellow, C.white, C.blue, C.white]
+  const sq = Math.max(0.65, Math.min(1.35, squash))
+  // Squash in screen space (wide and flat on a hit), panels turning inside it.
+  g.at(p.x, p.y, 0, () => drawPanels(g, panels, spin, s), sq, 2 - sq)
+  // Shading and gloss stay put while the panels turn.
+  const r = BALL_R * s
+  const rx = r * sq
+  const ry = r * (2 - sq)
+  g.path(
+    (c) => c.ellipse(p.x, p.y, rx, ry, 0, 0, Math.PI * 2),
+    g.rad(
+      p.x,
+      p.y,
+      r * 0.2,
+      r,
+      [
+        [0, 'rgba(255,255,255,0)'],
+        [0.7, 'rgba(0,0,0,0.05)'],
+        [1, 'rgba(0,0,0,0.3)'],
+      ],
+      p.x - r * 0.3,
+      p.y - r * 0.35,
+    ),
+    alpha(C.ink, 0.35),
+    4,
+  )
+  g.alpha(0.7, () => g.ellipse(p.x - rx * 0.36, p.y - ry * 0.42, r * 0.3, r * 0.15, '#fff', -0.6))
+}
+
+/** Faint copies of the ball behind a spike. */
+function drawTrail(g: Draw, trail: Look['trail']): void {
+  for (let i = 0; i < trail.length; i++) {
+    const t = trail[i]
+    if (!t) continue
+    const k = (i + 1) / (trail.length + 1)
+    const p = lifted(t.x, t.y, t.z)
+    const r = BALL_R * (1 + Math.min(0.32, t.z / 1400)) * (0.5 + 0.45 * k)
+    g.alpha(k * 0.3, () => g.circle(p.x, p.y, r, C.white))
+  }
+}
+
+function drawPanels(g: Draw, panels: string[], spin: number, s: number): void {
   g.at(
-    p.x,
-    p.y,
+    0,
+    0,
     spin,
     () => {
       const a = (Math.PI * 2) / panels.length
@@ -193,29 +240,6 @@ function drawBall(g: Draw, b: Ball, spin: number, pop: number): void {
     s,
     s,
   )
-  // Shading and gloss stay put while the panels turn.
-  const r = BALL_R * s
-  g.circle(
-    p.x,
-    p.y,
-    r,
-    g.rad(
-      p.x,
-      p.y,
-      r * 0.2,
-      r,
-      [
-        [0, 'rgba(255,255,255,0)'],
-        [0.7, 'rgba(0,0,0,0.05)'],
-        [1, 'rgba(0,0,0,0.3)'],
-      ],
-      p.x - r * 0.3,
-      p.y - r * 0.35,
-    ),
-    alpha(C.ink, 0.35),
-    4,
-  )
-  g.alpha(0.7, () => g.ellipse(p.x - r * 0.36, p.y - r * 0.42, r * 0.3, r * 0.15, '#fff', -0.6))
 }
 
 /** Where the ball comes down: a target on the sand in the colour of the side that must play it. */
@@ -375,9 +399,10 @@ export function render(g: Draw, look: Look): void {
     const hot = ballLow && side === ballSide && near ? 1 : 0
     drawBlob(g, p, side, look.squash[i] ?? 1, look.wow[i] ?? 0, hot)
   })
-  drawNet(g, netShake)
+  drawNet(g, netShake, look.net)
   const pop = w.phase === 'rally' ? outBack(prog(w.rally, 0, 0.3)) : 1
-  drawBall(g, look.ball, look.spin, Math.max(0.01, pop))
+  if (w.phase === 'rally') drawTrail(g, look.trail)
+  drawBall(g, look.ball, look.spin, Math.max(0.01, pop), look.ballSquash)
   drawTouches(g, w, look.ball)
   pointStamp(g, w)
   // HUD: names (with whose ball it is) and points.

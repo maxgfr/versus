@@ -19,14 +19,26 @@ export const REACH = 300
 export const G = 1400
 export const BUMP_VZ = 1120
 export const BUMP_VY = 470
-export const STEER = 4
+/** Sideways pace (units/s) per unit of offset between the ball and the blob's centre. */
+export const STEER = 2.4
 export const MAX_TOUCH = 3
 /** Pause after a point before the next serve (s). */
 export const POINT_PAUSE = 1.3
 const SUBSTEPS = 4
 const COOL = 0.22
-/** A rally longer than this (s) is let drop where the ball is, so every rally ends. */
-export const RALLY_MAX = 10
+/** Blob speed toward the net (units/s) that makes a full spike. */
+export const SPIKE_FULL = 1800
+/** A full spike flies this much faster and this much flatter than a plain bump. */
+const SPIKE_PACE = 1.2
+const SPIKE_FLAT = 0.35
+/** Each bump of a rally adds this much pace, up to `ESCALATE_MAX`, so long rallies open up. */
+const ESCALATE = 0.035
+const ESCALATE_MAX = 0.6
+/**
+ * Safety net: a rally longer than this (s) is let drop where the ball is. The
+ * escalating pace ends rallies long before; this only guards against a stalemate.
+ */
+export const RALLY_MAX = 30
 /** Blob top speed for humans (units/s); bots are slower or quicker by difficulty. */
 export const HUMAN_SPEED = 3800
 
@@ -66,10 +78,22 @@ export interface World {
   rally: number
   /** A rally that ran too long: the ball is simply let drop where it is. */
   dropping: boolean
+  /** Bumps so far in this rally (pace escalates with it). */
+  hits: number
 }
 
 export type Event =
-  | { kind: 'bump'; side: Side; x: number; y: number; speed: number; count: number }
+  | {
+      kind: 'bump'
+      side: Side
+      x: number
+      y: number
+      /** Pace the ball leaves at (ground speed). */
+      speed: number
+      count: number
+      /** 0..1: how hard the blob charged into it (a spike). */
+      power: number
+    }
   | { kind: 'wall'; x: number; y: number; speed: number }
   | { kind: 'net'; x: number; y: number }
   | { kind: 'land'; side: Side; x: number; y: number; speed: number }
@@ -107,6 +131,7 @@ export function newWorld(teams: boolean, server: Side, rng: Rng): World {
     why: '',
     rally: 0,
     dropping: false,
+    hits: 0,
   }
   serve(w, server, rng)
   return w
@@ -123,6 +148,7 @@ export function serve(w: World, side: Side, rng: Rng): void {
   w.why = ''
   w.rally = 0
   w.dropping = false
+  w.hits = 0
 }
 
 /** Score a point for `side` and pause before the serve. */
@@ -176,8 +202,11 @@ export function step(
     return ev
   }
   const h = dt / SUBSTEPS
+  // The finger moves once per frame: walk each target evenly through the
+  // substeps so a blob's velocity is its real speed in every one of them.
+  const from = w.blobs.map((b) => ({ x: b.x, y: b.y }))
   for (let s = 0; s < SUBSTEPS && w.phase === 'rally'; s++) {
-    moveBlobs(w, h, targets, speeds)
+    moveBlobs(w, h, targets, speeds, from, (s + 1) / SUBSTEPS)
     flight(w, h, ev, rng)
   }
   return ev
@@ -188,17 +217,48 @@ function moveBlobs(
   dt: number,
   targets: ({ x: number; y: number } | null)[],
   speeds: number[],
+  from?: { x: number; y: number }[],
+  k = 1,
 ): void {
   w.blobs.forEach((b, i) => {
     b.cool = Math.max(0, b.cool - dt)
     const t = targets[i]
-    if (t)
-      driveTo(b, t.x, t.y, speeds[i] ?? HUMAN_SPEED, dt, halfBox(b.side, COURT, BLOB_R, b.lane))
-    else {
+    const f = from?.[i]
+    if (t) {
+      const tx = f ? f.x + (t.x - f.x) * k : t.x
+      const ty = f ? f.y + (t.y - f.y) * k : t.y
+      driveTo(b, tx, ty, speeds[i] ?? HUMAN_SPEED, dt, halfBox(b.side, COURT, BLOB_R, b.lane))
+    } else {
       b.vx = 0
       b.vy = 0
     }
   })
+}
+
+/**
+ * One slice of free flight: gravity, then the side walls and the far ends of
+ * the sand bounce the ball back in. Returns the side-wall impact speed (0 if none).
+ */
+export function fly(b: Ball, h: number): number {
+  b.vz -= G * h
+  b.x += b.vx * h
+  b.y += b.vy * h
+  b.z += b.vz * h
+  let wall = 0
+  const lo = COURT.x0 + BALL_R
+  const hi = COURT.x1 - BALL_R
+  if (b.x < lo || b.x > hi) {
+    wall = Math.abs(b.vx)
+    b.x = b.x < lo ? lo : hi
+    b.vx = -b.vx * 0.7
+  }
+  const top = COURT.y0 + BALL_R
+  const bottom = COURT.y1 - BALL_R
+  if (b.y < top || b.y > bottom) {
+    b.y = b.y < top ? top : bottom
+    b.vy = -b.vy * 0.7
+  }
+  return wall
 }
 
 function flight(w: World, h: number, ev: Event[], rng: Rng): void {
@@ -211,25 +271,8 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
     b.vy *= 0.3
     if (b.vz > 0) b.vz = 0
   }
-  b.vz -= G * h
-  b.x += b.vx * h
-  b.y += b.vy * h
-  b.z += b.vz * h
-  // Side walls and the far ends of the sand bounce the ball back in.
-  const lo = COURT.x0 + BALL_R
-  const hi = COURT.x1 - BALL_R
-  if (b.x < lo || b.x > hi) {
-    const sp = Math.abs(b.vx)
-    b.x = b.x < lo ? lo : hi
-    b.vx = -b.vx * 0.7
-    if (sp > 300) ev.push({ kind: 'wall', x: b.x, y: b.y, speed: sp })
-  }
-  const top = COURT.y0 + BALL_R
-  const bottom = COURT.y1 - BALL_R
-  if (b.y < top || b.y > bottom) {
-    b.y = b.y < top ? top : bottom
-    b.vy = -b.vy * 0.7
-  }
+  const wall = fly(b, h)
+  if (wall > 300) ev.push({ kind: 'wall', x: b.x, y: b.y, speed: wall })
   // Net: crossing the middle lower than the net costs the last toucher the point.
   if (prevY < MID !== b.y < MID && b.z < NET_H) {
     ev.push({ kind: 'net', x: b.x, y: MID })
@@ -255,14 +298,18 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
       w.last = bl.side
       w.count = 1
     }
-    const speed = Math.hypot(b.vx, b.vy)
-    b.vx = dx * STEER * 0.25 + bl.vx * 0.45
-    // Each return has its own strength, so the rival cannot always count on where it lands.
-    const power = 0.8 + 0.4 * rng.next()
-    b.vy = fwd(bl.side) * BUMP_VY * power + bl.vy * 0.2
-    b.vz = BUMP_VZ * (0.94 + 0.12 * rng.next())
+    // Charging at the net spikes it: faster and flatter. Standing still lobs it.
+    // Where the ball sits on the blob, and the blob's sideways run, aim it.
+    const charge = bl.vy * fwd(bl.side)
+    const power = Math.max(0, Math.min(1, charge / SPIKE_FULL))
+    w.hits++
+    const pace = (1 + Math.min(ESCALATE_MAX, w.hits * ESCALATE)) * (1 + power * SPIKE_PACE)
+    b.vx = dx * STEER + bl.vx * 0.45
+    b.vy = fwd(bl.side) * BUMP_VY * pace * (0.96 + 0.08 * rng.next())
+    b.vz = BUMP_VZ * (1 - power * SPIKE_FLAT) * (0.97 + 0.06 * rng.next())
     bl.cool = COOL
-    ev.push({ kind: 'bump', side: bl.side, x: b.x, y: b.y, speed, count: w.count })
+    const speed = Math.hypot(b.vx, b.vy)
+    ev.push({ kind: 'bump', side: bl.side, x: b.x, y: b.y, speed, count: w.count, power })
     if (w.count > MAX_TOUCH) {
       point(w, other(bl.side), 'touches', ev)
       return
