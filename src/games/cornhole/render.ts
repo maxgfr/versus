@@ -264,6 +264,8 @@ export interface Look {
   readers: Side[]
   /** Who won, once the match is decided. */
   winner: Side | null
+  /** Spring offset of the board jumping under a landing bag. */
+  thump: number
 }
 
 /** A banner in each reader's own space between the board and their pitch. */
@@ -281,7 +283,17 @@ export function render(g: Draw, s: State, look: Look, t: number): void {
   const aiming = s.phase === 'aim' && look.winner === null
   for (const side of [0, 1] as Side[]) drawPitch(g, side, aiming && s.turn === side, t)
   const inAir = s.bags.some((b) => b.st === 'air')
-  drawBoard(g, inAir ? 0.6 + 0.4 * Math.sin(t * 10) : 0)
+  // The board jumps a touch under a hard landing (scaled about its centre).
+  const bc = { x: BOARD.x + BOARD.w / 2, y: BOARD.y + BOARD.h / 2 }
+  g.at(
+    bc.x,
+    bc.y,
+    0,
+    () => g.at(-bc.x, -bc.y, 0, () => drawBoard(g, inAir ? 0.6 + 0.4 * Math.sin(t * 10) : 0)),
+    1 + look.thump * 0.012,
+  )
+  // Online, the aim arrow and the flight preview are the thrower's controls: only their phone shows them.
+  const own = g.viewer === null || g.viewer === s.turn
   // Bags back to front so the lifted ones overlap the grounded ones.
   const order = [...s.bags].sort((a, b) => a.y - b.y)
   for (const b of order) drawBag(g, b)
@@ -295,7 +307,7 @@ export function render(g: Draw, s: State, look: Look, t: number): void {
     g.alpha(0.5 + 0.25 * Math.sin(t * 6), () => g.ring(bx, by, BAG_R * 1.9, C.yellow, 6))
     g.shadow(bx + 6, by + 10, BAG_R * 1.2, BAG_R * 0.7, 0.4)
     g.at(bx, by, 0, () => bagShape(g, s.turn, BAG_R * 1.12, s.turn === 0 ? 0 : 0.2))
-    if (a) {
+    if (a && own) {
       // Aim arrow from the bag, length by power.
       const len = 60 + a.power * 150
       const ex = bx + a.dx * len
@@ -314,7 +326,7 @@ export function render(g: Draw, s: State, look: Look, t: number): void {
       )
     }
   }
-  if (look.aim && s.phase === 'aim') drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
+  if (look.aim && s.phase === 'aim' && own) drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
   if (s.phase === 'score' || s.phase === 'over') {
     const since = s.now - s.scoredAt
     // Bags in the hole get their "3" in a ring round it, so several never overlap.
@@ -374,7 +386,7 @@ export function render(g: Draw, s: State, look: Look, t: number): void {
     })
   } else {
     for (const side of [0, 1] as Side[]) {
-      if (!look.hint[side]) continue
+      if (!look.hint[side] || (g.viewer !== null && side !== g.viewer)) continue
       banner(g, side, 'Pull back, let go to throw', side === 0 ? 1440 : 360, {
         size: 38,
         alpha: 0.75 + 0.25 * Math.sin(t * 4),

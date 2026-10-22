@@ -77,12 +77,12 @@ export interface State {
 
 export type Event =
   | { kind: 'turn'; side: Side }
-  | { kind: 'land'; side: Side; x: number; y: number }
+  | { kind: 'land'; side: Side; x: number; y: number; speed: number }
   | { kind: 'table'; side: Side; x: number; y: number }
   | { kind: 'hole'; side: Side; x: number; y: number }
   | { kind: 'rest'; side: Side; x: number; y: number }
   | { kind: 'off'; side: Side; x: number; y: number }
-  | { kind: 'bump'; x: number; y: number }
+  | { kind: 'bump'; x: number; y: number; speed: number }
   | { kind: 'scored'; pts: [number, number]; gain: Side | null; amount: number }
   | { kind: 'round'; round: number }
 
@@ -179,10 +179,11 @@ function moveBag(b: Bag, dt: number, ev: Event[]): void {
     b.z = 0
     b.since = 0
     if (onBoard(b.x, b.y)) {
+      const speed = Math.hypot(b.vx, b.vy, b.vz)
       b.st = 'slide'
       b.vx *= LAND
       b.vy *= LAND
-      ev.push({ kind: 'land', side: b.side, x: b.x, y: b.y })
+      ev.push({ kind: 'land', side: b.side, x: b.x, y: b.y, speed })
     } else {
       b.st = 'table'
       b.vx = 0
@@ -242,6 +243,8 @@ function collide(bags: Bag[], ev: Event[]): void {
       const b = bags[j] as Bag
       if (!live(a) || !live(b)) continue
       if (a.st !== 'slide' && b.st !== 'slide') continue
+      // Only bags on the board touch: one still in the air passes over.
+      if (a.z > BAG_R || b.z > BAG_R) continue
       const dx = b.x - a.x
       const dy = b.y - a.y
       const d = Math.hypot(dx, dy)
@@ -255,6 +258,8 @@ function collide(bags: Bag[], ev: Event[]): void {
       a.y -= ny * push
       b.x += nx * push
       b.y += ny * push
+      // A resting bag nudged aside must not keep its point from off the board, or sit over the hole.
+      for (const c of [a, b]) if (c.st === 'rest') reseat(c, ev)
       if (rel <= 0) continue
       const J = rel * 0.8
       a.vx -= J * nx
@@ -267,8 +272,23 @@ function collide(bags: Bag[], ev: Event[]): void {
           c.since = 0
         }
       }
-      ev.push({ kind: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+      ev.push({ kind: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, speed: rel })
     }
+  }
+}
+
+/** A resting bag that was moved without sliding: off the edge it falls, over the hole it drops in. */
+function reseat(c: Bag, ev: Event[]): void {
+  if (!onBoard(c.x, c.y)) {
+    c.st = 'off'
+    c.since = 0
+    ev.push({ kind: 'off', side: c.side, x: c.x, y: c.y })
+  } else if (inHole(c.x, c.y)) {
+    c.st = 'hole'
+    c.since = 0
+    c.x = HOLE.x
+    c.y = HOLE.y
+    ev.push({ kind: 'hole', side: c.side, x: HOLE.x, y: HOLE.y })
   }
 }
 

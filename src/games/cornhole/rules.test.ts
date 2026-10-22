@@ -8,6 +8,7 @@ import {
   type Bag,
   BAG_R,
   BAGS_EACH,
+  BOARD,
   bagPoints,
   HOLE,
   landingOf,
@@ -264,5 +265,88 @@ describe('cornhole: computer players', () => {
     let wins = 0
     for (let seed = 1; seed <= 5; seed++) if (playOut('hard', 'easy', seed).winner === 0) wins++
     expect(wins).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('cornhole: edge cases', () => {
+  it('a resting bag shoved past the edge by a separation falls off and scores nothing', () => {
+    const s = roundWith([
+      bag(0, 'rest', BOARD.x + 6, 1200),
+      // Overlapping, but sliding away: no impulse, only the separation push.
+      {
+        side: 1,
+        x: BOARD.x + 6 + BAG_R,
+        y: 1200,
+        z: 0,
+        vx: 200,
+        vy: 0,
+        vz: 0,
+        st: 'slide',
+        since: 0,
+      },
+    ])
+    settle(s)
+    expect(s.bags[0]?.st).toBe('off')
+    expect(bagPoints(s.bags[0] as Bag)).toBe(0)
+  })
+
+  it('a resting bag nudged over the hole drops in', () => {
+    const s = roundWith([
+      bag(0, 'rest', HOLE.x, HOLE.y + HOLE.r + 4),
+      {
+        side: 1,
+        x: HOLE.x,
+        y: HOLE.y + HOLE.r + 4 + BAG_R * 1.2,
+        z: 0,
+        vx: 0,
+        vy: 200,
+        vz: 0,
+        st: 'slide',
+        since: 0,
+      },
+    ])
+    settle(s)
+    expect(s.bags[0]?.st).toBe('hole')
+  })
+
+  it('a bag in the air passes over a sliding one', () => {
+    const s = roundWith([
+      { side: 0, x: 500, y: 1200, z: 200, vx: 0, vy: -50, vz: 400, st: 'air', since: 0 },
+      { side: 1, x: 500, y: 1200, z: 0, vx: 0, vy: -100, vz: 0, st: 'slide', since: 0 },
+    ])
+    const ev = advance(s, STEP)
+    expect(ev.some((e) => e.kind === 'bump')).toBe(false)
+  })
+
+  it('the bot reads the board: with the hole blocked it still out-scores a blind throw', () => {
+    const rng = new Rng(9)
+    let smart = 0
+    let blind = 0
+    for (let i = 0; i < 6; i++) {
+      // A rival bag resting just short of the hole.
+      const s = newState(0)
+      s.bags = [bag(1, 'rest', HOLE.x, HOLE.y + HOLE.r + 30)]
+      s.tosses = [0, 1]
+      const a = JSON.parse(JSON.stringify(s)) as State
+      toss(a, choose(a, 0, 'hard', rng))
+      settle(a)
+      const b = JSON.parse(JSON.stringify(s)) as State
+      toss(b, choose(b, 0, 'easy', rng))
+      settle(b)
+      const diff = (t: State) =>
+        t.bags.reduce((n, x) => n + (x.side === 0 ? 1 : -1) * bagPoints(x), 0)
+      smart += diff(a)
+      blind += diff(b)
+    }
+    expect(smart).toBeGreaterThan(blind)
+  })
+
+  it('a landing reports how hard the bag came down', () => {
+    const s = newState(0)
+    toss(s, shotTo(0, { x: 500, y: 1100 }))
+    let land: number | null = null
+    for (let i = 0; i < 300 && land === null; i++)
+      for (const e of advance(s, STEP)) if (e.kind === 'land') land = e.speed
+    expect(land).toBeGreaterThan(300)
   })
 })
