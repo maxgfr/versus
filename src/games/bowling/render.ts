@@ -367,7 +367,9 @@ export function drawLane(g: Draw, look: LaneLook): void {
   g.clip(LANE.gutter0 - 40, clipTop, LANE.gutter1 - LANE.gutter0 + 80, 1800 - clipTop, 0, () => {
     for (const p of pins) drawPin(g, p, side, look.wobble[p.slot] ?? 0)
   })
-  const trail = look.trail
+  // Online, each phone draws only its own player's swipe, gauge and coaching.
+  const own = g.viewer === null || g.viewer === side
+  const trail = own ? look.trail : null
   if (trail && trail.path.length > 1) {
     const pts = trail.path
     for (let i = 2; i < pts.length; i += 2) {
@@ -421,7 +423,7 @@ export function drawLane(g: Draw, look: LaneLook): void {
         ),
       )
   }
-  if (look.hint && lane.phase === 'ready' && !trail) drawHint(g, side, look.time)
+  if (own && look.hint && lane.phase === 'ready' && !trail) drawHint(g, side, look.time)
   if (look.call) drawCall(g, side, look.call, look.time)
 }
 

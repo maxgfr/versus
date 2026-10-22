@@ -366,7 +366,12 @@ class Bowling extends BaseGame<State> {
         : lane.phase === 'done'
           ? 'Finished'
           : undefined
-      namePill(g, side, this.ctx.names[side], { active: ready, text })
+      // Online, the "Swipe to bowl" prompt shows only on its own player's phone.
+      const own = g.viewer === null || g.viewer === side
+      namePill(g, side, this.ctx.names[side], {
+        active: ready,
+        text: own || lane.phase !== 'ready' ? text : undefined,
+      })
       bigScore(g, side, laneTotal(lane.frames), { x: 120 })
     }
     if (s.endAt >= 0) {
