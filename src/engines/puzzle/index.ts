@@ -24,7 +24,15 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
 import { submitRecord, store } from '../../core/store.ts'
-import { type Frame, halfFrame, inFrame, localView, toLocal, toWorld } from '../runner/frame.ts'
+import {
+  type Frame,
+  halfFrame,
+  inFrame,
+  localView,
+  mirrorFx,
+  toLocal,
+  toWorld,
+} from '../runner/frame.ts'
 
 export { toWorld } from '../runner/frame.ts'
 
@@ -121,6 +129,7 @@ export abstract class PuzzleRace<S extends RaceBase> extends BaseGame<S> {
   override init(ctx: Parameters<BaseGame<S>['init']>[0]): void {
     this.solo = ctx.mode === '1p' && !ctx.bots[1]
     this.frames = [halfFrame(0, ctx.mode, this.solo), halfFrame(1, ctx.mode)]
+    mirrorFx(ctx, this.frames)
     super.init(ctx)
   }
 

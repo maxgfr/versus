@@ -17,6 +17,8 @@ export class Link {
   private action: MessageAction<JsonValue>
   private handlers = new Map<string, Set<Handler>>()
   peer: string | null = null
+  /** Everyone in the room right now, so a friend who reloads is picked up again. */
+  private present = new Set<string>()
   private watchers = new Set<(connected: boolean) => void>()
 
   constructor(
@@ -33,15 +35,23 @@ export class Link {
       if (set) for (const h of set) h(payload)
     }
     this.room.onPeerJoin = (id) => {
+      this.present.add(id)
       // Two phones per room: a third visitor is ignored.
       if (this.peer !== null && this.peer !== id) return
       this.peer = id
       for (const w of this.watchers) w(true)
     }
     this.room.onPeerLeave = (id) => {
+      this.present.delete(id)
       if (id !== this.peer) return
       this.peer = null
       for (const w of this.watchers) w(false)
+      // A reloaded page rejoins under a new id, often before the old one times out.
+      const next = this.present.values().next()
+      if (!next.done) {
+        this.peer = next.value
+        for (const w of this.watchers) w(true)
+      }
     }
   }
 

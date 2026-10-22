@@ -72,6 +72,8 @@ export class Session {
   private pausePanel: HTMLElement | null = null
   private teams = false
   private ready: [boolean, boolean] = [false, false]
+  /** This round's seed, re-sent to a guest who (re)joins mid-round. */
+  private seed = 0
   private local: Side
   private guest: boolean
   private host: boolean
@@ -127,6 +129,7 @@ export class Session {
     this.input?.detach()
     this.fx.clear()
     const s = seed ?? (Math.random() * 2 ** 32) >>> 0
+    this.seed = s
     delete document.body.dataset.result
     this.input = new Input(this.stage, this.o.mode, this.local)
     this.input.attach(this.stage.canvas)
@@ -161,7 +164,7 @@ export class Session {
     this.ready = [false, this.o.mode === '1p']
     this.steps = 0
     this.rounds++
-    if (this.host) this.o.link?.send('round', { id: this.o.meta.id, seed: s, target: this.target })
+    if (this.host) this.sendRound()
     if (this.o.demo) {
       this.loop.speed = this.o.demo.speed
       this.clearOverlay()
@@ -212,6 +215,10 @@ export class Session {
 
   // ---------- online ----------
 
+  private sendRound(): void {
+    this.o.link?.send('round', { id: this.o.meta.id, seed: this.seed, target: this.target })
+  }
+
   private broadcast(link: Link): void {
     const snap: Snap = { s: this.game.snapshot(), fx: this.fx.outbox ?? [], au: audio.outbox ?? [] }
     link.send('snap', snap)
@@ -228,6 +235,10 @@ export class Session {
       })
       on('ready', () => this.markReady(1))
       on('rematch', () => this.rematch())
+      // The guest's screen just opened: tell it if red already tapped Ready.
+      on('hi', () => {
+        if (this.phase === 'ready' && this.ready[0]) link.send('ready')
+      })
     } else {
       on('round', (d) => {
         const r = d as { id: string; seed: number; target?: number }
@@ -237,12 +248,17 @@ export class Session {
       })
       on('ready', () => this.markReady(0))
       on('count', () => void this.countdown())
+      link.send('hi')
       on('snap', (d) => {
         const sn = d as Snap
         this.game.restore(sn.s)
         for (const f of sn.fx) this.fx.apply(f)
         for (const [n, p] of sn.au) audio.play(n, p)
-        if (this.phase === 'count' || this.phase === 'ready') this.phase = 'play'
+        if (this.phase === 'count' || this.phase === 'ready') {
+          // Joined a round already under way.
+          this.phase = 'play'
+          this.clearOverlay()
+        }
         if (this.game.result && this.phase === 'play') this.showResult(this.game.result)
       })
     }
@@ -256,6 +272,14 @@ export class Session {
         if (!connected && this.phase === 'play')
           this.pause(false, 'Your friend lost the connection. Waiting for them to come back…')
         if (connected && this.paused && this.pausePanel) this.resume(true)
+        // A friend who opens the invite (or comes back) lands in this game.
+        if (connected && this.host && this.phase !== 'result') {
+          this.sendRound()
+          if (this.phase === 'ready') {
+            this.ready[1] = false
+            this.showReady()
+          }
+        }
       }),
     )
   }
@@ -275,7 +299,7 @@ export class Session {
     const halfFor = (side: Side): HTMLElement => {
       const cls = side === 0 ? 'red' : 'blue'
       const pos = side === 0 ? 'bottom' : mode === '2p' ? 'top' : 'top-flat'
-      const half = h(`div.half.${pos === 'top' ? 'top' : 'bottom'}.${cls}`)
+      const half = h(`div.half.${pos === 'top-flat' ? 'flat' : pos}.${cls}`)
       // The CPU / solo half in 1P.
       if (mode === '1p' && side === 1) {
         half.className = 'half solo'
@@ -396,9 +420,10 @@ export class Session {
     const bottom = halfFor(0)
     const ov = h('div.overlay.ready', top, strip, bottom)
     if (mode === 'online' && this.local === 1) {
-      // The guest's own half goes at the bottom of their screen.
-      top.classList.remove('top')
-      bottom.classList.add('top')
+      // The guest's own half goes at the bottom of their screen; the host's
+      // sits above it, upright (nobody is across the table online).
+      top.classList.replace('flat', 'bottom')
+      bottom.classList.replace('bottom', 'flat')
       ov.replaceChildren(bottom, strip, top)
     }
     this.overlay = ov

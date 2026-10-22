@@ -1,10 +1,10 @@
-import { Link, newCode } from '../core/net/link.ts'
+import { Link, newCode, type Role } from '../core/net/link.ts'
 import { audio } from '../core/audio.ts'
 import qrcode from 'qrcode-generator'
 import { h, onTap } from './dom.ts'
 import { icon } from './icons.ts'
 import { go } from './router.ts'
-import { ui } from './state.ts'
+import { ROOM_KEY, ui } from './state.ts'
 import { toast } from './toast.ts'
 
 /** Guests follow the host: when the host starts a round, jump into that game. */
@@ -16,14 +16,32 @@ export function takePending(): { seed: number; target?: number } | undefined {
   return p
 }
 
-function connect(code: string, role: 'host' | 'guest'): Link {
+function remember(room: { code: string; role: Role } | null): void {
+  try {
+    if (room) sessionStorage.setItem(ROOM_KEY, JSON.stringify(room))
+    else sessionStorage.removeItem(ROOM_KEY)
+  } catch {
+    // Private mode: a reload just leaves the room.
+  }
+}
+
+/** Back into the room this tab was in (iOS often reloads Safari after the share sheet). */
+export function rejoin(room: { code: string; role: Role }): void {
+  if (/^[A-Z]{4}$/.test(room.code) && (room.role === 'host' || room.role === 'guest'))
+    connect(room.code, room.role)
+}
+
+function connect(code: string, role: Role): Link {
   ui.link?.leave()
   const link = new Link(code, role)
   ui.link = link
   ui.mode = 'online'
+  remember({ code, role })
   if (role === 'guest') {
     link.on('round', (d) => {
       const r = d as { id: string; seed: number; target?: number }
+      // Whatever the home toggle says, the host's game is an online one.
+      ui.mode = 'online'
       if (location.hash === `#/play/${r.id}`) return
       pending = r.target === undefined ? { seed: r.seed } : { seed: r.seed, target: r.target }
       go(`/play/${r.id}`)
@@ -39,9 +57,11 @@ function connect(code: string, role: 'host' | 'guest'): Link {
     if (c) {
       audio.play('coin')
       toast(
-        role === 'host'
-          ? 'Friend connected! Pick a game.'
-          : 'Connected! Your friend picks the game.',
+        location.hash.startsWith('#/play/')
+          ? 'Your friend is back.'
+          : role === 'host'
+            ? 'Friend connected! Pick a game.'
+            : 'Connected! Your friend picks the game.',
       )
       if (location.hash.startsWith('#/online')) go('/')
     } else {
@@ -54,6 +74,7 @@ function connect(code: string, role: 'host' | 'guest'): Link {
 export function leaveRoom(): void {
   ui.link?.leave()
   ui.link = null
+  remember(null)
   if (ui.mode === 'online') ui.mode = '2p'
 }
 

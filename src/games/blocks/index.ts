@@ -10,8 +10,10 @@ import {
   halfFrame,
   inFrame,
   localView,
+  mirrorFx,
   toLocal,
   toWorld,
+  viewFrame,
 } from '../../engines/runner/frame.ts'
 import { chooseMove, PACE } from './bot.ts'
 import { drawPanel, layout, type PanelView, TOYS, traySlotAt } from './render.ts'
@@ -84,6 +86,7 @@ class Blocks extends BaseGame<State> {
   override init(ctx: Parameters<BaseGame<State>['init']>[0]): void {
     this.solo = ctx.mode === '1p' && !ctx.bots[1]
     this.frames = [halfFrame(0, ctx.mode, this.solo), halfFrame(1, ctx.mode)]
+    mirrorFx(ctx, this.frames)
     super.init(ctx)
   }
 
@@ -381,7 +384,7 @@ class Blocks extends BaseGame<State> {
       const k = prog(this.time - this.target, 0, 0.2)
       for (const side of this.sides()) {
         if (this.s.boards[side].dead) continue
-        const f = this.frames[side]
+        const f = viewFrame(g, this.frames[side])
         const l = layout(f.w, f.h)
         const at = toWorld(f, f.w / 2, l.gy0 + (N * l.cs) / 2)
         banner(g, side, 'Time!', at.y, { size: 84, color: C.yellow, alpha: k })

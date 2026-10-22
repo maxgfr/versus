@@ -1,4 +1,4 @@
-import type { Mode, Side } from '../../core/game.ts'
+import type { GameContext, Mode, Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { H, MID, W } from '../../core/stage.ts'
 
@@ -12,7 +12,8 @@ import { H, MID, W } from '../../core/stage.ts'
  * online host maps the guest's touches exactly as the guest sees them: blue's
  * frame is turned 180° in local 2P and online (the guest's screen is itself
  * rotated, so it reads upright there), and upright in 1P where nobody sits at
- * the top.
+ * the top. Drawing goes through `viewFrame`, which turns the rival's half
+ * upright too when nobody sits across the table (online).
  */
 export interface Frame {
   side: Side
@@ -42,6 +43,32 @@ export function halfFrame(side: Side, mode: Mode, solo = false): Frame {
   }
 }
 
+/**
+ * The frame as this screen shows it. Local 2P keeps blue's half turned to the
+ * player across the table; everywhere else every half reads upright for the
+ * viewer (online, the rival's half would otherwise be upside down).
+ */
+export function viewFrame(g: Draw, f: Frame): Frame {
+  const angle = g.flipTop ? f.angle : g.stage.rot
+  return angle === f.angle ? f : { ...f, angle }
+}
+
+/**
+ * Effects are spawned in world coords through the play frames. A half this
+ * screen shows turned (see `viewFrame`) gets them mirrored about its centre so
+ * they land where they are drawn. Set once the frames are known.
+ */
+export function mirrorFx(ctx: GameContext, frames: readonly Frame[]): void {
+  const rot = ctx.stage.rot
+  const turned = ctx.mode === '2p' ? [] : frames.filter((f) => f.h < H && f.angle !== rot)
+  ctx.fx.remap = turned.length
+    ? (x, y) => {
+        const f = turned.find((t) => y < MID === t.cy < MID)
+        return f ? [2 * f.cx - x, 2 * f.cy - y] : null
+      }
+    : null
+}
+
 /** World → frame-local. */
 export function toLocal(f: Frame, x: number, y: number): { x: number; y: number } {
   const dx = x - f.cx
@@ -65,7 +92,8 @@ export function toWorld(f: Frame, x: number, y: number): { x: number; y: number 
  * visible edges (letterbox), so local drawing may bleed past 0..w / 0..h: draw
  * the ground below `h` and the sky above 0 and it fills the screen.
  */
-export function inFrame(g: Draw, f: Frame, fn: () => void, clip = true): void {
+export function inFrame(g: Draw, frame: Frame, fn: () => void, clip = true): void {
+  const f = viewFrame(g, frame)
   const c = g.ctx
   c.save()
   if (clip) {
@@ -90,7 +118,11 @@ export function inFrame(g: Draw, f: Frame, fn: () => void, clip = true): void {
  * The part of local space that is visible inside the frame's clip (letterbox
  * included), so backdrops can fill it: sky above 0, ground below h, and so on.
  */
-export function localView(g: Draw, f: Frame): { x0: number; y0: number; x1: number; y1: number } {
+export function localView(
+  g: Draw,
+  frame: Frame,
+): { x0: number; y0: number; x1: number; y1: number } {
+  const f = viewFrame(g, frame)
   const v = g.stage.view
   const top = f.cy - f.h / 2
   const bottom = f.cy + f.h / 2

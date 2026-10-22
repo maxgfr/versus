@@ -73,3 +73,30 @@ test('two phones play a real-time game (pull the rope) to a result', async ({ br
   await expect(guest.locator('.overlay.result')).toBeVisible({ timeout: 5000 })
   await expect(host.locator('.result-title').first()).toHaveText('You win!')
 })
+
+test('the invite still works after the host tab reloads, and a reloaded guest lands back in the game', async ({
+  browser,
+}) => {
+  test.setTimeout(240_000)
+  const open = async () =>
+    (await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 760 } })).newPage()
+  const host = await open()
+  const guest = await open()
+  await host.goto('./#/online')
+  await host.getByRole('button', { name: 'Create a room' }).click()
+  const code = (await host.locator('.code span').allTextContents()).join('')
+  // iOS often reloads Safari behind the share sheet: the room must survive it.
+  await host.reload()
+  await expect(host.locator('.code')).toHaveText(code)
+  await guest.goto(`./#/online/${code}`)
+  await expect(host.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 60_000 })
+  await expect(guest.locator('.online-banner:not(.waiting)')).toBeVisible({ timeout: 30_000 })
+  await host.locator('.card[data-id="tic-tac-toe"]').click()
+  await guest.waitForURL(/play\/tic-tac-toe/)
+  await host.locator('.ready-btn').click()
+  await guest.reload()
+  await expect(guest.locator('.ready-btn')).toBeVisible({ timeout: 60_000 })
+  await expect(guest.locator('.ready .status')).toHaveText('Ready!')
+  await guest.locator('.ready-btn').click()
+  await expect(guest.locator('.overlay.ready')).toBeHidden({ timeout: 10_000 })
+})

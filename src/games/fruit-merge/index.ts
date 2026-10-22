@@ -9,6 +9,7 @@ import {
   halfFrame,
   inFrame,
   localView,
+  mirrorFx,
   toLocal,
   toWorld,
 } from '../../engines/runner/frame.ts'
@@ -85,6 +86,7 @@ class FruitMerge extends BaseGame<State> {
   override init(ctx: GameContext): void {
     this.solo = ctx.mode === '1p' && !ctx.bots[1]
     this.frames = [halfFrame(0, ctx.mode, this.solo), halfFrame(1, ctx.mode)]
+    mirrorFx(ctx, this.frames)
     super.init(ctx)
   }
 

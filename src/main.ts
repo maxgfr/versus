@@ -8,7 +8,7 @@ import { icon } from './shell/icons.ts'
 import { go, route, startRouter } from './shell/router.ts'
 import { Session } from './shell/session.ts'
 import { sheet } from './shell/settings.ts'
-import { ui } from './shell/state.ts'
+import { ROOM_KEY, ui } from './shell/state.ts'
 import { toast } from './shell/toast.ts'
 import './style.css'
 
@@ -81,7 +81,20 @@ route(/^\/tournament$/, async (root) => (await import('./shell/tournament.ts')).
 document.body.append(
   h('div.rotate', { 'aria-live': 'polite' }, icon('phone'), 'Turn your phone upright to play'),
 )
-startRouter(app)
+// A tab that was reloaded mid-session (iOS does this to Safari behind the
+// share sheet) goes straight back into its online room.
+let room: unknown = null
+try {
+  room = JSON.parse(sessionStorage.getItem(ROOM_KEY) ?? 'null')
+} catch {
+  // No storage: nothing to rejoin.
+}
+if (room && typeof room === 'object') {
+  ui.mode = 'online'
+  void import('./shell/online.ts')
+    .then((m) => m.rejoin(room as Parameters<typeof m.rejoin>[0]))
+    .finally(() => startRouter(app))
+} else startRouter(app)
 
 // ---------- iOS install guide (first Safari visit, not installed) ----------
 

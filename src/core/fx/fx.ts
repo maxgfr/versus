@@ -89,12 +89,20 @@ export class Fx {
   shakeY = 0
   reduced = false
   outbox: FxCmd[] | null = null
+  /**
+   * Where this screen shows a world point when it differs (a half drawn turned
+   * around, see runner/frame.ts `mirrorFx`). The outbox keeps the original.
+   */
+  remap: ((x: number, y: number) => [number, number] | null) | null = null
 
   burst(x: number, y: number, color: string, o: BurstOpts = {}): void {
     this.outbox?.push(['b', x, y, color, o])
+    // A mirrored point mirrors the whole spray: direction and gravity too.
+    const m = this.remap?.(x, y)
+    if (m) [x, y] = m
     const n = Math.round((o.count ?? 14) * (this.reduced ? 0.4 : 1))
     const spread = o.spread ?? Math.PI * 2
-    const dir = o.dir ?? 0
+    const dir = (o.dir ?? 0) + (m ? Math.PI : 0)
     const kind = o.kind === 'square' ? 1 : o.kind === 'spark' ? 2 : o.kind === 'emoji' ? 3 : 0
     for (let i = 0; i < n; i++) {
       if (this.ps.length >= MAX) break
@@ -108,7 +116,7 @@ export class Fx {
       p.max = p.life = (o.life ?? 0.6) * (0.6 + Math.random() * 0.6)
       p.size = (o.size ?? 10) * (0.6 + Math.random() * 0.7)
       p.color = o.colors ? (o.colors[(Math.random() * o.colors.length) | 0] as string) : color
-      p.g = o.gravity ?? 900
+      p.g = (o.gravity ?? 900) * (m ? -1 : 1)
       p.drag = o.drag ?? 1.5
       p.kind = kind
       p.rot = Math.random() * Math.PI * 2
@@ -147,18 +155,25 @@ export class Fx {
 
   ring(x: number, y: number, color: string, r1 = 120): void {
     this.outbox?.push(['r', x, y, color, r1])
+    const m = this.remap?.(x, y)
+    if (m) [x, y] = m
     this.rings.push({ x, y, r0: r1 * 0.2, r1, t: 0, dur: 0.4, color, lw: 10 })
   }
 
   /** Floating text that pops in and drifts up, upright for `side`'s player (or the viewer). */
   float(text: string, x: number, y: number, color: string = C.white, size = 56, side?: Side): void {
     this.outbox?.push(['t', text, x, y, color, size, side ?? -1])
+    const m = this.remap?.(x, y)
+    if (m) [x, y] = m
     this.floaters.push({ text, x, y, t: 0, dur: 0.9, color, size, side })
   }
 
   /** Confetti rain from the winner's edge (or both if undefined). */
   confetti(side?: Side): void {
     this.outbox?.push(['c', side ?? -1])
+    // Screen edges, never mirrored; and the guest replays the 'c', not each burst.
+    const [out, remap] = [this.outbox, this.remap]
+    this.outbox = this.remap = null
     const cols = [C.red, C.blue, C.yellow, C.green, C.pink, C.purple, C.cyan]
     const from = side === undefined ? [0, 1] : [side]
     for (const s of from) {
@@ -178,6 +193,8 @@ export class Fx {
         })
       }
     }
+    this.outbox = out
+    this.remap = remap
   }
 
   /** Replay a command recorded on the host. */
@@ -298,6 +315,7 @@ export class Fx {
   }
 
   clear(): void {
+    this.remap = null
     this.pool.push(...this.ps)
     this.ps = []
     this.floaters = []

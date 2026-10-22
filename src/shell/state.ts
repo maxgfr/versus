@@ -16,3 +16,6 @@ export const ui: {
   shownScore: null,
   scrollTop: 0,
 }
+
+/** sessionStorage key of the online room, so a reloaded tab rejoins it. */
+export const ROOM_KEY = 'versus.room'

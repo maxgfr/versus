@@ -888,6 +888,11 @@ input {
   padding-bottom: calc(20px + var(--safe-t));
 }
 
+/* Upright at the top of the screen (the rival's half online). */
+.overlay .half.flat {
+  padding-top: calc(20px + var(--safe-t));
+}
+
 .ready .half.red {
   background: linear-gradient(180deg, var(--red-deep), #2a0d18);
 }
