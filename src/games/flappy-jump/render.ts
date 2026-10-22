@@ -1,5 +1,5 @@
 import type { Side } from '../../core/game.ts'
-import { outCubic, prog } from '../../core/fx/ease.ts'
+import { outBack, prog } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { LANE_H, LANE_W } from '../../engines/runner/index.ts'
@@ -18,6 +18,10 @@ import {
 
 export interface LaneView {
   climber: Climber
+  /** Interpolated height, x and camera for this frame. */
+  h: number
+  x: number
+  cam: number
   rival: Climber
   seed: number
   time: number
@@ -195,7 +199,15 @@ function kangaroo(g: Draw, owner: Side, c: Climber, o: LaneView, cam: number): v
   const tan = '#e7a861'
   const tanDark = shade(tan, -0.22)
   const since = time - c.landAt
-  const squash = c.alive && since < 0.16 ? 0.22 * Math.sin((since / 0.16) * Math.PI) : 0
+  // Squash on each bounce, deeper on a centred one, with a little rebound wobble.
+  const lk = 0.14 + 0.14 * c.landK
+  const squash =
+    c.alive && since < 0.3
+      ? since < 0.12
+        ? Math.sin((since / 0.12) * Math.PI * 0.5) * lk
+        : Math.cos(((since - 0.12) / 0.18) * Math.PI) * lk * 0.45 * (1 - (since - 0.12) / 0.18)
+      : 0
+  const cx = o.x
   const stretch = c.alive && c.vh > 0 ? Math.min(0.14, c.vh / 10000) : 0
   const face = c.vx < -30 ? -1 : 1
   const tilt = c.alive
@@ -204,17 +216,17 @@ function kangaroo(g: Draw, owner: Side, c: Climber, o: LaneView, cam: number): v
   // The winner hops in place while the ending plays.
   const cheer = o.phase === 'end' && o.winner === owner && c.alive
   const hop = cheer ? Math.abs(Math.sin(o.since * 7)) * 40 : 0
-  const feet = yOf(c.h, cam) - hop
+  const feet = yOf(o.h, cam) - hop
   const falling = c.alive && c.vh < -200
   const legs = falling ? 1 : 0
   // Speed lines while it shoots upward.
   if (c.alive && c.vh > 700) {
     for (const dx of [-30, 0, 30]) {
-      g.line(c.x + dx, feet + 20, c.x + dx, feet + 60 + (c.vh - 700) * 0.08, alpha(C.white, 0.4), 5)
+      g.line(cx + dx, feet + 20, cx + dx, feet + 60 + (c.vh - 700) * 0.08, alpha(C.white, 0.4), 5)
     }
   }
   g.at(
-    c.x,
+    cx,
     feet - 56,
     tilt,
     () => {
@@ -278,8 +290,8 @@ function kangaroo(g: Draw, owner: Side, c: Climber, o: LaneView, cam: number): v
     1 - squash + stretch,
   )
   if (cheer) {
-    const s = outCubic(prog(o.since, 0, 0.35))
-    g.emoji('👑', c.x + face * 30, feet - 190 + Math.sin(o.since * 5) * 6, 60 * s, 0.1 * face)
+    const s = outBack(prog(o.since, 0, 0.35))
+    g.emoji('👑', cx + face * 30, feet - 190 + Math.sin(o.since * 5) * 6, 60 * s, 0.1 * face)
   }
 }
 
@@ -313,7 +325,7 @@ function rivalTab(g: Draw, owner: Side, rival: Climber, cam: number, time: numbe
 
 export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const c = o.climber
-  const cam = c.cam
+  const cam = o.cam
   backdrop(g, side, v, cam, o.time)
   marks(g, cam, v)
   for (const p of platformsBetween(o.seed, cam - 160, cam + 1000)) platform(g, p, o.time, c, cam)
@@ -335,12 +347,14 @@ export function drawLane(g: Draw, side: Side, v: View, o: LaneView): void {
   const cx = LANE_W / 2
   const cy = LANE_H * 0.52
   if (o.phase === 'wait') {
-    laneCard(g, o.bot ? 'Ready…' : 'Hold to steer', cx, cy, {
+    // Online, each phone only coaches its own player: the rival's lane just says Ready.
+    const coach = !o.bot && (g.viewer === null || g.viewer === side)
+    laneCard(g, coach ? 'Hold to steer' : 'Ready…', cx, cy, {
       t: o.since,
-      sub: o.bot ? '' : 'Left or right of your half',
+      sub: coach ? 'Left or right of your half' : '',
       accent: SIDE[side].main,
     })
-    if (!o.bot) {
+    if (coach) {
       const k = Math.sin(o.time * 4)
       g.emoji('👈', 330 - Math.max(0, -k) * 30, cy + 170, 70)
       g.emoji('👉', 670 + Math.max(0, k) * 30, cy + 170, 70)

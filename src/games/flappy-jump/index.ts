@@ -1,9 +1,10 @@
-import { type MatchSpec, other, type Side } from '../../core/game.ts'
+import { type GameContext, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { lerp } from '../../core/fx/ease.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha } from '../../core/render/palette.ts'
 import { clock } from '../../core/hud.ts'
 import { MID } from '../../core/stage.ts'
-import { RunnerGame, toLocal, toWorld } from '../../engines/runner/index.ts'
+import { mirrorFx, RunnerGame, toLocal, toWorld } from '../../engines/runner/index.ts'
 import { steer } from './bot.ts'
 import { drawLane, type LaneView } from './render.ts'
 import {
@@ -16,6 +17,8 @@ import {
   newClimber,
   ROUND_T,
   stepClimber,
+  wrapDelta,
+  wrapX,
 } from './rules.ts'
 
 export interface State {
@@ -42,6 +45,42 @@ const FINAL = 2.4
 export const match: MatchSpec = { unit: 'seconds', default: ROUND_T, min: 15, max: 180, step: 15 }
 
 class FlappyJump extends RunnerGame<State> {
+  /** Cosmetic: each climber's height, x and camera at the previous step, for interpolation. */
+  private prev: [{ h: number; x: number; cam: number }, { h: number; x: number; cam: number }] = [
+    { h: 0, x: 500, cam: 0 },
+    { h: 0, x: 500, cam: 0 },
+  ]
+  private stepped = false
+  private alpha = 1
+
+  override init(ctx: GameContext): void {
+    super.init(ctx)
+    // Effects land where each lane is drawn, also when a half is shown turned (online).
+    mirrorFx(ctx, this.frames)
+  }
+
+  protected override step(dt: number): void {
+    for (const side of [0, 1] as Side[]) {
+      const c = this.s.climbers[side]
+      const p = this.prev[side]
+      p.h = c.h
+      p.x = c.x
+      p.cam = c.cam
+    }
+    this.stepped = true
+    super.step(dt)
+  }
+
+  override render(g: Draw, alpha = 1): void {
+    // Hit-stop freezes the world: no blending between two steps that are not moving.
+    this.alpha = this.stepped && this.ctx.fx.hitstop === 0 ? alpha : 1
+    super.render(g)
+  }
+
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.stepped = false
+  }
   private get limit(): number {
     return this.ctx.target || match.default
   }
@@ -133,10 +172,24 @@ class FlappyJump extends RunnerGame<State> {
     const col = SIDE[side]
     for (const e of events) {
       if (e === 'bounce') {
-        this.ctx.audio.play('boing', 0.9 + Math.min(0.5, c.h / 4000))
-        fx.puff(feet.x, feet.y, alpha(C.white, 0.6), 5)
+        // A dead-centre landing springs higher: a brighter boing, and a cheer for a perfect one.
+        const k = c.landK
+        this.ctx.audio.play('boing', 0.85 + k * 0.25 + Math.min(0.3, c.h / 8000))
+        fx.puff(feet.x, feet.y, alpha(C.white, 0.6), Math.round(3 + k * 4))
+        if (k > 0.95) {
+          fx.sparks(feet.x, feet.y, C.yellow, 10)
+          fx.ring(feet.x, feet.y, C.yellow, 110)
+          const t = toWorld(
+            this.frames[side],
+            c.x > 500 ? c.x - 200 : c.x + 200,
+            BASE_Y - (c.h - c.cam) + 110,
+          )
+          fx.float('Perfect!', t.x, t.y, C.yellow, 48, side)
+          this.ctx.audio.buzz(8)
+        }
       } else if (e === 'crumble') {
         this.ctx.audio.play('slap', 0.8)
+        this.ctx.audio.play('roll', 0.7)
         fx.burst(feet.x, feet.y, C.wood, {
           count: 14,
           speed: 360,
@@ -186,8 +239,16 @@ class FlappyJump extends RunnerGame<State> {
     view: { x0: number; y0: number; x1: number; y1: number },
   ): void {
     const s = this.s
+    const c = s.climbers[side]
+    const p = this.prev[side]
+    // Blend toward the latest step; across the lane's wrap, x jumps instead.
+    const a = this.alpha
+    const dx = wrapDelta(c.x, p.x)
     const o: LaneView = {
-      climber: s.climbers[side],
+      climber: c,
+      h: lerp(p.h, c.h, a),
+      x: Math.abs(dx) > 200 ? c.x : wrapX(p.x + dx * a),
+      cam: lerp(p.cam, c.cam, a),
       rival: s.climbers[other(side)],
       seed: this.s.seed,
       time: this.time,

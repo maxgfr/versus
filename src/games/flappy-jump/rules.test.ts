@@ -74,6 +74,20 @@ describe('flappy jump course', () => {
     }
   })
 
+  it('ramps up with altitude: more moving and crumbling platforms higher up', () => {
+    const tricky = (i0: number, i1: number): number => {
+      let n = 0
+      for (let s = 1; s <= 40; s++)
+        for (let i = i0; i < i1; i++) if (platformAt(s, i).kind !== 'solid') n++
+      return n
+    }
+    expect(tricky(70, 90)).toBeGreaterThan(tricky(3, 23) * 1.4)
+    // Higher moving platforms sway faster.
+    const low = platformAt(seedWith(5, 'move'), 5)
+    const high = platformAt(seedWith(85, 'move'), 85)
+    expect(high.spd).toBeGreaterThan(low.spd)
+  })
+
   it('moving platforms sway around their centre; others stay put', () => {
     const s = seedWith(6, 'move')
     const p = platformAt(s, 6)
@@ -124,6 +138,10 @@ describe('flappy jump climber', () => {
       return c.vh
     }
     expect(apex(0)).toBeGreaterThan(apex(PLAT_W / 2 + CW - 5))
+    // The centring is stamped for the squash and the cheer.
+    const c = dropOnto(s, 1)
+    for (let t = DT; t < 3 && c.landK === 0; t += DT) stepClimber(s, c, DT, t, 0)
+    expect(c.landK).toBeGreaterThan(0.95)
     expect(apex(0)).toBeLessThanOrEqual(BOUNCE * (1 + CENTRE_BONUS) + 1e-6)
   })
 
@@ -224,6 +242,7 @@ describe('flappy jump judging', () => {
 function playMatch(
   seed: number,
   d: Difficulty,
+  d1: Difficulty = d,
 ): { winner: Side | 'draw' | null; steps: number; outs: number } {
   const cs: [Climber, Climber] = [newClimber(), newClimber()]
   let t = 0
@@ -232,7 +251,7 @@ function playMatch(
     t += DT
     for (const side of [0, 1] as Side[]) {
       const c = cs[side]
-      const dir = steer(seed, c, t, d, side * 0x9e3779b1)
+      const dir = steer(seed, c, t, side === 0 ? d : d1, side * 0x9e3779b1)
       for (const e of stepClimber(seed, c, DT, t, dir)) if (e === 'out') outs++
     }
     const w = judge(cs[0], cs[1], t)
@@ -253,6 +272,12 @@ describe('flappy jump bot', () => {
       }
       expect(wins.size).toBeGreaterThan(0)
     }
+  })
+
+  it('hard beats easy most matches', () => {
+    let hard = 0
+    for (let k = 1; k <= 8; k++) if (playMatch(k * 131, 'easy', 'hard').winner === 1) hard++
+    expect(hard).toBeGreaterThanOrEqual(6)
   })
 
   it('an easy bot falls out sometimes, so it is beatable', () => {

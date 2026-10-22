@@ -12,7 +12,7 @@ import {
 } from './rules.ts'
 
 /** How far off the bot's aim point may be (world units), per platform. */
-const ERROR: Record<Difficulty, number> = { easy: 80, normal: 26, hard: 6 }
+const ERROR: Record<Difficulty, number> = { easy: 80, normal: 20, hard: 6 }
 /** Share of quarter-second slots in which the bot forgets to steer. */
 const LAPSE: Record<Difficulty, number> = { easy: 0.12, normal: 0, hard: 0 }
 /** Steering reaches full speed this far (units) off target. */

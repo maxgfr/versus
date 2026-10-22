@@ -39,9 +39,14 @@ export interface Plat {
   /** Centre x (at time 0 for moving platforms; see platX). */
   x: number
   amp: number
+  /** Sway speed of a moving platform (rad/s). */
+  spd: number
   phase: number
   kind: PlatKind
 }
+
+/** Platforms up to this index ramp up: more moving and crumbling ones, wider and faster sways. */
+export const RAMP = 80
 
 export interface Climber {
   /** Feet height above the start platform. */
@@ -60,6 +65,8 @@ export interface Climber {
   crumble: [number, number][]
   alive: boolean
   landAt: number
+  /** How centred the last bounce was, 0 (edge) to 1 (dead centre): the squash and the cheer scale with it. */
+  landK: number
   deadAt: number
   /** When the last new platform was reached (the counter bumps). */
   scoreAt: number
@@ -79,6 +86,7 @@ export function newClimber(x = 500): Climber {
     crumble: [],
     alive: true,
     landAt: -10,
+    landK: 0,
     deadAt: -1,
     scoreAt: -10,
   }
@@ -106,17 +114,22 @@ function courseX(seed: number, i: number): number {
 }
 
 export function platformAt(seed: number, i: number): Plat {
-  if (i === 0) return { i, h: 0, x: 500, amp: 0, phase: 0, kind: 'solid' }
+  if (i === 0) return { i, h: 0, x: 500, amp: 0, spd: 0, phase: 0, kind: 'solid' }
   const h = i * PLAT_GAP + (hash01(seed, i, 3) * 2 - 1) * 40
   const roll = hash01(seed, i, 2)
+  // The higher the climb, the trickier the platforms: it gets tense as the clock runs.
+  const p = Math.min(1, i / RAMP)
+  const move = 0.15 + 0.2 * p
+  const brk = move + 0.15 + 0.1 * p
   // The first few are always solid, so the climb starts fair.
-  const kind: PlatKind = i < 3 ? 'solid' : roll < 0.15 ? 'move' : roll < 0.3 ? 'break' : 'solid'
-  const amp = kind === 'move' ? 60 + hash01(seed, i, 5) * 90 : 0
+  const kind: PlatKind = i < 3 ? 'solid' : roll < move ? 'move' : roll < brk ? 'break' : 'solid'
+  const amp = kind === 'move' ? 60 + hash01(seed, i, 5) * 90 + 50 * p : 0
   return {
     i,
     h,
     x: courseX(seed, i),
     amp,
+    spd: kind === 'move' ? 0.9 + 0.6 * p : 0,
     phase: hash01(seed, i, 8) * Math.PI * 2,
     kind,
   }
@@ -124,7 +137,7 @@ export function platformAt(seed: number, i: number): Plat {
 
 /** Centre x of a platform at time `t`. */
 export function platX(p: Plat, t: number): number {
-  return p.kind === 'move' ? p.x + p.amp * Math.sin(t * 0.9 + p.phase) : p.x
+  return p.kind === 'move' ? p.x + p.amp * Math.sin(t * p.spd + p.phase) : p.x
 }
 
 /** Platforms whose top lies within [h0, h1]. */
@@ -184,6 +197,7 @@ export function stepClimber(
       c.h = p.h
       c.vh = BOUNCE * (1 + CENTRE_BONUS * (1 - off))
       c.landAt = now
+      c.landK = 1 - off
       ev.push('bounce')
       if (p.kind === 'break') {
         c.crumble.push([p.i, now])
