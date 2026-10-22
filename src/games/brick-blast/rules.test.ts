@@ -188,15 +188,23 @@ describe('brick blast bots', () => {
     expect(winner(m)).not.toBeNull()
   })
 
-  it('the harder bot usually wins', () => {
-    let hard = 0
-    let easy = 0
-    for (let s = 1; s <= 20; s++) {
-      const w = winner(botMatch('hard', 'easy', s).m)
-      if (w === 0) hard++
-      else if (w === 1) easy++
+  it('the harder bot usually wins: hard over normal and easy, normal over easy', () => {
+    const tally = (a: Difficulty, b: Difficulty): [number, number] => {
+      let x = 0
+      let y = 0
+      for (let s = 1; s <= 12; s++) {
+        const w = winner(botMatch(a, b, s).m)
+        if (w === 0) x++
+        else if (w === 1) y++
+      }
+      return [x, y]
     }
-    expect(hard).toBeGreaterThan(easy)
+    const [he, eh] = tally('hard', 'easy')
+    const [hn, nh] = tally('hard', 'normal')
+    const [ne, en] = tally('normal', 'easy')
+    expect(he).toBeGreaterThan(eh)
+    expect(hn).toBeGreaterThan(nh)
+    expect(ne).toBeGreaterThan(en)
   })
 
   it('the bot can play blue as well as red', () => {
