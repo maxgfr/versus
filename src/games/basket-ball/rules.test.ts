@@ -24,6 +24,7 @@ import {
   boardY,
   swipeOK,
   arcFor,
+  CRUNCH,
   FLICK_FAST,
   FLICK_SLOW,
   MAX_RIMS,
@@ -367,5 +368,31 @@ describe('basket ball rules', () => {
     const easy = decide(w, 0, 'easy', new Rng(1), newMemory(), STEP)
     const hard = decide(w, 0, 'hard', new Rng(1), newMemory(), STEP)
     expect(arcFor(hard?.flick)).toBeLessThan(arcFor(easy?.flick))
+  })
+
+  it('crunch time: in the last seconds a ball comes back quicker', () => {
+    const wait = (left: number) => {
+      const rng = new Rng(40)
+      const w = newWorld(45, rng)
+      w.left = left
+      w.balls[1].state = 'wait'
+      w.balls[1].wait = 99
+      // A shot straight into the floor: it lands, rolls and is over.
+      expect(shoot(w, 0, 0, -1, MIN_SWIPE)).toBe(true)
+      for (let i = 0; i < 60 * 4 && w.balls[0].state === 'fly'; i++) step(w, STEP, rng)
+      return w.balls[0].wait
+    }
+    expect(wait(CRUNCH - 2)).toBeLessThan(wait(40))
+  })
+
+  it('hard beats normal, and normal beats easy, most of the time', () => {
+    let hard = 0
+    let normal = 0
+    for (let s = 1; s <= 6; s++) {
+      if (winner(botMatch('hard', 'normal', s).w) === 0) hard++
+      if (winner(botMatch('normal', 'easy', s).w) === 0) normal++
+    }
+    expect(hard).toBeGreaterThanOrEqual(4)
+    expect(normal).toBeGreaterThanOrEqual(5)
   })
 })

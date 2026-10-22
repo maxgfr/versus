@@ -25,8 +25,8 @@ interface Tuning {
 
 export const TUNING: Record<Difficulty, Tuning> = {
   easy: { angle: 0.3, length: 0.3, cadence: 2.1, snap: 0.1 },
-  normal: { angle: 0.17, length: 0.15, cadence: 1.4, snap: 0.5 },
-  hard: { angle: 0.1, length: 0.09, cadence: 0.9, snap: 0.9 },
+  normal: { angle: 0.13, length: 0.11, cadence: 1.2, snap: 0.6 },
+  hard: { angle: 0.065, length: 0.055, cadence: 0.75, snap: 1 },
 }
 
 /** Per-bot memory between steps (not synced). */

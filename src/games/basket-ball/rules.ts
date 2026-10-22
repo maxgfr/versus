@@ -46,6 +46,9 @@ export const MIN_SWIPE = 70
 export const MAX_SWIPE = 620
 const SUBSTEPS = 4
 const RESPAWN = 0.6
+/** Crunch time: in the last CRUNCH seconds (and in sudden death) balls come back faster. */
+export const CRUNCH = 10
+const RESPAWN_CRUNCH = 0.3
 /** Sudden-death length after a tied clock (s). */
 export const OVERTIME = 12
 /** How long a ball rolls on the court before the shot is over (s). */
@@ -384,7 +387,7 @@ function finish(w: World, side: Side, ev: Event[]): void {
   const b = w.balls[side]
   ev.push({ kind: 'out', side, x: b.x, y: b.y })
   b.state = 'wait'
-  b.wait = w.ended ? 9 : RESPAWN
+  b.wait = w.ended ? 9 : w.overtime || w.left <= CRUNCH ? RESPAWN_CRUNCH : RESPAWN
   b.z = 0
   b.vx = b.vy = b.vz = 0
 }
