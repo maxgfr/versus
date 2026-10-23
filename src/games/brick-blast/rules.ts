@@ -1,4 +1,4 @@
-import type { Side } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import { H, MID, W } from '../../core/stage.ts'
 
@@ -35,13 +35,24 @@ export const BALL_R = 22
 export const LIVES = 3
 /** Seconds between junk bricks dropping into a wall. */
 export const JUNK_EVERY = 0.9
-const SPEED0 = 820
-const SPEED_MAX = 1500
+export const SPEED0 = 820
+export const SPEED_MAX = 1500
 const SPEED_UP = 1.015
 /** Seconds without a launch before the ball goes on its own. */
 const AUTO_LAUNCH = 1.6
 /** Fixed sub-steps per step: keeps the ball from tunnelling through bricks. */
 const SUB = 3
+
+/**
+ * Against the computer its level also sets the pace: the ball's serve speed and
+ * top rally speed are scaled. Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.28 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
+}
 
 export interface Brick {
   c: number
@@ -78,6 +89,8 @@ export interface Board {
   broken: number
   /** Seconds the ball has been stuck to the paddle. */
   serveT: number
+  /** Ball pace multiplier (1 = normal), fixed for the match. */
+  tempo: number
 }
 
 export interface Match {
@@ -117,34 +130,35 @@ export function startBricks(now = 0): Brick[] {
   return out
 }
 
-export function serveBall(px: number): Ball {
+export function serveBall(px: number, tempo = 1): Ball {
   return {
     x: px,
     y: PADDLE_Y - PADDLE_H / 2 - BALL_R,
     vx: 0,
     vy: 0,
-    speed: SPEED0,
+    speed: SPEED0 * tempo,
     stuck: true,
     boost: 1,
   }
 }
 
-export function newBoard(): Board {
+export function newBoard(tempo = 1): Board {
   return {
     px: W / 2,
     pvx: 0,
-    ball: serveBall(W / 2),
+    ball: serveBall(W / 2, tempo),
     bricks: startBricks(),
     queue: 0,
     junkT: 0,
     lives: LIVES,
     broken: 0,
     serveT: 0,
+    tempo,
   }
 }
 
-export function newMatch(limit: number): Match {
-  return { boards: [newBoard(), newBoard()], limit, t: 0 }
+export function newMatch(limit: number, tempo = 1): Match {
+  return { boards: [newBoard(tempo), newBoard(tempo)], limit, t: 0 }
 }
 
 /** Bricks still standing in a wall, counting junk on its way. */
@@ -322,7 +336,7 @@ export function stepBoard(
     if (hit) {
       const { brick, cx, cy } = hit
       b.broken++
-      ball.speed = Math.min(SPEED_MAX, ball.speed * SPEED_UP)
+      ball.speed = Math.min(SPEED_MAX * b.tempo, ball.speed * SPEED_UP)
       const s = Math.hypot(ball.vx, ball.vy) || 1
       ball.vx = (ball.vx / s) * ball.speed * ball.boost
       ball.vy = (ball.vy / s) * ball.speed * ball.boost
@@ -346,7 +360,7 @@ export function stepBoard(
     if (ball.y > H + BALL_R) {
       b.lives = Math.max(0, b.lives - 1)
       out.push({ kind: 'lost', side, x: ball.x, y: H - BALL_R, lives: b.lives })
-      b.ball = serveBall(b.px)
+      b.ball = serveBall(b.px, b.tempo)
       b.serveT = 0
       return sent
     }

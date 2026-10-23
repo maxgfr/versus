@@ -18,6 +18,7 @@ import {
   PADDLE_Y,
   remaining,
   step,
+  tempoOf,
   winner,
 } from './rules.ts'
 
@@ -48,7 +49,7 @@ class BrickBlast extends BaseGame<State> {
   }
 
   protected setup(): State {
-    return { m: newMatch(this.limit), end: null }
+    return { m: newMatch(this.limit, tempoOf(this.ctx.difficulty, this.ctx.bots)), end: null }
   }
 
   protected step(dt: number): void {
@@ -233,8 +234,9 @@ class BrickBlast extends BaseGame<State> {
       if (b.ball.stuck) trail.length = 0
       else {
         trail.push({ x: sm.x, y: sm.y })
-        // A driven ball leaves a longer streak.
-        while (trail.length > (b.ball.boost > 1.1 ? 9 : 6)) trail.shift()
+        // A driven ball, and a faster match, leave a longer streak.
+        const tail = (b.ball.boost > 1.1 ? 9 : 6) + (b.tempo > 1 ? 2 : 0)
+        while (trail.length > tail) trail.shift()
       }
       this.squash[side].update(1 / 60)
       this.ballSq[side].update(1 / 60)

@@ -19,9 +19,13 @@ import {
   predictX,
   remaining,
   serveBall,
+  SPEED0,
+  SPEED_MAX,
   START_ROWS,
   step,
   stepBoard,
+  TEMPO,
+  tempoOf,
   winner,
 } from './rules.ts'
 import type { Difficulty } from '../../core/game.ts'
@@ -34,9 +38,10 @@ function botMatch(
   b: Difficulty,
   seed: number,
   limit = 90,
+  tempo = 1,
 ): { m: Match; steps: number } {
   const rng = new Rng(seed)
-  const m = newMatch(limit)
+  const m = newMatch(limit, tempo)
   const mem = [newMemory(), newMemory()]
   let steps = 0
   while (winner(m) === null && steps < 60 * 200) {
@@ -308,5 +313,60 @@ describe('brick blast bots', () => {
     expect(mem.aim).toBeGreaterThan(500 + 20)
     expect(cmd.x).not.toBeNull()
     expect(TUNING.hard.steer).toBeGreaterThan(TUNING.easy.steer)
+  })
+})
+
+describe('brick blast tempo', () => {
+  /** Serve speed, and the speed a near-top ball is capped at on its next brick. */
+  function pace(tempo?: number): { serve: number; top: number } {
+    const b = newBoard(tempo)
+    stepBoard(b, 0, STEP, { x: null, launch: true }, new Rng(1), [])
+    const serve = Math.hypot(b.ball.vx, b.ball.vy)
+    const fast = newBoard(tempo)
+    fast.ball.speed = SPEED_MAX * 0.995 * (tempo ?? 1)
+    stepBoard(fast, 0, STEP, { x: null, launch: true }, new Rng(1), [])
+    for (let i = 0; i < 120; i++) {
+      const out: { kind: string }[] = []
+      stepBoard(fast, 0, STEP, idle, new Rng(1), out as never[])
+      if (out.some((e) => e.kind === 'brick')) break
+    }
+    return { serve, top: fast.ball.speed }
+  }
+
+  it('normal keeps the ball speeds exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(newBoard().tempo).toBe(1)
+    expect(serveBall(500).speed).toBe(SPEED0)
+    const p = pace()
+    expect(p.serve).toBeCloseTo(SPEED0, 6)
+    expect(p.top).toBe(SPEED_MAX)
+    expect(pace(TEMPO.normal)).toEqual(p)
+  })
+
+  it('hard serves and tops out clearly faster, easy calmer', () => {
+    const hard = pace(TEMPO.hard)
+    const easy = pace(TEMPO.easy)
+    expect(hard.serve).toBeGreaterThan(SPEED0 * 1.2)
+    expect(hard.top).toBeGreaterThan(SPEED_MAX * 1.2)
+    expect(easy.serve).toBeLessThan(SPEED0 * 0.9)
+    expect(easy.top).toBeLessThan(SPEED_MAX * 0.9)
+  })
+
+  it('only a match with a computer changes pace', () => {
+    expect(tempoOf('hard', [false, true])).toBe(TEMPO.hard)
+    expect(tempoOf('easy', [true, true])).toBe(TEMPO.easy)
+    expect(tempoOf('hard', [false, false])).toBe(1)
+  })
+
+  it('at the hard tempo bots still finish, and hard still beats easy', () => {
+    expect(winner(botMatch('hard', 'hard', 3, 90, TEMPO.hard).m)).not.toBeNull()
+    let hard = 0
+    let easy = 0
+    for (let s = 1; s <= 8; s++) {
+      const w = winner(botMatch('hard', 'easy', s, 90, TEMPO.hard).m)
+      if (w === 0) hard++
+      else if (w === 1) easy++
+    }
+    expect(hard).toBeGreaterThan(easy)
   })
 })
