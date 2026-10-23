@@ -11,6 +11,8 @@ import {
   SPIKE_FULL,
   newWorld,
   step,
+  TEMPO,
+  tempoOf,
   winner,
   type Event,
   type World,
@@ -255,9 +257,16 @@ describe('beach ball rules', () => {
 })
 
 /** Computer vs computer rally until the target. */
-function botMatch(a: Difficulty, b: Difficulty, seed: number, target: number, teams: boolean) {
+function botMatch(
+  a: Difficulty,
+  b: Difficulty,
+  seed: number,
+  target: number,
+  teams: boolean,
+  tempo = 1,
+) {
   const rng = new Rng(seed)
-  const w = newWorld(teams, rng.chance(0.5) ? 0 : 1, rng)
+  const w = newWorld(teams, rng.chance(0.5) ? 0 : 1, rng, tempo)
   const mem: [ReturnType<typeof newMemory>, ReturnType<typeof newMemory>] = [
     newMemory(),
     newMemory(),
@@ -273,3 +282,43 @@ function botMatch(a: Difficulty, b: Difficulty, seed: number, target: number, te
   }
   return { w, steps: steps as number, side: 0 as Side }
 }
+
+describe('tempo', () => {
+  /** Steps from a serve toss until the untouched ball lands, and where. */
+  function serveDrop(tempo?: number): { steps: number; x: number; y: number } {
+    const rng = new Rng(5)
+    const w = newWorld(false, 0, rng, tempo)
+    const still = w.blobs.map(() => null)
+    for (let i = 1; i < 600; i++) {
+      const e = step(w, STEP, still, speeds(w), rng).find((x) => x.kind === 'land')
+      if (e) return { steps: i, x: e.x, y: e.y }
+    }
+    throw new Error('no landing')
+  }
+
+  it('normal keeps the ball flight exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(newWorld(false, 0, new Rng(1)).tempo).toBe(1)
+    expect(serveDrop(TEMPO.normal)).toEqual(serveDrop())
+  })
+
+  it('hard brings the ball down sooner, easy later', () => {
+    const normal = serveDrop()
+    expect(serveDrop(TEMPO.hard).steps).toBeLessThan(normal.steps / 1.18)
+    expect(serveDrop(TEMPO.easy).steps).toBeGreaterThan(normal.steps * 1.1)
+  })
+
+  it('only a match with a computer changes pace', () => {
+    expect(tempoOf('hard', [false, true])).toBe(TEMPO.hard)
+    expect(tempoOf('easy', [true, true])).toBe(TEMPO.easy)
+    expect(tempoOf('hard', [false, false])).toBe(1)
+  })
+
+  it('bots still finish, and hard still beats easy, at the hard tempo', () => {
+    expect(winner(botMatch('hard', 'hard', 31, 7, false, TEMPO.hard).w, 7)).not.toBeNull()
+    let hard = 0
+    for (let s = 1; s <= 6; s++)
+      if (botMatch('hard', 'easy', s, 5, false, TEMPO.hard).w.score[0] >= 5) hard++
+    expect(hard).toBeGreaterThanOrEqual(5)
+  })
+})

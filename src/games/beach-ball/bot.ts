@@ -107,8 +107,9 @@ export function intercept(
   const box = halfBox(side, COURT, BLOB_R, lane)
   let last: { x: number; y: number; t: number } | null = null
   const h = 1 / 60
+  // `t` is real time: the ball's own clock runs at the match tempo.
   for (let t = h; t < 3; t += h) {
-    fly(b, h)
+    fly(b, h * w.tempo)
     if (b.z <= 0) break
     if (b.z > REACH * 0.6 || b.vz > 0 || !mine(side, b.y)) continue
     if (b.x < box.x0 - 40 || b.x > box.x1 + 40 || b.y < box.y0 - 40 || b.y > box.y1 + 40) continue
@@ -164,7 +165,8 @@ export function decide(
     const home = homeOf(side, bl.lane)
     if (w.phase === 'point') return home
     if (bl === striker && ours) {
-      const spot = intercept(w, side, bl, tune.speed, bl.lane) ?? land
+      const spot =
+        intercept(w, side, bl, tune.speed, bl.lane) ?? (land && { ...land, t: land.t / w.tempo })
       if (spot) {
         const e = tune.error
         const box = halfBox(side, COURT, BLOB_R, bl.lane)

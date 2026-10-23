@@ -14,6 +14,7 @@ import {
   MAX_TOUCH,
   newWorld,
   step,
+  tempoOf,
   winner,
   type World,
 } from './rules.ts'
@@ -49,7 +50,8 @@ class BeachBall extends BaseGame<State> {
 
   protected setup(): State {
     const server: Side = this.ctx.rng.chance(0.5) ? 0 : 1
-    const w = newWorld(this.ctx.teams, server, this.ctx.rng)
+    const tempo = tempoOf(this.ctx.difficulty, this.ctx.bots)
+    const w = newWorld(this.ctx.teams, server, this.ctx.rng, tempo)
     this.squash = w.blobs.map(() => new Spring(1, 360, 12))
     this.bumpAt = w.blobs.map(() => -10)
     return { w, end: null }
@@ -178,7 +180,8 @@ class BeachBall extends BaseGame<State> {
     for (const p of this.pulse) p.update(1 / 60)
     this.ballSquash.update(1 / 60)
     this.net.update(1 / 60)
-    const sp = Math.hypot(w.ball.vx, w.ball.vy)
+    // On-screen pace: the ball's clock runs at the match tempo.
+    const sp = Math.hypot(w.ball.vx, w.ball.vy) * w.tempo
     if (w.phase === 'rally') this.spin += (sp / 60 / 90) * (w.ball.vx >= 0 ? 1 : -1)
     const ip = (a: Disc, b: Disc | undefined): Disc =>
       b ? { ...a, x: lerp(b.x, a.x, alpha), y: lerp(b.y, a.y, alpha) } : a
@@ -194,7 +197,8 @@ class BeachBall extends BaseGame<State> {
     // A trail only behind a ball flying fast (a spike).
     if (w.phase === 'rally' && sp > 900) this.trail.push({ x: ball.x, y: ball.y, z: ball.z })
     else this.trail.shift()
-    while (this.trail.length > 6) this.trail.shift()
+    // A faster match drags a longer trail.
+    while (this.trail.length > (w.tempo > 1 ? 9 : 6)) this.trail.shift()
     const look: Look = {
       w,
       ball,

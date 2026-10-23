@@ -1,4 +1,4 @@
-import type { Side } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import { driveTo, halfBox, type Disc, disc, rink } from '../../engines/puck/index.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -45,6 +45,18 @@ export const RALLY_MAX = 30
 /** Blob top speed for humans (units/s); bots are slower or quicker by difficulty. */
 export const HUMAN_SPEED = 3800
 
+/**
+ * Against the computer its level also sets the pace: the ball's flight runs on
+ * a faster (or slower) clock, so every bump keeps its arc but comes down
+ * sooner. Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
+}
+
 export interface Blob extends Disc {
   side: Side
   /** 2 vs 2: which lane of the half the blob may cover. Undefined in 1 vs 1. */
@@ -83,6 +95,8 @@ export interface World {
   dropping: boolean
   /** Bumps so far in this rally (pace escalates with it). */
   hits: number
+  /** Ball clock multiplier (1 = normal), fixed for the match. */
+  tempo: number
 }
 
 export type Event =
@@ -111,7 +125,7 @@ export function homeOf(side: Side, lane?: 0 | 1): { x: number; y: number } {
   return { x, y: side === 0 ? 1330 : 470 }
 }
 
-export function newWorld(teams: boolean, server: Side, rng: Rng): World {
+export function newWorld(teams: boolean, server: Side, rng: Rng, tempo = 1): World {
   const blobs: Blob[] = []
   for (const side of [0, 1] as Side[]) {
     const lanes: (0 | 1 | undefined)[] = teams ? [0, 1] : [undefined]
@@ -135,6 +149,7 @@ export function newWorld(teams: boolean, server: Side, rng: Rng): World {
     rally: 0,
     dropping: false,
     hits: 0,
+    tempo,
   }
   serve(w, server, rng)
   return w
@@ -274,7 +289,8 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
     b.vy *= 0.3
     if (b.vz > 0) b.vz = 0
   }
-  const wall = fly(b, h)
+  // The ball's own clock runs at the match tempo; speeds below are as seen on screen.
+  const wall = fly(b, h * w.tempo) * w.tempo
   if (wall > 300) ev.push({ kind: 'wall', x: b.x, y: b.y, speed: wall })
   // Net: crossing the middle lower than the net costs the last toucher the point.
   if (prevY < MID !== b.y < MID && b.z < NET_H) {
@@ -313,7 +329,7 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
     const low = 1 - Math.min(LOWER_MAX, w.hits * LOWER)
     b.vz = BUMP_VZ * low * (1 - power * SPIKE_FLAT) * (0.97 + 0.06 * rng.next())
     bl.cool = COOL
-    const speed = Math.hypot(b.vx, b.vy)
+    const speed = Math.hypot(b.vx, b.vy) * w.tempo
     ev.push({ kind: 'bump', side: bl.side, x: b.x, y: b.y, speed, count: w.count, power })
     if (w.count > MAX_TOUCH) {
       point(w, other(bl.side), 'touches', ev)
@@ -325,7 +341,7 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
   if (b.z <= 0 && b.vz <= 0) {
     b.z = 0
     const owner: Side = b.y < MID ? 1 : 0
-    ev.push({ kind: 'land', side: owner, x: b.x, y: b.y, speed: -b.vz })
+    ev.push({ kind: 'land', side: owner, x: b.x, y: b.y, speed: -b.vz * w.tempo })
     point(w, other(owner), 'land', ev)
   }
 }
