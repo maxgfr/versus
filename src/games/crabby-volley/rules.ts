@@ -37,8 +37,12 @@ export const POINT_PAUSE = 1.3
 export const RALLY_MAX = 30
 /** A plain bump comes down this far in front of the rival's band (toward the net). */
 export const DEEP = 60
-/** A spike (struck at the top of a hop) comes down this much shorter, and this much flatter. */
-export const SPIKE_SHORT = 240
+/**
+ * A spike (struck at the top of a hop) comes down this much shorter, and this much
+ * flatter. Crabs never leave their band, so it must still land inside the claws'
+ * reach (`CLAW_Y`) or it could never be returned.
+ */
+export const SPIKE_SHORT = 90
 const SPIKE_FLAT = 0.42
 /** Each bump of a rally takes this share off the flight time, up to `QUICK_MAX`. */
 const QUICK = 0.018

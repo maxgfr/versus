@@ -9,6 +9,7 @@ import { type Look, render } from './render.ts'
 import {
   type Ball,
   type Crab,
+  CRAB_R,
   type Event,
   landingOf,
   MAX_TOUCH,
@@ -29,6 +30,8 @@ interface State {
 export const match: MatchSpec = { unit: 'points', default: 7, min: 3, max: 21 }
 
 const SAND = 'rgba(241,211,148,0.85)'
+/** A press this close to the crab (sideways) is a tap on it: it hops. */
+const HOP_TAP = CRAB_R * 2
 
 class CrabbyVolley extends BaseGame<State> {
   private mem: [BotMemory, BotMemory] = [newMemory(), newMemory()]
@@ -77,13 +80,17 @@ class CrabbyVolley extends BaseGame<State> {
         speeds.push(TUNING[this.ctx.difficulty].speed)
         return
       }
-      // Humans: the crab scuttles under the finger, and a press in its own half hops it.
+      // Humans: the crab scuttles under the finger; tapping on the crab itself hops it.
+      // A press anywhere else only moves it, or every step into place would be a
+      // 0.6 s hop that covers a fraction of the band and arrives too late.
       const inp = this.ctx.input.player(c.side)
       const f = fingerTarget(inp, c.lane)
       targetX.push(f ? f.x : null)
       const pressed = inp.downs.find(
         (p) =>
-          (c.side === 0 ? p.y > MID : p.y < MID) && (c.lane === undefined || p.lane === c.lane),
+          (c.side === 0 ? p.y > MID : p.y < MID) &&
+          (c.lane === undefined || p.lane === c.lane) &&
+          Math.abs(p.x - c.x) < HOP_TAP,
       )
       hopReq.push(pressed !== undefined)
       speeds.push(SCUTTLE)
@@ -281,7 +288,7 @@ class CrabbyVolley extends BaseGame<State> {
     }
     // Online, each phone shows only its own player's prompt.
     const own = viewer === null || viewer === side
-    return this.mine(side) && !this.isBot(side) && own ? 'Tap to hop!' : undefined
+    return this.mine(side) && !this.isBot(side) && own ? 'Tap your crab to hop!' : undefined
   }
 
   override restore(snap: unknown): void {

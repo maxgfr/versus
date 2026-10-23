@@ -225,7 +225,7 @@ const TABLE: Record<Family, Row[]> = {
       'crabby-volley',
       'Crabby Volley',
       '🦀',
-      'Scuttle and hop to volley the ball over the net. Let it land on your sand and your rival scores.',
+      'Slide to scuttle, tap your crab to hop. Volley the ball over the net; if it lands on your sand, your rival scores.',
       't',
     ],
     ['pool', 'Pool', '🎱', 'Pot your colour, then the black. Pull back to set the power.'],

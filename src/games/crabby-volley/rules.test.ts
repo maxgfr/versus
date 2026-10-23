@@ -11,11 +11,13 @@ import {
   HOP_H,
   HOP_T,
   hopCrab,
+  landingOf,
   newWorld,
   REACH,
   span,
   step,
   winner,
+  type Crab,
   type World,
 } from './rules.ts'
 
@@ -312,4 +314,43 @@ describe('crabby volley rules', () => {
       if (winner(botMatch('hard', 'easy', s, 5, false).w, 5) === 0) hard++
     expect(hard).toBeGreaterThanOrEqual(5)
   })
+})
+
+describe('every strike can be returned', () => {
+  // Blue strikes at every height of its hop (a plain bump up to a full spike) and
+  // from either edge of its claws; red, standing under where the ball comes down,
+  // must be able to bump it back. A spike used to land out of red's reach.
+  for (const u of [0, 0.2, 0.35, 0.5]) {
+    for (const off of [-70, 0, 70]) {
+      it(`hop ${u}, offset ${off}`, () => {
+        const rng = new Rng(7)
+        const w = newWorld(false, 1, rng)
+        const blue = w.crabs[1] as Crab
+        const red = w.crabs[0] as Crab
+        blue.x = W / 2
+        if (u > 0) {
+          blue.hop = HOP_T * u
+          blue.hopFrom = blue.x
+          blue.hopTo = blue.x
+          blue.z = HOP_H * 4 * u * (1 - u)
+        }
+        toss(w, blue.x + off, BAND_Y[1] + 40, 0, 0, blue.z + REACH - 10, -10)
+        let landX: number | null = null
+        let returned = false
+        for (let i = 0; i < 400 && w.phase === 'rally'; i++) {
+          const ev = step(w, STEP, [landX, null], [false, false], rng)
+          if (ev.some((e) => e.kind === 'bump' && e.side === 0)) {
+            returned = true
+            break
+          }
+          if (landX === null && w.last === 1) landX = landingOf(w.ball)?.x ?? null
+          // Hop to meet it when it comes in high, as a player would.
+          if (landX !== null && w.ball.vz < 0 && w.ball.z > REACH && w.ball.y > red.y - 420)
+            hopCrab(red, landX)
+        }
+        expect(landX).not.toBeNull()
+        expect(returned).toBe(true)
+      })
+    }
+  }
 })
