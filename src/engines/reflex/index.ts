@@ -285,7 +285,9 @@ export function drawTapZone(
       alpha(col.light, 0.25),
       6,
     )
-  if (o.label && (o.labelAlpha ?? 1) > 0) {
+  // Online, each phone only prompts its own player.
+  const rival = g.viewer !== null && g.viewer !== side
+  if (o.label && (o.labelAlpha ?? 1) > 0 && !rival) {
     const y = side === 0 ? g.stage.edge(0) - 250 : g.stage.edge(1) + 250
     g.alpha(o.labelAlpha ?? 1, () =>
       g.sideText(side, o.label as string, W / 2, y, {

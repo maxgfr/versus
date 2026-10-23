@@ -213,7 +213,9 @@ export class Session {
     this.fx.update(frameDt)
     this.stage.applyTransform()
     c.translate(this.fx.shakeX, this.fx.shakeY)
-    this.game.render(g, alpha)
+    // Hit-stop holds the simulation: hold the picture too, or interpolation
+    // keeps sliding between the last two steps and the freeze jitters.
+    this.game.render(g, this.fx.hitstop > 0 ? 1 : alpha)
     this.fx.render(g)
     this.fx.renderOverlay(g)
   }

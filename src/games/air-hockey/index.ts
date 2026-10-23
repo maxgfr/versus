@@ -16,6 +16,8 @@ import {
   TARGET,
   winner,
   type World,
+  MALLET_R,
+  PUCK_R,
 } from './rules.ts'
 
 interface State {
@@ -36,6 +38,9 @@ class AirHockey extends BaseGame<State> {
   private squash: Spring[] = []
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
   private servedAt = -10
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: { score: [number, number]; phase: World['phase']; vx: number; vy: number } | null =
+    null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -156,6 +161,7 @@ class AirHockey extends BaseGame<State> {
     if (sp > 500 && w.phase === 'play') this.trail.push({ x: puck.x, y: puck.y })
     else this.trail.shift()
     while (this.trail.length > 6) this.trail.shift()
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     const dt = 1 / 60
     for (const s of this.squash) s.update(dt)
     for (const p of this.pulse) p.update(dt)
@@ -168,6 +174,38 @@ class AirHockey extends BaseGame<State> {
       serve: Math.min(1, (this.time - this.servedAt) / 0.35),
       target: this.target,
     })
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a goal, a serve, a hit).
+   */
+  private mirrorJuice(w: World): void {
+    const { puck } = w
+    const was = this.seen
+    this.seen = {
+      score: [w.score[0], w.score[1]],
+      phase: w.phase,
+      vx: puck.vx,
+      vy: puck.vy,
+    }
+    if (!was) return
+    for (const side of [0, 1] as Side[])
+      if (w.score[side] > was.score[side]) this.pulse[side].kick(14)
+    if (was.phase === 'goal' && w.phase === 'play') this.servedAt = this.time
+    const dv = Math.hypot(puck.vx - was.vx, puck.vy - was.vy)
+    if (w.phase !== 'play' || dv < 300) return
+    let best = -1
+    let bd = MALLET_R + PUCK_R + 30
+    w.mallets.forEach((m, i) => {
+      const d = Math.hypot(m.x - puck.x, m.y - puck.y)
+      if (d < bd) {
+        bd = d
+        best = i
+      }
+    })
+    const k = Math.min(1, Math.hypot(puck.vx, puck.vy) / 2600)
+    if (best >= 0) this.squash[best]?.kick(-3 - k * 4)
   }
 
   override restore(snap: unknown): void {
