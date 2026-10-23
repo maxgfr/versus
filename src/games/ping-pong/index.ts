@@ -7,7 +7,16 @@ import { MID, W } from '../../core/stage.ts'
 import { type Disc, fingerTarget } from '../../engines/puck/index.ts'
 import { type BotMemory, decide, newMemory, TUNING } from './bot.ts'
 import { render } from './render.ts'
-import { type Cmd, type Event, heightOf, newWorld, step, type World, winner } from './rules.ts'
+import {
+  type Cmd,
+  type Event,
+  heightOf,
+  newWorld,
+  step,
+  tempoOf,
+  type World,
+  winner,
+} from './rules.ts'
 
 interface State {
   w: World
@@ -49,7 +58,7 @@ class PingPong extends BaseGame<State> {
   protected setup(): State {
     const first: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     return {
-      w: newWorld(first, this.target),
+      w: newWorld(first, this.target, tempoOf(this.ctx.difficulty, this.ctx.bots)),
       hitAt: [-10, -10],
       servedAt: -10,
       pointAt: -10,
@@ -226,11 +235,12 @@ class PingPong extends BaseGame<State> {
       b ? { ...a, x: lerp(b.x, a.x, alpha), y: lerp(b.y, a.y, alpha) } : a
     const ball = ip(w.ball, prev?.ball)
     const z = prev ? lerp(prev.z, heightOf(w), alpha) : heightOf(w)
-    // Trail: only while the ball is really moving.
-    if (Math.hypot(w.ball.vx, w.ball.vy) > 900 && w.phase === 'play')
+    // Trail: only while the ball is really moving; a faster table drags a longer one.
+    const tempo = w.tempo
+    if (Math.hypot(w.ball.vx, w.ball.vy) > 900 * tempo && w.phase === 'play')
       this.trail.push({ x: ball.x, y: ball.y, z })
     else this.trail.shift()
-    while (this.trail.length > 7) this.trail.shift()
+    while (this.trail.length > (tempo > 1 ? 10 : 7)) this.trail.shift()
     const dt = 1 / 60
     for (const sp of this.squash) sp.update(dt)
     for (const p of this.pulse) p.update(dt)

@@ -6,15 +6,19 @@ import { disc } from '../../engines/puck/index.ts'
 import { decide, newMemory, TUNING, type BotMemory } from './bot.ts'
 import {
   BALL_R,
+  BASE_SPEED,
   BAT_R,
   bandOf,
   type Cmd,
+  MAX_SPEED,
   newWorld,
   predictCross,
   REST_Y,
   serverOf,
   step,
   TABLE,
+  TEMPO,
+  tempoOf,
   winner,
   type World,
 } from './rules.ts'
@@ -260,9 +264,10 @@ function botMatch(
   b: Difficulty,
   seed: number,
   target = 7,
+  tempo = 1,
 ): { w: World; steps: number } {
   const rng = new Rng(seed)
-  const w = newWorld(rng.chance(0.5) ? 0 : 1)
+  const w = newWorld(rng.chance(0.5) ? 0 : 1, undefined, tempo)
   const mem: [BotMemory, BotMemory] = [newMemory(), newMemory()]
   const diff: [Difficulty, Difficulty] = [a, b]
   let steps = 0
@@ -296,6 +301,55 @@ describe('ping pong bots', () => {
   it('the harder bot usually wins', () => {
     let hard = 0
     for (let s = 1; s <= 4; s++) if (winner(botMatch('hard', 'easy', s, 5).w.score, 5) === 0) hard++
+    expect(hard).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('tempo', () => {
+  /** Speed of a serve, and of a plain return late in a long rally. */
+  function pace(tempo?: number): { serve: number; top: number } {
+    const w = newWorld(0, 7, tempo)
+    const cmd = idle()
+    cmd.serve[0] = true
+    step(w, STEP, cmd, new Rng(1))
+    const serve = Math.abs(w.ball.vy)
+    w.rally = 60
+    const bat = w.bats[1]
+    inPlay(w, bat.x, bat.y + (BAT_R + BALL_R + 6), 0, -900)
+    w.last = 0
+    step(w, STEP, idle(), new Rng(1))
+    return { serve, top: Math.hypot(w.ball.vx, w.ball.vy) }
+  }
+
+  it('normal keeps every speed exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(newWorld(0).tempo).toBe(1)
+    const p = pace()
+    expect(p.serve).toBe(BASE_SPEED)
+    expect(p.top).toBeCloseTo(MAX_SPEED, 6)
+    expect(pace(TEMPO.normal)).toEqual(p)
+  })
+
+  it('hard plays faster, easy calmer', () => {
+    const hard = pace(TEMPO.hard)
+    const easy = pace(TEMPO.easy)
+    expect(hard.serve).toBeGreaterThan(BASE_SPEED * 1.2)
+    expect(hard.top).toBeGreaterThan(MAX_SPEED * 1.2)
+    expect(easy.top).toBeLessThan(MAX_SPEED * 0.9)
+  })
+
+  it('only a match with a computer changes pace', () => {
+    expect(tempoOf('hard', [false, true])).toBe(TEMPO.hard)
+    expect(tempoOf('easy', [true, true])).toBe(TEMPO.easy)
+    expect(tempoOf('hard', [false, false])).toBe(1)
+  })
+
+  it('bots still finish, and hard still beats easy, at the hard tempo', () => {
+    const { w } = botMatch('hard', 'hard', 21, 7, TEMPO.hard)
+    expect(winner(w.score, 7)).not.toBeNull()
+    let hard = 0
+    for (let s = 1; s <= 4; s++)
+      if (winner(botMatch('hard', 'easy', s, 5, TEMPO.hard).w.score, 5) === 0) hard++
     expect(hard).toBeGreaterThanOrEqual(3)
   })
 })

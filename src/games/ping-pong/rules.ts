@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { type Difficulty, other, type Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
 import { type Box, type Disc, disc, driveTo, rink } from '../../engines/puck/index.ts'
@@ -19,9 +19,9 @@ export const BAT_FAR = 620
 /** Resting height of each bat between rallies (the bot waits here). */
 export const REST_Y: [number, number] = [MID + 500, MID - 500]
 const MAX_ANGLE = 0.95
-const BASE_SPEED = 950
+export const BASE_SPEED = 950
 const RAMP = 45
-const MAX_SPEED = 2100
+export const MAX_SPEED = 2100
 /** A bat driven into the ball adds up to this much pace on top of the rally speed. */
 const SMASH = 1000
 /** Forward bat speed (units/s) that counts as a full smash. */
@@ -36,6 +36,17 @@ const SPIN_DECAY = 1.4
 const SERVE_SPREAD = 260
 const SUBSTEPS = 4
 export const POINT_PAUSE = 1.1
+
+/**
+ * Against the computer its level also sets the pace: every shot's speed (serve,
+ * rally ramp, smash and their caps) is scaled. Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.28 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
+}
 
 export interface World {
   ball: Disc
@@ -63,6 +74,8 @@ export interface World {
   bounced: boolean
   /** Sidespin: lateral acceleration (units/s²) the ball curves with, from a brushing stroke. */
   spin: number
+  /** Pace multiplier on every shot (1 = normal), fixed for the match. */
+  tempo: number
 }
 
 export type Event =
@@ -130,7 +143,7 @@ export function offsetOf(bat: Disc, ball: Disc): number {
   return (ball.x - bat.x) / (BAT_R + BALL_R)
 }
 
-export function newWorld(first: Side, target = 7): World {
+export function newWorld(first: Side, target = 7, tempo = 1): World {
   const w: World = {
     ball: disc(W / 2, MID, BALL_R),
     bats: [disc(W / 2, REST_Y[0], BAT_R), disc(W / 2, REST_Y[1], BAT_R)],
@@ -141,11 +154,12 @@ export function newWorld(first: Side, target = 7): World {
     phase: 'serve',
     pause: 0,
     rally: 0,
-    speed: BASE_SPEED,
+    speed: BASE_SPEED * tempo,
     last: null,
     fromY: MID,
     bounced: false,
     spin: 0,
+    tempo,
   }
   holdBall(w)
   return w
@@ -191,12 +205,12 @@ function launch(w: World, rng: Rng, ev: Event[]): void {
   const side = w.server
   w.phase = 'play'
   w.rally = 0
-  w.speed = BASE_SPEED
+  w.speed = BASE_SPEED * w.tempo
   w.last = side
   w.fromY = w.ball.y
   w.bounced = false
   w.spin = 0
-  w.ball.vx = rng.range(-SERVE_SPREAD, SERVE_SPREAD)
+  w.ball.vx = rng.range(-SERVE_SPREAD, SERVE_SPREAD) * w.tempo
   w.ball.vy = (side === 0 ? -1 : 1) * w.speed
   ev.push({ kind: 'serve', side, x: w.ball.x, y: w.ball.y })
 }
@@ -237,18 +251,18 @@ function batHit(w: World, side: Side, ev: Event[]): void {
   if (dir * dy < -b.r * 0.5) return
   if ((b.vx - bat.vx) * dx + (b.vy - bat.vy) * dy >= 0) return
   w.rally++
-  w.speed = Math.min(MAX_SPEED, BASE_SPEED + w.rally * RAMP)
+  w.speed = Math.min(MAX_SPEED, BASE_SPEED + w.rally * RAMP) * w.tempo
   const angle = Math.max(-1, Math.min(1, dx / min)) * MAX_ANGLE
   const push = bat.vy * dir
   const power = Math.max(0, Math.min(1, push / SMASH_FULL))
   // Pulling the bat back on contact blocks: a softer, shorter return.
   const block = Math.max(-0.3, Math.min(0, push / 4000))
-  const shot = w.speed * (1 + block) + power * SMASH
+  const shot = w.speed * (1 + block) + power * SMASH * w.tempo
   b.vx = Math.sin(angle) * shot + bat.vx * 0.15
   let vy = dir * Math.cos(angle) * shot
   // A return always goes back over the net, however the bat was moving, and
   // leaves faster than the bat chasing it (capped so it stays playable).
-  const least = Math.min(MAX_SHOT, Math.max(shot * 0.4, push + 80))
+  const least = Math.min(MAX_SHOT * w.tempo, Math.max(shot * 0.4, push + 80))
   if (vy * dir < least) vy = dir * least
   b.vy = vy
   w.spin = Math.max(-SPIN_MAX, Math.min(SPIN_MAX, bat.vx * SPIN_K))
