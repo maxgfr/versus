@@ -14,6 +14,7 @@ import {
   roundOver,
   speedAt,
   stepWorld,
+  tempoOf,
   type World,
 } from './rules.ts'
 
@@ -59,14 +60,23 @@ class RoadDodge extends BaseGame<State> {
     this.lateral = [0, 1].map((side) =>
       ctx.bots[side as Side] ? botLateral(ctx.difficulty) : HUMAN_LATERAL,
     ) as [number, number]
-    return { ...newWorld(ctx.rng.int(1, 0x7fffffff)), rounds: roundsNew(this.target), bumps: [] }
+    const tempo = tempoOf(ctx.difficulty, ctx.bots)
+    return {
+      ...newWorld(ctx.rng.int(1, 0x7fffffff), tempo),
+      rounds: roundsNew(this.target),
+      bumps: [],
+    }
   }
 
   protected step(dt: number): void {
     const { ctx } = this
     if (roundsStep(this.s.rounds, this.time, 2.4)) {
       // New round: fresh roads with new traffic (the same for both drivers).
-      this.s = { ...newWorld(ctx.rng.int(1, 0x7fffffff)), rounds: this.s.rounds, bumps: [] }
+      this.s = {
+        ...newWorld(ctx.rng.int(1, 0x7fffffff), this.s.tempo),
+        rounds: this.s.rounds,
+        bumps: [],
+      }
       ctx.audio.play('go')
       return
     }
@@ -156,7 +166,7 @@ class RoadDodge extends BaseGame<State> {
       }
       case 'hit': {
         // A faster road hits harder.
-        const k = Math.min(1, (speedAt(this.s.rt) - 470) / 600)
+        const k = Math.min(1, (speedAt(this.s.rt, this.s.tempo) - 470) / 600)
         this.s.bumps.push({
           side: e.side,
           x: e.ox,
@@ -233,7 +243,8 @@ class RoadDodge extends BaseGame<State> {
     renderRoad(g, s, this.ctx.names, this.time, this.over, g.t, {
       x: [lerp(this.prevX[0], s.drivers[0].x, alpha), lerp(this.prevX[1], s.drivers[1].x, alpha)],
       // Oncoming traffic moves at the road speed: draw it where it is between steps.
-      back: s.rounds.phase === 'play' || this.over ? speedAt(s.rt) * (1 - alpha) * STEP : 0,
+      back:
+        s.rounds.phase === 'play' || this.over ? speedAt(s.rt, s.tempo) * (1 - alpha) * STEP : 0,
       squash: [this.squash[0].value, this.squash[1].value],
     })
   }

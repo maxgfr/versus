@@ -1,4 +1,4 @@
-import type { Side } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 
 /**
  * Road Dodge: each player drives up their own road in their half. Oncoming
@@ -33,9 +33,24 @@ export const OVERTIME = 45
 const OVER_RAMP = 16
 export const VTOP = 1600
 
-/** Speed of oncoming traffic (units/s) at round time `rt`: ramps up, then creeps on in overtime. */
-export function speedAt(rt: number): number {
-  return Math.min(VTOP, Math.min(VMAX, V0 + RAMP * rt) + Math.max(0, rt - OVERTIME) * OVER_RAMP)
+/**
+ * Speed of oncoming traffic (units/s) at round time `rt`: ramps up, then creeps
+ * on in overtime. The whole curve is scaled by the match tempo.
+ */
+export function speedAt(rt: number, tempo = 1): number {
+  const v = Math.min(VTOP, Math.min(VMAX, V0 + RAMP * rt) + Math.max(0, rt - OVERTIME) * OVER_RAMP)
+  return v * tempo
+}
+
+/**
+ * Against the computer its level also sets the pace: the traffic comes down
+ * the road faster (hard) or slower (easy). Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.28 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
 }
 
 /** Chance that a car comes as a two-car row (one lane left open), rising over the round. */
@@ -103,6 +118,8 @@ export interface World {
   obs: [Obs[], Obs[]]
   drivers: [Driver, Driver]
   nextId: number
+  /** Traffic speed multiplier (1 = normal), fixed for the match. */
+  tempo: number
 }
 
 export type Ev =
@@ -115,7 +132,7 @@ export function newDriver(): Driver {
   return { x, tx: x, lives: LIVES, invT: -1, hitT: -9, out: false }
 }
 
-export function newWorld(seed: number): World {
+export function newWorld(seed: number, tempo = 1): World {
   return {
     seed,
     rt: 0,
@@ -126,6 +143,7 @@ export function newWorld(seed: number): World {
     obs: [[], []],
     drivers: [newDriver(), newDriver()],
     nextId: 1,
+    tempo,
   }
 }
 
@@ -182,7 +200,7 @@ export function stepWorld(
 ): void {
   w.rt += dt
   while (w.rt >= w.nextAt) spawn(w)
-  const v = speedAt(w.rt)
+  const v = speedAt(w.rt, w.tempo)
   w.dist += v * dt
   for (const side of [0, 1] as Side[]) {
     const d = w.drivers[side]

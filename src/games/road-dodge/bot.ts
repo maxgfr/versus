@@ -38,7 +38,7 @@ export function laneScore(
   lane: number,
   lateral: number,
 ): number {
-  const v = speedAt(w.rt)
+  const v = speedAt(w.rt, w.tempo)
   const target = LANE_X[lane] as number
   const lo = Math.min(fromX, target)
   const hi = Math.max(fromX, target)

@@ -46,7 +46,7 @@ function rows(dist: number, period: number, phase = 0): number[] {
 
 function road(g: Draw, side: Side, s: World): void {
   const dist = s.dist
-  const v = speedAt(s.rt)
+  const v = speedAt(s.rt, s.tempo)
   const col = SIDE[side]
   const up = textAngle(g, side)
   inFrame(g, side, () => {

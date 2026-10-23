@@ -20,6 +20,8 @@ import {
   speedAt,
   VTOP,
   stepWorld,
+  TEMPO,
+  tempoOf,
   type World,
 } from './rules.ts'
 
@@ -280,4 +282,55 @@ describe('bot', () => {
       }
     })
   }
+})
+
+describe('tempo', () => {
+  /** Road covered in the first ten seconds of a round. */
+  function covered(tempo?: number): number {
+    const w = quiet(newWorld(3, tempo))
+    for (let i = 0; i < 600; i++) stepWorld(w, STEP, NONE, [], false)
+    return w.dist
+  }
+
+  it('normal keeps the traffic speed exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(newWorld(1).tempo).toBe(1)
+    expect(speedAt(0)).toBe(470)
+    expect(speedAt(40, TEMPO.normal)).toBe(900)
+    expect(covered(TEMPO.normal)).toBe(covered())
+  })
+
+  it('hard scrolls clearly faster, easy calmer', () => {
+    expect(covered(TEMPO.hard) / covered()).toBeGreaterThan(1.2)
+    expect(covered(TEMPO.easy) / covered()).toBeLessThan(0.9)
+    expect(speedAt(40, TEMPO.hard)).toBeGreaterThan(1100)
+  })
+
+  it('only a match with a computer changes pace', () => {
+    expect(tempoOf('hard', [false, true])).toBe(TEMPO.hard)
+    expect(tempoOf('easy', [true, true])).toBe(TEMPO.easy)
+    expect(tempoOf('hard', [false, false])).toBe(1)
+  })
+
+  it('at the hard tempo bots still end rounds, and hard still outlasts easy', () => {
+    let hard = 0
+    const n = 10
+    for (let seed = 1; seed <= n; seed++) {
+      const w = newWorld(seed * 13, TEMPO.hard)
+      const bots = [new DodgeBot(new Rng(seed), 'hard'), new DodgeBot(new Rng(seed + 50), 'easy')]
+      const lat: [number, number] = [botLateral('hard'), botLateral('easy')]
+      let steps = 0
+      while (roundOver(w) === null && steps < 60 * 150) {
+        const steer: [number, number] = [
+          bots[0]?.decide(w, 0, STEP) ?? 0,
+          bots[1]?.decide(w, 1, STEP) ?? 0,
+        ]
+        stepWorld(w, STEP, steer, [], true, lat)
+        steps++
+      }
+      expect(roundOver(w)).not.toBeNull()
+      if (roundOver(w) === 0) hard++
+    }
+    expect(hard).toBeGreaterThanOrEqual(8)
+  })
 })
