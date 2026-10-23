@@ -10,7 +10,17 @@ import {
   scoredBy,
 } from '../../engines/puck/index.ts'
 import { decide, newMemory, TUNING } from './bot.ts'
-import { newWorld, RINK, step, TARGET, winner, type World } from './rules.ts'
+import {
+  MAX_PUCK,
+  newWorld,
+  RINK,
+  step,
+  TARGET,
+  TEMPO,
+  tempoOf,
+  winner,
+  type World,
+} from './rules.ts'
 
 describe('puck engine', () => {
   it('bounces off side walls and keeps the disc inside', () => {
@@ -55,6 +65,7 @@ function botMatch(
   seed: number,
   teams = false,
   target = TARGET,
+  maxPuck = MAX_PUCK,
 ): { w: World; steps: number } {
   const rng = new Rng(seed)
   const w = newWorld(teams, 0)
@@ -65,7 +76,7 @@ function botMatch(
     const t1 = decide(w, 1, b, rng, mem[1] as ReturnType<typeof newMemory>, STEP)
     const targets = w.mallets.map((m, i) => (m.side === 0 ? t0[i] : t1[i]) ?? null)
     const speeds = w.mallets.map((m) => TUNING[m.side === 0 ? a : b].speed)
-    step(w, STEP, targets, speeds)
+    step(w, STEP, targets, speeds, maxPuck)
     steps++
   }
   return { w, steps }
@@ -104,5 +115,51 @@ describe('air hockey', () => {
       if (m.side === 0) expect(m.y).toBeGreaterThan(MID)
       else expect(m.y).toBeLessThan(MID)
     }
+  })
+})
+
+describe('tempo', () => {
+  /** Top speed a hard slap reaches under a given cap. */
+  function slap(maxPuck?: number): number {
+    const w = newWorld(false, 0)
+    w.puck.x = W / 2
+    w.puck.y = MID + 300
+    const m = w.mallets[0] as World['mallets'][number]
+    m.x = W / 2
+    m.y = MID + 300 + 110
+    const target = { x: W / 2, y: MID + 60 }
+    let top = 0
+    for (let i = 0; i < 20 && w.phase === 'play'; i++) {
+      step(w, STEP, [target, null], [5200, 0], maxPuck)
+      top = Math.max(top, Math.hypot(w.puck.vx, w.puck.vy))
+    }
+    return top
+  }
+
+  it('normal keeps the puck cap exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(slap()).toBeCloseTo(MAX_PUCK, 0)
+    expect(slap(MAX_PUCK * TEMPO.normal)).toBe(slap())
+  })
+
+  it('hard lets the puck fly faster, easy calmer', () => {
+    expect(slap(MAX_PUCK * TEMPO.hard)).toBeGreaterThan(MAX_PUCK * 1.2)
+    expect(slap(MAX_PUCK * TEMPO.easy)).toBeLessThan(MAX_PUCK * 0.9)
+  })
+
+  it('only a match with a computer changes pace', () => {
+    expect(tempoOf('hard', [false, true])).toBe(TEMPO.hard)
+    expect(tempoOf('easy', [true, true])).toBe(TEMPO.easy)
+    expect(tempoOf('hard', [false, false])).toBe(1)
+    expect(tempoOf('easy', [false, false])).toBe(1)
+  })
+
+  it('bots still finish, and hard still beats easy, at the hard tempo', () => {
+    const fast = MAX_PUCK * TEMPO.hard
+    expect(winner(botMatch('hard', 'hard', 7, false, TARGET, fast).w)).not.toBeNull()
+    let hard = 0
+    for (let s = 1; s <= 4; s++)
+      if (winner(botMatch('hard', 'easy', s, false, TARGET, fast).w) === 0) hard++
+    expect(hard).toBeGreaterThanOrEqual(3)
   })
 })

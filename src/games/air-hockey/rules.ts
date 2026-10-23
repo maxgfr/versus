@@ -1,4 +1,4 @@
-import type { Side } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 import { MID, W } from '../../core/stage.ts'
 import {
   capSpeed,
@@ -20,6 +20,16 @@ export const RINK = rink()
 export const PUCK_R = 42
 export const MALLET_R = 64
 export const MAX_PUCK = 3000
+/**
+ * Against the computer its level also sets the pace: the puck's top speed is
+ * scaled. Local 2P and online always play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.28 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
+}
 export const TARGET = 7
 const SUBSTEPS = 4
 
@@ -85,9 +95,16 @@ export type Target = { x: number; y: number } | null
 
 /**
  * Advance one fixed step. `targets[i]` is where mallet i wants to go (null =
- * stay), `speeds[i]` its top speed. Returns what happened for juice.
+ * stay), `speeds[i]` its top speed, `maxPuck` the puck's (scaled by the
+ * tempo). Returns what happened for juice.
  */
-export function step(w: World, dt: number, targets: Target[], speeds: number[]): Event[] {
+export function step(
+  w: World,
+  dt: number,
+  targets: Target[],
+  speeds: number[],
+  maxPuck = MAX_PUCK,
+): Event[] {
   const events: Event[] = []
   if (w.phase === 'goal') {
     w.pause -= dt
@@ -121,7 +138,7 @@ export function step(w: World, dt: number, targets: Target[], speeds: number[]):
         collideWalls(w.puck, RINK)
       }
     }
-    capSpeed(w.puck, MAX_PUCK)
+    capSpeed(w.puck, maxPuck)
     const scorer = scoredBy(w.puck, RINK)
     if (scorer !== null) {
       w.score[scorer]++

@@ -9,11 +9,13 @@ import { type BotMemory, decide, newMemory, TUNING } from './bot.ts'
 import { render } from './render.ts'
 import {
   type Event,
+  MAX_PUCK,
   newWorld,
   RINK,
   step,
   type Target,
   TARGET,
+  tempoOf,
   winner,
   type World,
   MALLET_R,
@@ -22,6 +24,8 @@ import {
 
 interface State {
   w: World
+  /** Pace set by the computer's level (1 without a bot), fixed at setup. */
+  tempo: number
 }
 
 /** Goals to win, chosen by the players before the match. */
@@ -50,7 +54,11 @@ class AirHockey extends BaseGame<State> {
     const server: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     const w = newWorld(this.ctx.teams, server)
     this.squash = w.mallets.map(() => new Spring(1, 380, 12))
-    return { w }
+    return { w, tempo: tempoOf(this.ctx.difficulty, this.ctx.bots) }
+  }
+
+  private get maxPuck(): number {
+    return MAX_PUCK * this.s.tempo
   }
 
   protected step(dt: number): void {
@@ -75,7 +83,7 @@ class AirHockey extends BaseGame<State> {
     const speeds = w.mallets.map((m) =>
       this.isBot(m.side) ? TUNING[this.ctx.difficulty].speed : HUMAN_SPEED,
     )
-    const events = step(w, dt, targets, speeds)
+    const events = step(w, dt, targets, speeds, this.maxPuck)
     for (const e of events) this.juice(e)
   }
 
@@ -160,7 +168,9 @@ class AirHockey extends BaseGame<State> {
     const sp = Math.hypot(w.puck.vx, w.puck.vy)
     if (sp > 500 && w.phase === 'play') this.trail.push({ x: puck.x, y: puck.y })
     else this.trail.shift()
-    while (this.trail.length > 6) this.trail.shift()
+    // A faster table drags a longer tail.
+    const tail = this.s.tempo > 1 ? 9 : 6
+    while (this.trail.length > tail) this.trail.shift()
     if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     const dt = 1 / 60
     for (const s of this.squash) s.update(dt)
