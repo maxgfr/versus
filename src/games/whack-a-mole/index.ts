@@ -14,6 +14,7 @@ import {
   pointsFor,
   QUICK,
   scheduleFor,
+  tempoOf,
   winnerOf,
   type Pop,
   type PopKind,
@@ -46,6 +47,8 @@ export interface State {
   endAt: number
   /** Seconds on the clock (the players' choice). */
   len: number
+  /** Pop-rate multiplier set by the computer's level (1 without a bot), fixed at setup. */
+  tempo: number
 }
 
 const emptyGrid = (): (Cell | null)[] => Array.from({ length: HOLES }, () => null)
@@ -62,8 +65,9 @@ class WhackAMole extends BaseGame<State> {
       ctx.bots[side as Side] ? new MoleBot(ctx.rng.fork(), ctx.difficulty) : null,
     ) as [MoleBot | null, MoleBot | null]
     const len = ctx.target || match.default
+    const tempo = tempoOf(ctx.difficulty, ctx.bots)
     return {
-      plan: scheduleFor(ctx.rng, ctx.teams, len),
+      plan: scheduleFor(ctx.rng, ctx.teams, len, tempo),
       next: 0,
       cells: [emptyGrid(), emptyGrid()],
       score: [0, 0],
@@ -71,6 +75,7 @@ class WhackAMole extends BaseGame<State> {
       winner: null,
       endAt: -1,
       len,
+      tempo,
     }
   }
 
@@ -86,7 +91,8 @@ class WhackAMole extends BaseGame<State> {
       for (const side of [0, 1] as Side[]) {
         s.cells[side][p.hole] = { kind: p.kind, at: p.at, until: p.at + p.dur, st: 'up', t: p.at }
         const w = frame(side, holeXY(p.hole).x, holeXY(p.hole).y)
-        ctx.fx.puff(w.x, w.y, 'rgba(90,60,35,0.7)', 5)
+        // A faster match kicks up a little more dirt.
+        ctx.fx.puff(w.x, w.y, 'rgba(90,60,35,0.7)', s.tempo > 1 ? 8 : 5)
       }
     }
 

@@ -1,4 +1,4 @@
-import type { Side } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 
 /**
@@ -24,6 +24,18 @@ export const QUICK = 0.5
 export const QUICK_BONUS = 1
 /** Taps further than this from a hole's centre miss it (world units). */
 export const REACH = 130
+
+/**
+ * Against the computer its level also sets the pace: pops come thicker and
+ * stay up for less time (hard), or the other way round (easy). Local 2P and
+ * online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
+}
 
 export type PopKind = 'mole' | 'bunny'
 
@@ -62,9 +74,10 @@ export function holeAt(x: number, y: number): number {
  * The shared schedule for the whole match. Each hole only pops again once its
  * last pop has gone down. Teams see faster pops, to keep two players busy.
  * The match ramps up: toward the buzzer pops come faster, stay up for less
- * time, and more of them are bunnies.
+ * time, and more of them are bunnies. `tempo` divides both the gap between
+ * pops and how long each stays up.
  */
-export function scheduleFor(rng: Rng, teams: boolean, len = GAME_TIME): Pop[] {
+export function scheduleFor(rng: Rng, teams: boolean, len = GAME_TIME, tempo = 1): Pop[] {
   const pops: Pop[] = []
   const busyUntil: number[] = Array.from({ length: HOLES }, () => 0)
   let t = 0.8
@@ -77,11 +90,11 @@ export function scheduleFor(rng: Rng, teams: boolean, len = GAME_TIME): Pop[] {
     if ((busyUntil[hole] ?? 0) <= t) {
       const kind: PopKind = rng.chance(0.24 + 0.1 * heat) ? 'bunny' : 'mole'
       const [lo, hi] = UP[kind]
-      const dur = rng.range(lo, hi) * (1 - 0.25 * heat)
+      const dur = (rng.range(lo, hi) * (1 - 0.25 * heat)) / tempo
       pops.push({ at: round(t), hole, kind, dur: round(dur) })
       busyUntil[hole] = t + dur + 0.2
     }
-    t += rng.range(0.34, 0.8) * (teams ? 0.7 : 1) * (1 - 0.35 * heat)
+    t += (rng.range(0.34, 0.8) * (teams ? 0.7 : 1) * (1 - 0.35 * heat)) / tempo
   }
   return pops
 }

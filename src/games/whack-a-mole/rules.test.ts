@@ -18,6 +18,8 @@ import {
   holeXY,
   pointsFor,
   scheduleFor,
+  TEMPO,
+  tempoOf,
   winnerOf,
   type Pop,
 } from './rules.ts'
@@ -252,6 +254,27 @@ describe('whack a mole game', () => {
   })
 })
 
+/** One half's score for a bot over a whole schedule (holes drawn the way the game does). */
+function botScore(d: Difficulty, seed: number, tempo = 1): number {
+  const plan = scheduleFor(new Rng(seed), false, GAME_TIME, tempo)
+  const bot = new MoleBot(new Rng(seed * 7 + 1), d)
+  const cells: (Cell | null)[] = Array.from({ length: HOLES }, () => null)
+  let next = 0
+  let score = 0
+  for (let t = 0; t < GAME_TIME; t += STEP) {
+    for (let p = plan[next]; p && p.at <= t; p = plan[++next])
+      cells[p.hole] = { kind: p.kind, at: p.at, until: p.at + p.dur, st: 'up', t: p.at }
+    for (const h of bot.drive(t, cells)) {
+      const c = cells[h]
+      if (!c || c.st !== 'up') continue
+      score += pointsFor(c.kind, t - c.at)
+      c.st = c.kind === 'mole' ? 'hit' : 'bad'
+    }
+    for (const c of cells) if (c && c.st === 'up' && t >= c.until) c.st = 'down'
+  }
+  return score
+}
+
 describe('whack-a-mole pacing and bots', () => {
   it('quick whacks on moles score one more; bunnies always cost two', () => {
     expect(pointsFor('mole', 0.2)).toBe(MOLE_POINTS + QUICK_BONUS)
@@ -267,27 +290,6 @@ describe('whack-a-mole pacing and bots', () => {
     const avg = (ps: Pop[]) => ps.reduce((a, p) => a + p.dur, 0) / ps.length
     expect(avg(late)).toBeLessThan(avg(early))
   })
-
-  /** One half's score for a bot over a whole schedule (holes drawn the way the game does). */
-  function botScore(d: Difficulty, seed: number): number {
-    const plan = scheduleFor(new Rng(seed), false, GAME_TIME)
-    const bot = new MoleBot(new Rng(seed * 7 + 1), d)
-    const cells: (Cell | null)[] = Array.from({ length: HOLES }, () => null)
-    let next = 0
-    let score = 0
-    for (let t = 0; t < GAME_TIME; t += STEP) {
-      for (let p = plan[next]; p && p.at <= t; p = plan[++next])
-        cells[p.hole] = { kind: p.kind, at: p.at, until: p.at + p.dur, st: 'up', t: p.at }
-      for (const h of bot.drive(t, cells)) {
-        const c = cells[h]
-        if (!c || c.st !== 'up') continue
-        score += pointsFor(c.kind, t - c.at)
-        c.st = c.kind === 'mole' ? 'hit' : 'bad'
-      }
-      for (const c of cells) if (c && c.st === 'up' && t >= c.until) c.st = 'down'
-    }
-    return score
-  }
 
   it('hard outscores normal, and normal outscores easy, on the same moles', () => {
     let hardWins = 0
@@ -307,5 +309,50 @@ describe('whack-a-mole match length', () => {
     const long = scheduleFor(new Rng(4), false, 90)
     expect(short[short.length - 1]?.at ?? 0).toBeLessThan(21)
     expect(long[long.length - 1]?.at ?? 0).toBeGreaterThan(80)
+  })
+})
+
+describe('whack-a-mole tempo', () => {
+  const upTime = (plan: Pop[]) => plan.reduce((a, p) => a + p.dur, 0) / plan.length
+
+  it('normal keeps the schedule exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(scheduleFor(new Rng(9), false, GAME_TIME, TEMPO.normal)).toEqual(
+      scheduleFor(new Rng(9), false),
+    )
+  })
+
+  it('hard pops clearly more moles, for less time; easy fewer, for longer', () => {
+    const normal = scheduleFor(new Rng(9), false)
+    const hard = scheduleFor(new Rng(9), false, GAME_TIME, TEMPO.hard)
+    const easy = scheduleFor(new Rng(9), false, GAME_TIME, TEMPO.easy)
+    expect(hard.length / normal.length).toBeGreaterThan(1.15)
+    expect(upTime(hard)).toBeLessThan(upTime(normal) / 1.2)
+    expect(easy.length).toBeLessThan(normal.length)
+    expect(upTime(easy)).toBeGreaterThan(upTime(normal) * 1.1)
+  })
+
+  it('only a match with a computer changes pace', () => {
+    expect(tempoOf('hard', [false, true])).toBe(TEMPO.hard)
+    expect(tempoOf('easy', [true, true])).toBe(TEMPO.easy)
+    expect(tempoOf('hard', [false, false])).toBe(1)
+    const solo = factory()
+    solo.init(ctxFor([false, true], 'hard', 4, '1p'))
+    expect((solo.snapshot() as { s: { tempo: number } }).s.tempo).toBe(TEMPO.hard)
+    const duel = factory()
+    duel.init(ctxFor([false, false], 'hard', 4, '2p'))
+    expect((duel.snapshot() as { s: { tempo: number } }).s.tempo).toBe(1)
+  })
+
+  it('at the hard tempo hard still outscores easy, and bots finish a match', () => {
+    let hardWins = 0
+    for (let seed = 1; seed <= 10; seed++)
+      if (botScore('hard', seed, TEMPO.hard) > botScore('easy', seed, TEMPO.hard)) hardWins++
+    expect(hardWins).toBeGreaterThanOrEqual(9)
+    const game = factory()
+    game.init(ctxFor([true, true], 'hard', 31))
+    let steps = 0
+    while (!game.result && ++steps < 60 * 120) game.update(STEP)
+    expect(game.result).not.toBeNull()
   })
 })
