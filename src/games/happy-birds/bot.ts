@@ -41,6 +41,8 @@ export function shouldFlap(
   d: Difficulty,
   salt = 0,
   flyT = now,
+  /** The match tempo: the bot plans with the real scroll speed. */
+  tempo = 1,
 ): boolean {
   if (!b.alive || now - b.flapAt < 0.14) return false
   const p = nextPipe(seed, b.dist)
@@ -51,7 +53,7 @@ export function shouldFlap(
   const steps = Math.round(PLAN[d] / DT)
   if (steps === 0) return want
   // Check the hunch against the real rules: never flap (or hold off) into a certain crash.
-  const speed = speedAt(flyT)
+  const speed = speedAt(flyT, tempo)
   if (want) return lives(seed, b, speed, true, steps) || !lives(seed, b, speed, false, steps)
   return !lives(seed, b, speed, false, steps) && lives(seed, b, speed, true, steps)
 }

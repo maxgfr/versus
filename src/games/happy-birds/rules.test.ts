@@ -15,16 +15,19 @@ import {
   speedAt,
   stepBird,
   SUDDEN,
+  TEMPO,
+  tempoOf,
 } from './rules.ts'
 
 const DT = 1 / 60
 
 /** Fly one bot until it crashes or the cap; returns seconds survived. */
-function fly(seed: number, d: Difficulty): number {
+function fly(seed: number, d: Difficulty, tempo = 1): number {
   const b = newBird()
   let t = 0
   while (t < ROUND_CAP) {
-    const r = stepBird(seed, b, DT, speedAt(t), shouldFlap(seed, b, t, d), t)
+    const flap = shouldFlap(seed, b, t, d, 0, t, tempo)
+    const r = stepBird(seed, b, DT, speedAt(t, tempo), flap, t)
     t += DT
     if (r === 'crash') return t
   }
@@ -109,5 +112,45 @@ describe('happy birds bot', () => {
     expect(times.some((t) => t < ROUND_CAP)).toBe(true)
     // ...but not instantly: it should look like it is trying.
     expect(Math.max(...times)).toBeGreaterThan(4)
+  })
+})
+
+describe('happy birds tempo', () => {
+  /** Course flown by an untouched bird in its first second. */
+  function covered(tempo?: number): number {
+    const b = newBird()
+    for (let t = 0; t < 1; t += DT) stepBird(1, b, DT, speedAt(t, tempo), false, t)
+    return b.dist
+  }
+
+  it('normal keeps the scroll speed exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(speedAt(0)).toBe(320)
+    expect(speedAt(999)).toBe(500)
+    expect(speedAt(30, TEMPO.normal)).toBe(speedAt(30))
+    expect(covered(TEMPO.normal)).toBe(covered())
+  })
+
+  it('hard scrolls clearly faster, easy calmer', () => {
+    expect(covered(TEMPO.hard) / covered()).toBeGreaterThan(1.2)
+    expect(covered(TEMPO.easy) / covered()).toBeLessThan(0.9)
+  })
+
+  it('only a match with a computer changes pace', () => {
+    expect(tempoOf('hard', [false, true])).toBe(TEMPO.hard)
+    expect(tempoOf('easy', [true, true])).toBe(TEMPO.easy)
+    expect(tempoOf('hard', [false, false])).toBe(1)
+  })
+
+  it('at the hard tempo a hard bot still flies well and outlasts easy', () => {
+    const seeds = [1, 2, 3, 4, 5, 6, 7, 8]
+    const hard = seeds.map((s) => fly(s, 'hard', TEMPO.hard))
+    const easy = seeds.map((s) => fly(s, 'easy', TEMPO.hard))
+    expect(hard.reduce((a, b) => a + b) / seeds.length).toBeGreaterThan(20)
+    expect(
+      seeds.filter((_, i) => (hard[i] as number) > (easy[i] as number)).length,
+    ).toBeGreaterThanOrEqual(7)
+    // Rounds still end: sudden death catches the hard bot too.
+    expect(hard.filter((t) => t >= ROUND_CAP).length).toBeLessThanOrEqual(1)
   })
 })

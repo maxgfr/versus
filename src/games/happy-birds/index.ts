@@ -19,6 +19,7 @@ import {
   speedAt,
   stepBird,
   TARGET,
+  tempoOf,
 } from './rules.ts'
 
 export interface State {
@@ -34,6 +35,8 @@ export interface State {
   roundWinner: Side | 'draw' | null
   /** Game time each bird last cleared a pipe, for the counter pop. */
   passAt: [number, number]
+  /** Scroll-speed multiplier set by the computer's level (1 without a bot), fixed at setup. */
+  tempo: number
 }
 
 const WAIT = 1.1
@@ -95,6 +98,7 @@ class HappyBirds extends RunnerGame<State> {
       course: this.courseFor(1),
       roundWinner: null,
       passAt: [-10, -10],
+      tempo: tempoOf(this.ctx.difficulty, this.ctx.bots),
     }
   }
 
@@ -174,12 +178,12 @@ class HappyBirds extends RunnerGame<State> {
     const l = this.looks[side]
     if (
       this.isBot(side) &&
-      shouldFlap(s.course, b, this.time, this.ctx.difficulty, side * 0x9e3779b1, s.flyT)
+      shouldFlap(s.course, b, this.time, this.ctx.difficulty, side * 0x9e3779b1, s.flyT, s.tempo)
     )
       this.botTap(side)
     const flapNow = this.taps(side) > 0
     const vy0 = b.vy
-    const speed = speedAt(s.flyT)
+    const speed = speedAt(s.flyT, s.tempo)
     const r = stepBird(s.course, b, dt, speed, flapNow, this.time)
     if (flapNow) {
       // Effort: a flap that turns a hard dive around is a big one.
@@ -363,7 +367,7 @@ class HappyBirds extends RunnerGame<State> {
       matchOver: this.over,
       target: this.target,
       passAt: s.passAt[side],
-      speed: speedAt(s.flyT),
+      speed: speedAt(s.flyT, s.tempo),
     })
   }
 }

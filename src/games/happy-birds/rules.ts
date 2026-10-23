@@ -1,3 +1,4 @@
+import type { Difficulty } from '../../core/game.ts'
 import { circleRect, fall, flap, hash01, LANE_H } from '../../engines/runner/index.ts'
 
 /** Pure rules: lane-local units, no rendering. The course is a function of (seed, index). */
@@ -45,9 +46,20 @@ export function newBird(): Bird {
   return { y: LANE_H * 0.42, vy: 0, alive: true, dist: 0, pipes: 0, deadAt: -1, flapAt: -1 }
 }
 
-/** Scroll speed (units/s) after `t` seconds of flight: gently faster. */
-export function speedAt(t: number): number {
-  return Math.min(500, 320 + t * 3.2)
+/** Scroll speed (units/s) after `t` seconds of flight: gently faster, scaled by the match tempo. */
+export function speedAt(t: number, tempo = 1): number {
+  return Math.min(500, 320 + t * 3.2) * tempo
+}
+
+/**
+ * Against the computer its level also sets the pace: the course scrolls by
+ * faster (hard) or slower (easy). Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
 }
 
 /** Gap height of pipe i: it narrows to 215 by pipe 34, then sudden death past SUDDEN narrows it further. */
