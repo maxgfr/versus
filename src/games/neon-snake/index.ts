@@ -16,6 +16,7 @@ import {
   newBoard,
   RAMP,
   TICK,
+  tempoOf,
   tick,
   tickLen,
   want,
@@ -28,6 +29,8 @@ export interface State {
   ctl: StickLook[]
   /** When each snake last ate (s), for the bulge that travels down its body. */
   eatT: [number, number]
+  /** Tick-rate multiplier set by the computer's level (1 without a bot), fixed at setup. */
+  tempo: number
 }
 
 /** Round wins to take the match (best of three by default). */
@@ -75,7 +78,13 @@ class NeonSnake extends BaseGame<State> {
     )
     // The shell has just counted down: the first round starts at once.
     const b = newBoard(this.time - COUNT, ctx.rng)
-    return { b, rounds: roundsNew(this.target), ctl: this.looks(), eatT: [-9, -9] }
+    return {
+      b,
+      rounds: roundsNew(this.target),
+      ctl: this.looks(),
+      eatT: [-9, -9],
+      tempo: tempoOf(ctx.difficulty, ctx.bots),
+    }
   }
 
   private looks(): StickLook[] {
@@ -146,7 +155,7 @@ class NeonSnake extends BaseGame<State> {
     if (started) {
       // The longer the round, the faster the snakes: no round drags on.
       const into = this.time - s.b.go + (s.b.boost ?? 0)
-      s.b.len = tickLen(into)
+      s.b.len = tickLen(into, s.tempo)
       const level = Math.min(LEVELS, Math.floor((into / RAMP) * LEVELS + 1e-9))
       if (level > this.level) {
         this.level = level

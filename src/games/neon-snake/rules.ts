@@ -1,4 +1,4 @@
-import type { Side } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 
 /**
@@ -22,6 +22,17 @@ export const TICK = 0.13
 /** Fastest tick, reached RAMP seconds into a round. */
 export const TICK_MIN = 0.08
 export const RAMP = 45
+
+/**
+ * Against the computer its level also sets the pace: every tick of the ramp is
+ * shortened (hard) or stretched (easy). Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
+}
 /** Once at top speed, both snakes grow a cell every this many ticks, so no round runs forever. */
 export const GROW_EVERY = 6
 /** Countdown before a round starts moving (s). */
@@ -108,10 +119,13 @@ export function growing(b: Board, now: number): boolean {
   return now - b.go + (b.boost ?? 0) >= RAMP
 }
 
-/** Seconds between moves `t` seconds into a round: from TICK down to TICK_MIN over RAMP s. */
-export function tickLen(t: number): number {
+/**
+ * Seconds between moves `t` seconds into a round: from TICK down to TICK_MIN
+ * over RAMP s, divided by the match tempo.
+ */
+export function tickLen(t: number, tempo = 1): number {
   const k = Math.min(1, Math.max(0, t / RAMP))
-  return TICK + (TICK_MIN - TICK) * k
+  return (TICK + (TICK_MIN - TICK) * k) / tempo
 }
 
 export function inside(c: Cell): boolean {
