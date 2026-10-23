@@ -1,4 +1,4 @@
-import type { Side } from '../../core/game.ts'
+import type { Difficulty, Side } from '../../core/game.ts'
 
 /**
  * Snakes (light-trail duel), pure rules. Each bike rides a grid of cells and
@@ -24,9 +24,23 @@ export const TICK_MIN = 0.075
 /** Seconds shaved off the move time per move made. */
 const TICK_RAMP = 0.00022
 
-/** Seconds per move after `ticks` moves this round: the round gets faster and tenser. */
-export function tickLen(ticks: number): number {
-  return Math.max(TICK_MIN, TICK - ticks * TICK_RAMP)
+/**
+ * Seconds per move after `ticks` moves this round: the round gets faster and
+ * tenser. Divided by the match tempo.
+ */
+export function tickLen(ticks: number, tempo = 1): number {
+  return Math.max(TICK_MIN, TICK - ticks * TICK_RAMP) / tempo
+}
+
+/**
+ * Against the computer its level also sets the pace: every move of the ramp is
+ * quicker (hard) or slower (easy). Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
 }
 /** Countdown before the bikes start riding in each round (s). */
 export const COUNT = 2.4

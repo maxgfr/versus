@@ -19,6 +19,7 @@ import {
   newBoard,
   free,
   queueTurn,
+  tempoOf,
   tick,
   tickLen,
 } from './rules.ts'
@@ -31,6 +32,8 @@ export interface State {
   rounds: Rounds
   /** Turn buttons, so the online guest can draw them. */
   ctl: TurnLook[]
+  /** Move-rate multiplier set by the computer's level (1 without a bot), fixed at setup. */
+  tempo: number
 }
 
 /** Round wins to take the match (first to three of five by default). */
@@ -98,7 +101,12 @@ class Snakes extends BaseGame<State> {
     this.bots = b.bikes.map((k) =>
       ctx.bots[k.side] ? SnakeBot.of(ctx.rng.fork(), ctx.difficulty) : null,
     )
-    return { b, rounds: roundsNew(this.target), ctl: this.looks(b) }
+    return {
+      b,
+      rounds: roundsNew(this.target),
+      ctl: this.looks(b),
+      tempo: tempoOf(ctx.difficulty, ctx.bots),
+    }
   }
 
   private looks(b: Board): TurnLook[] {
@@ -174,8 +182,8 @@ class Snakes extends BaseGame<State> {
     if (started) {
       s.b.acc += dt
       let winner: Side | 'draw' | null = null
-      while (s.b.acc >= tickLen(s.b.ticks) && winner === null) {
-        s.b.acc -= tickLen(s.b.ticks)
+      while (s.b.acc >= tickLen(s.b.ticks, s.tempo) && winner === null) {
+        s.b.acc -= tickLen(s.b.ticks, s.tempo)
         for (const k of s.b.bikes) {
           const bot = this.bots[k.id]
           if (!bot || !k.alive) continue
@@ -337,7 +345,7 @@ class Snakes extends BaseGame<State> {
     })
     // Between fixed steps the bikes keep rolling: draw them where they are.
     const running = s.rounds.phase === 'play' && this.time >= s.b.go && !this.over
-    const p = (s.b.acc + (running ? alpha * STEP : 0)) / tickLen(s.b.ticks)
+    const p = (s.b.acc + (running ? alpha * STEP : 0)) / tickLen(s.b.ticks, s.tempo)
     renderSnakes(g, s, this.time, this.ctx.names, this.over, {
       p: Math.min(1, p),
       lean: this.lean.map((l) => l.value),

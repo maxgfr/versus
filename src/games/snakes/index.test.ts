@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { type GameContext, STEP } from '../../core/game.ts'
+import { type Difficulty, type GameContext, STEP } from '../../core/game.ts'
 import { Input, PlayerInput } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
-import createGame, { match } from './index.ts'
+import createGame, { match, type State } from './index.ts'
+import { TEMPO, TICK, TICK_MIN, tickLen } from './rules.ts'
 
 /** Computer vs computer: no touches, and sound and sparks are no-ops. */
-function botContext(target?: number): GameContext {
+function botContext(
+  target?: number,
+  difficulty: Difficulty = 'normal',
+  bots: [boolean, boolean] = [true, true],
+): GameContext {
   const noop = () => undefined
   return {
     stage: {
@@ -18,8 +23,8 @@ function botContext(target?: number): GameContext {
     audio: new Proxy({}, { get: () => noop }) as GameContext['audio'],
     rng: new Rng(7),
     mode: '1p',
-    difficulty: 'normal',
-    bots: [true, true],
+    difficulty,
+    bots,
     teams: false,
     names: ['Red', 'Blue'],
     local: 0,
@@ -104,5 +109,47 @@ describe('snakes: match length', () => {
   it('defaults to the spec length (best of five)', () => {
     expect(match.default).toBe(3)
     expect(match.unit).toBe('wins')
+  })
+})
+
+describe('snakes: tempo', () => {
+  /** Moves made in the first second of the first round. */
+  function movesInASecond(difficulty: Difficulty, bots?: [boolean, boolean]): number {
+    const game = createGame()
+    game.init(botContext(3, difficulty, bots))
+    for (let i = 0; i < 60; i++) game.update(STEP)
+    return (game.snapshot() as { s: State }).s.b.ticks
+  }
+
+  it('normal keeps the move ramp exactly as before', () => {
+    expect(TEMPO.normal).toBe(1)
+    expect(tickLen(0)).toBe(TICK)
+    expect(tickLen(1e6)).toBe(TICK_MIN)
+    expect(tickLen(40, TEMPO.normal)).toBe(tickLen(40))
+    expect(movesInASecond('normal')).toBe(8)
+  })
+
+  it('a hard computer makes the bikes move faster, an easy one slower', () => {
+    expect(movesInASecond('hard')).toBe(10)
+    expect(movesInASecond('easy')).toBe(6)
+    expect(tickLen(0) / tickLen(0, TEMPO.hard)).toBeGreaterThan(1.2)
+  })
+
+  it('without a computer the level does not touch the pace', () => {
+    expect(movesInASecond('hard', [false, false])).toBe(8)
+  })
+
+  it('bots still settle rounds, and beat an idle rider, at the hard tempo', () => {
+    // Two hard bots mirror each other into draws (as at normal pace), so check
+    // that rounds still resolve, then a full match against a rider that never turns.
+    const duel = createGame()
+    duel.init(botContext(2, 'hard'))
+    while ((duel.snapshot() as { s: State }).s.rounds.round < 3 && duel.time < 120)
+      duel.update(STEP)
+    expect((duel.snapshot() as { s: State }).s.rounds.round).toBeGreaterThanOrEqual(3)
+    const solo = createGame()
+    solo.init(botContext(2, 'hard', [false, true]))
+    while (solo.result === null && solo.time < 900) solo.update(STEP)
+    expect(solo.result?.winner).toBe(1)
   })
 })

@@ -223,6 +223,8 @@ function trails(g: Draw, s: State, now: number, p: number): void {
   const { cells, bikes } = s.b
   const r = s.rounds
   const c = g.ctx
+  // A faster match (hard computer) glows a little hotter.
+  const halo = s.tempo > 1 ? 0.32 : 0.22
   for (const k of bikes) {
     const col = bikeColour(k)
     const head = bikePos(k, p)
@@ -245,7 +247,7 @@ function trails(g: Draw, s: State, now: number, p: number): void {
       c.save()
       c.lineJoin = 'round'
       c.lineCap = 'round'
-      g.path(build, undefined, alpha(col, 0.22), CELL * 1.2)
+      g.path(build, undefined, alpha(col, halo), CELL * 1.2)
       g.path(build, undefined, shade(col, -0.35), CELL * 0.72)
       g.path(build, undefined, col, CELL * 0.58)
       g.path(build, undefined, alpha('#ffffff', 0.6), CELL * 0.16)
