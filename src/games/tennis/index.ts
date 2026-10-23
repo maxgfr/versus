@@ -7,7 +7,7 @@ import { MID, W } from '../../core/stage.ts'
 import { type Disc, fingerTarget } from '../../engines/puck/index.ts'
 import { type BotMemory, decide, newMemory, TUNING } from './bot.ts'
 import { type Look, type Mark, render } from './render.ts'
-import { type Ball, type Cmd, type Event, newWorld, step, type World } from './rules.ts'
+import { type Ball, type Cmd, type Event, newWorld, step, tempoOf, type World } from './rules.ts'
 
 interface State {
   w: World
@@ -49,7 +49,8 @@ class Tennis extends BaseGame<State> {
   protected setup(): State {
     const first: Side = this.ctx.rng.chance(0.5) ? 0 : 1
     const surface = this.ctx.rng.chance(0.5) ? 'clay' : 'grass'
-    return { w: newWorld(first, surface), marks: [], call: null, endAt: -1, winner: null }
+    const tempo = tempoOf(this.ctx.difficulty, this.ctx.bots)
+    return { w: newWorld(first, surface, tempo), marks: [], call: null, endAt: -1, winner: null }
   }
 
   private commands(dt: number): Cmd {
@@ -148,7 +149,7 @@ class Tennis extends BaseGame<State> {
           e.side,
         )
     } else if (e.kind === 'bounce') {
-      const sp = Math.hypot(s.w.ball.vx, s.w.ball.vy)
+      const sp = Math.hypot(s.w.ball.vx, s.w.ball.vy) * s.w.tempo
       audio.play('bounce', 0.95 + Math.min(0.3, sp / 4000))
       fx.puff(e.x, e.y, DUST[s.w.surface], 5 + Math.round(Math.min(6, sp / 250)))
       fx.ring(e.x, e.y, 'rgba(255,255,255,0.6)', 50 + Math.min(40, sp / 30))
@@ -219,13 +220,15 @@ class Tennis extends BaseGame<State> {
     for (const sp of this.squash) sp.update(dt)
     for (const p of this.pulse) p.update(dt)
     this.ballSquash.update(dt)
-    const sp = Math.hypot(w.ball.vx, w.ball.vy)
+    // On-screen pace: the ball's clock runs at the match tempo.
+    const sp = Math.hypot(w.ball.vx, w.ball.vy) * w.tempo
     if (w.phase === 'play') {
       this.roll += (sp / 21) * dt * 0.4
       if (sp > 1100) this.trail.push({ x: ball.x, y: ball.y, z: ball.z })
       else this.trail.shift()
     } else this.trail.length = 0
-    while (this.trail.length > 6) this.trail.shift()
+    // A faster match drags a longer trail.
+    while (this.trail.length > (w.tempo > 1 ? 9 : 6)) this.trail.shift()
     render(g, w, {
       ball,
       trail: this.trail,

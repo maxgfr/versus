@@ -87,8 +87,9 @@ export function intercept(
   let bounces = w.bounces
   let last: { x: number; y: number; t: number } | null = null
   const h = 1 / 60
+  // `t` is real time: the ball's own clock runs at the match tempo.
   for (let t = h; t < 2.5; t += h) {
-    fly(b, h)
+    fly(b, h * w.tempo)
     if (b.z <= 0 && b.vz < 0) {
       const on: Side = b.y < MID ? 1 : 0
       if (on !== side || bounces >= 1) break

@@ -1,4 +1,4 @@
-import { other, type Side } from '../../core/game.ts'
+import { type Difficulty, other, type Side } from '../../core/game.ts'
 import { MID, W } from '../../core/stage.ts'
 import { type Box, type Disc, disc, driveTo } from '../../engines/puck/index.ts'
 
@@ -42,6 +42,18 @@ const NET_CLEAR = 16
 export const HAND = 84
 export const POINT_PAUSE = 1.3
 
+/**
+ * Against the computer its level also sets the pace: the ball's flight runs on
+ * a faster (or slower) clock, so every shot keeps its arc but gets there
+ * sooner. Local 2P and online play at 1.
+ */
+export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
+
+/** The tempo of a match, fixed once at setup. */
+export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
+  return bots.some(Boolean) ? TEMPO[d] : 1
+}
+
 export interface Ball {
   x: number
   y: number
@@ -74,6 +86,8 @@ export interface World {
   /** Seconds left in each racket's swing (also its cooldown). */
   swing: [number, number]
   surface: 'clay' | 'grass'
+  /** Ball clock multiplier (1 = normal), fixed for the match. */
+  tempo: number
 }
 
 export type Reason = 'out' | 'short' | 'net' | 'double' | 'ace'
@@ -125,7 +139,7 @@ export const homeOf = (side: Side): { x: number; y: number } => ({
   y: side === 0 ? MID + 420 : MID - 420,
 })
 
-export function newWorld(first: Side, surface: 'clay' | 'grass'): World {
+export function newWorld(first: Side, surface: 'clay' | 'grass', tempo = 1): World {
   const blobs: [Disc, Disc] = [disc(W / 2, serveY(0), BLOB_R), disc(W / 2, serveY(1), BLOB_R)]
   const w: World = {
     ball: { x: W / 2, y: serveY(first), z: 0, vx: 0, vy: 0, vz: 0 },
@@ -140,6 +154,7 @@ export function newWorld(first: Side, surface: 'clay' | 'grass'): World {
     rally: 0,
     swing: [0, 0],
     surface,
+    tempo,
   }
   holdBall(w)
   return w
@@ -318,7 +333,7 @@ function swing(w: World, side: Side, ev: Event[]): void {
   w.hitter = side
   w.bounces = 0
   aim(b, landX, landY, airTime(vz, b.z) * (1 - power * POWER_QUICK))
-  const speed = Math.hypot(b.vx, b.vy)
+  const speed = Math.hypot(b.vx, b.vy) * w.tempo
   ev.push({ kind: 'hit', side, x: b.x, y: b.y, z: b.z, speed, rally: w.rally, power })
 }
 
@@ -359,7 +374,7 @@ export function step(w: World, dt: number, cmd: Cmd): Event[] {
     for (const side of [0, 1] as Side[]) moveBlob(w.blobs[side], cmd, side, h, from[side], k)
     const b = w.ball
     const prevY = b.y
-    fly(b, h)
+    fly(b, h * w.tempo)
     // Crossing the net below its tape is a fault by the side that hit.
     if (Math.sign(prevY - MID) !== Math.sign(b.y - MID) && b.z < NET_H) {
       point(w, other(w.hitter ?? other(w.server)), 'net', ev)
