@@ -251,16 +251,28 @@ function hook(w: World, side: Side, fly: Fly, now: number, out: FieldEvent[]): v
   out.push({ kind: 'catch', side, x: fly.x, y: fly.y, golden: fly.golden })
 }
 
+/** Distance from a fly to the stretch of tongue its tip swept this step (length `from` to `t.len`). */
+function sweptDist(side: Side, t: Tongue, from: number, fly: Fly): number {
+  const m = mouth(side)
+  const lo = Math.min(from, t.len)
+  const hi = Math.max(from, t.len)
+  const along = (fly.x - m.x) * t.dx + (fly.y - m.y) * t.dy
+  const l = Math.max(lo, Math.min(hi, along))
+  return Math.hypot(fly.x - (m.x + t.dx * l), fly.y - (m.y + t.dy * l))
+}
+
 /**
- * Tips that touch free flies catch them. When both tongues reach the same fly
- * on the same step, the tip nearer to it wins (not whoever is checked first).
+ * Tips that touch free flies catch them, anywhere along the stretch they swept
+ * this step (a fast tip moves farther than a fly is wide). When both tongues
+ * reach the same fly on the same step, the one passing nearer to it wins (not
+ * whoever is checked first). `from` is each tongue's length before this step's move.
  */
-function touches(w: World, now: number, out: FieldEvent[]): void {
-  const tips: (Vec | null)[] = ([0, 1] as Side[]).map((side) => {
+function touches(w: World, now: number, out: FieldEvent[], from: readonly number[]): void {
+  const live = ([0, 1] as Side[]).map((side) => {
     const t = w.frogs[side].tongue
-    return t.phase !== 'idle' && t.fly < 0 ? tipOf(side, t) : null
+    return t.phase !== 'idle' && t.fly < 0
   })
-  if (!tips[0] && !tips[1]) return
+  if (!live[0] && !live[1]) return
   const reach = FLY_R + TIP_R
   // Each tongue takes the nearest fly it touches.
   const best: [Fly | null, Fly | null] = [null, null]
@@ -268,9 +280,9 @@ function touches(w: World, now: number, out: FieldEvent[]): void {
   for (const fly of w.flies) {
     if (fly.held >= 0) continue
     for (const side of [0, 1] as Side[]) {
-      const tip = tips[side]
-      if (!tip) continue
-      const d = Math.hypot(fly.x - tip.x, fly.y - tip.y)
+      if (!live[side]) continue
+      const t = w.frogs[side].tongue
+      const d = sweptDist(side, t, from[side] ?? t.len, fly)
       if (d <= reach && d < bestD[side]) {
         bestD[side] = d
         best[side] = fly
@@ -343,6 +355,7 @@ export function stepWorld(
 ): FieldEvent[] {
   const out: FieldEvent[] = []
   stepFlies(w, dt, rng, frenzy)
+  const from = [0, 0]
   for (const side of [0, 1] as Side[]) {
     const f = w.frogs[side]
     if (f.queue && now - f.queue.t > QUEUE_TIME) f.queue = null
@@ -352,9 +365,10 @@ export function stepWorld(
       const m = mouth(side)
       out.push({ kind: 'shot', side, x: m.x, y: m.y })
     }
+    from[side] = f.tongue.len
     moveTongue(w, side, dt)
   }
-  touches(w, now, out)
+  touches(w, now, out, from)
   for (const side of [0, 1] as Side[]) settle(w, side, now, out)
   if (w.flies.length < FLY_COUNT + (frenzy ? FRENZY_EXTRA : 0)) {
     w.spawn -= dt

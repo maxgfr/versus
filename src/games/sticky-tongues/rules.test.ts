@@ -146,6 +146,17 @@ describe('sticky tongues: catching', () => {
     expect(w.flies.some((f) => f.id === 1)).toBe(false)
   })
 
+  it('a fast tip that sweeps over a fly between two steps still catches it on the way out', () => {
+    // The tip moves 55 units a step; this fly sits halfway between two of its
+    // positions, near the edge of its path, so neither position touches it.
+    const step = FLICK_MAX * STEP
+    const w = table([still(1, 542, 1500 - step * 6.5)])
+    fire(w.frogs[0], 0, 500, 1000, 0, FLICK_MAX)
+    run(w, new Rng(2), 0, 1, () => w.frogs[0].tongue.fly >= 0 || w.frogs[0].tongue.phase !== 'out')
+    expect(w.frogs[0].tongue.fly).toBe(1)
+    expect(w.frogs[0].tongue.len).toBeLessThan(step * 8)
+  })
+
   it('a golden fly is worth three', () => {
     const w = table([still(1, 500, 1300, true)])
     fire(w.frogs[0], 0, 500, 1000, 0)
