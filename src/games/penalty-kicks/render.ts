@@ -248,6 +248,11 @@ function glove(g: Draw, x: number, y: number, side: Side, angle: number): void {
   })
 }
 
+/** The reach ring drawn on the line during a dive: centred on the keeper, as `resolve` judges the save. */
+export function diveRing(x: number): { x: number; r: number } {
+  return { x, r: REACH_DIVE }
+}
+
 /** Gloved blob keeper: arms up when standing, stretched toward the dive, lying flat after. */
 function drawKeeper(
   g: Draw,
@@ -281,8 +286,10 @@ function drawKeeper(
     0.35,
   )
   // Reach ring on the line while a dive is on.
-  if (diving)
-    g.alpha(0.35, () => g.ring(x + dir * 40, LINE[side], REACH_DIVE, alpha(C.yellow, 0.7), 5))
+  if (diving) {
+    const ring = diveRing(x)
+    g.alpha(0.35, () => g.ring(ring.x, LINE[side], ring.r, alpha(C.yellow, 0.7), 5))
+  }
   // Gloves in the body frame: out to the sides when set, stretched over the head in a dive.
   const gl: [number, number, number][] =
     diving || lying

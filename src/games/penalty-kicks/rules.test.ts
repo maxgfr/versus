@@ -9,6 +9,7 @@ import {
   newKeeperMemory,
   TUNING,
 } from './bot.ts'
+import { diveRing } from './render.ts'
 import {
   type Cmd,
   crossX,
@@ -77,6 +78,25 @@ describe('a kick', () => {
     expect(standing.outcome).toBe('goal')
     const diving = kick(shotAt(650), 500, 1)
     expect(diving.outcome).toBe('save')
+  })
+
+  it('a diving keeper saves just what the reach ring drawn on the line covers', () => {
+    let checked = 0
+    for (let x = 280; x <= 720; x += 20) {
+      const w = newWorld()
+      w.phase = 'aim'
+      w.keepers[1].x = 450
+      step(w, STEP, { keepX: [null, null], dive: [0, 0], shot: shotAt(x) }, 5)
+      // A late dive: the ball reaches the line mid-dive, while the ring is shown.
+      for (let i = 0; i < 240 && (w.phase as World['phase']) !== 'result'; i++)
+        step(w, STEP, { keepX: [null, null], dive: [0, i === 12 ? 1 : 0], shot: null }, 5)
+      const k = w.keepers[1]
+      if (k.diveT <= 0) continue
+      const ring = diveRing(k.x)
+      expect(w.outcome).toBe(Math.abs(w.ball.x - ring.x) <= ring.r ? 'save' : 'goal')
+      checked++
+    }
+    expect(checked).toBeGreaterThan(15)
   })
 
   it('the keeper cannot move past the posts', () => {
