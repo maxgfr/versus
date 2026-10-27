@@ -134,6 +134,14 @@ export function stepTruck(
     t.v = 0
     t.boosting = false
     t.boost = Math.min(BOOST_MAX, t.boost + BOOST_REFILL * dt)
+    // Backed off over the lip of the pit it just jumped: it drops into it.
+    const pit = obstacleAt(seed, t.k - 1)
+    if (t.k > 0 && pit.kind === 'gap' && t.y <= 0 && t.x < pit.x + pit.len) {
+      t.k--
+      t.state = 'fall'
+      t.vy = 0
+      return 'fall'
+    }
     if (t.timer <= 0) {
       t.state = 'run'
       t.x = t.to
@@ -148,6 +156,13 @@ export function stepTruck(
       t.state = 'rise'
       t.timer = RISE_T
       t.x = obstacleAt(seed, t.k).x - CLIMB_OUT
+      // Never back onto an earlier pit: climb out before it, and jump it again.
+      let pit = obstacleAt(seed, t.k - 1)
+      while (t.k > 0 && pit.kind === 'gap' && t.x < pit.x + pit.len) {
+        t.k--
+        t.x = pit.x - CLIMB_OUT
+        pit = obstacleAt(seed, t.k - 1)
+      }
       t.y = -FALL_DEPTH
       t.vy = 0
       t.v = 0

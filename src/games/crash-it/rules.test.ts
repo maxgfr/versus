@@ -176,6 +176,40 @@ describe('crash it walls', () => {
     expect(t.vy).toBe(0)
   })
 
+  it('a truck bumped back over the pit it just jumped drops into it, never parks on air', () => {
+    // Seed 1: a pit at 1531..1714, then a wall at 2223 (the back-off ends at 1683).
+    const pit = obstacleAt(1, 1)
+    expect(pit.kind).toBe('gap')
+    const t = approach(1, 2, 300, CRUISE)
+    const evs: string[] = []
+    for (let f = 0; f < 60 * 4 && !(evs.includes('fall') && t.state === 'run'); f++) {
+      const e = stepTruck(t, 1, DT, false, false)
+      if (e) evs.push(e)
+      if (t.state === 'run' && t.y <= 0) {
+        expect(t.x >= pit.x && t.x < pit.x + pit.len).toBe(false)
+      }
+    }
+    expect(evs).toEqual(['bump', 'fall'])
+    // Out on the near side, facing that pit again.
+    expect(t.k).toBe(1)
+    expect(t.x).toBe(pit.x - CLIMB_OUT)
+  })
+
+  it('never climbs out of a pit onto an earlier one', () => {
+    for (let seed = 1; seed < 60; seed++)
+      for (let i = 1; i < 18; i++) {
+        const o = obstacleAt(seed, i)
+        if (o.kind !== 'gap') continue
+        const t = approach(seed, i, -1)
+        t.state = 'fall'
+        for (let f = 0; f < 120 && t.state === 'fall'; f++) stepTruck(t, seed, DT, false, false)
+        for (let j = 0; j <= i; j++) {
+          const p = obstacleAt(seed, j)
+          if (p.kind === 'gap') expect(t.x >= p.x && t.x < p.x + p.len).toBe(false)
+        }
+      }
+  })
+
   it('a bumped truck can build enough speed from the back-off point to smash the wall', () => {
     const { i } = firstOf(4, 'wall')
     const t = approach(4, i, 40, CRUISE)
