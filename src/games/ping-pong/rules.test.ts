@@ -188,6 +188,30 @@ describe('ball physics', () => {
     expect(right.ball.vx).toBeGreaterThan(0)
   })
 
+  it('a slanted ball clipping the back rim is returned; a ball already past the bat is not', () => {
+    // A diagonal ball whose path passes 100 from the bat centre (deep in its back rim).
+    const clip = newWorld(0)
+    const cb = clip.bats[0]
+    const s = 100 / Math.SQRT2
+    inPlay(clip, cb.x - s - 212, cb.y + s - 212, 1000, 1000)
+    clip.last = 1
+    let hit = false
+    for (let i = 0; i < 30 && !hit; i++)
+      hit = step(clip, STEP, idle(), new Rng(1)).some((e) => e.kind === 'hit')
+    expect(hit).toBe(true)
+    expect(clip.ball.vy).toBeLessThan(0)
+
+    // The ball has passed the bat; swiping the bat sideways onto it does not return it.
+    const late = newWorld(0)
+    const lb = late.bats[0]
+    inPlay(late, lb.x - 90, lb.y + 60, 0, 600)
+    late.last = 1
+    const cmd = idle()
+    cmd.target[0] = { x: lb.x - 400, y: lb.y }
+    const ev = step(late, STEP, cmd, new Rng(1))
+    expect(ev.some((e) => e.kind === 'hit')).toBe(false)
+  })
+
   it('speeds up each rally, up to the cap', () => {
     const w = newWorld(0)
     const bat = w.bats[0]

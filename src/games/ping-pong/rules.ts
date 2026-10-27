@@ -248,7 +248,9 @@ function batHit(w: World, side: Side, ev: Event[]): void {
   // return would otherwise catch the ball again within the same swing.
   if (w.last === side && w.phase === 'play') return
   if (dx * dx + dy * dy >= min * min) return
-  if (dir * dy < -b.r * 0.5) return
+  // Behind the bat's centre it only counts when the ball itself runs into the
+  // bat (a slanted ball clipping its back rim), not when the bat chases it down.
+  if (dir * dy < -b.r * 0.5 && b.vx * dx + b.vy * dy >= 0) return
   if ((b.vx - bat.vx) * dx + (b.vy - bat.vy) * dy >= 0) return
   w.rally++
   w.speed = Math.min(MAX_SPEED, BASE_SPEED + w.rally * RAMP) * w.tempo
