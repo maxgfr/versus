@@ -18,8 +18,13 @@ export const MILL_T = 14
 export const DRAG = 0.95
 /** Ball speed (world units / s) at full power. */
 export const VMAX = 1500
-/** Faster than this and the ball lips out of the cup instead of dropping in. */
+/** Slower than this and a ball inside the rim drops at once. */
 export const SINK_SPEED = 430
+/**
+ * Seconds a ball must spend over the cup to fall in: a faster ball still drops
+ * if it crosses near the centre (a long chord), and lips out over the edge.
+ */
+export const DROP_T = 0.075
 export const REST_SPEED = 14
 export const MAX_STROKES = 6
 /** A roll is cut short after this many seconds, so a stuck ball cannot stall the match. */
@@ -75,6 +80,8 @@ export interface Ball extends Disc {
   state: BallState
   /** Game time when it dropped (cosmetic: the sink animation). */
   holedAt: number
+  /** Seconds it has spent over the cup on this pass. */
+  over: number
 }
 
 export interface Table {
@@ -258,6 +265,7 @@ export function startTable(geo: Geo): Table {
     strokes: 0,
     state: 'play',
     holedAt: -1,
+    over: 0,
   })
   return { geo, balls: [ball(0), ball(1)] }
 }
@@ -371,11 +379,15 @@ function moveBall(t: Table, b: Ball, h: number, ev?: Event[]): void {
   }
 }
 
-/** Drop a ball into the cup when it is inside the rim and slow enough. */
-function checkCup(t: Table, b: Ball, ev?: Event[]): void {
+/** Drop a ball into the cup when it is inside the rim and slow enough, or has crossed enough of it. */
+function checkCup(t: Table, b: Ball, h: number, ev?: Event[]): void {
   const c = t.geo.cup
-  if (Math.hypot(b.x - c.x, b.y - c.y) >= CUP_R) return
-  if (Math.hypot(b.vx, b.vy) >= SINK_SPEED) return
+  if (Math.hypot(b.x - c.x, b.y - c.y) >= CUP_R) {
+    b.over = 0
+    return
+  }
+  b.over += h
+  if (Math.hypot(b.vx, b.vy) >= SINK_SPEED && b.over < DROP_T) return
   b.state = 'holed'
   b.x = c.x
   b.y = c.y
@@ -399,7 +411,7 @@ export function frame(t: Table, ev?: Event[], dt = FRAME): void {
       const c = collideDynamic(a, b, 1, 1, 0.9)
       if (c && c.speed > 40) ev?.push({ kind: 'ball', x: c.x, y: c.y, speed: c.speed })
     }
-    for (const ball of t.balls) if (ball.state === 'play') checkCup(t, ball, ev)
+    for (const ball of t.balls) if (ball.state === 'play') checkCup(t, ball, h, ev)
   }
   for (const b of t.balls) {
     if (b.state === 'play' && Math.hypot(b.vx, b.vy) < REST_SPEED) {

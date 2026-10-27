@@ -87,6 +87,25 @@ describe('mini golf course', () => {
     expect(u.balls[0].state).toBe('play')
   })
 
+  it('a brisk putt through the middle of the cup drops; the same pace over the edge lips out', () => {
+    const roll = (off: number) => {
+      const t = startTable(makeGeo(new Rng(7)))
+      t.geo.walls = []
+      t.geo.bumpers = []
+      t.geo.mills = []
+      t.geo.slopes = []
+      const b = t.balls[0]
+      t.balls[1].state = 'holed'
+      b.x = t.geo.cup.x + off
+      b.y = t.geo.cup.y + CUP_R + 10
+      b.vy = -800
+      for (let i = 0; i < 20 && b.state === 'play'; i++) frame(t)
+      return b.state
+    }
+    expect(roll(0)).toBe('holed')
+    expect(roll(CUP_R - 4)).toBe('play')
+  })
+
   it('picks a ball up after six strokes without dropping it', () => {
     const t = startTable(makeGeo(new Rng(3)))
     const b = t.balls[1]
