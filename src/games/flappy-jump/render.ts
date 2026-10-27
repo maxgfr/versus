@@ -10,7 +10,7 @@ import {
   type Climber,
   metres,
   type Plat,
-  PLAT_W,
+  platW,
   platformsBetween,
   platX,
   solidFor,
@@ -143,7 +143,7 @@ function chevron(g: Draw, x: number, y: number, dir: 1 | -1): void {
 function platform(g: Draw, p: Plat, time: number, c: Climber, cam: number): void {
   const y = yOf(p.h, cam)
   const x = platX(p, time)
-  const w = p.i === 0 ? 260 : PLAT_W
+  const w = platW(p)
   const solid = solidFor(c, p, time)
   const crumble = c.crumble.find(([i]) => i === p.i)
   if (p.kind === 'break' && crumble && !solid) {

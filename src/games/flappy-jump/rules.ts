@@ -24,6 +24,8 @@ export const ACCEL = 9
 /** Half-width of the kangaroo's feet. */
 export const CW = 30
 export const PLAT_W = 150
+/** The start platform is wider than the rest. */
+export const START_W = 260
 export const PLAT_GAP = 240
 /** A broken platform crumbles this long after the first bounce on it. */
 export const CRUMBLE = 0.25
@@ -135,6 +137,9 @@ export function platformAt(seed: number, i: number): Plat {
   }
 }
 
+/** Width of a platform's top, for landing on it and drawing it. */
+export const platW = (p: Plat): number => (p.i === 0 ? START_W : PLAT_W)
+
 /** Centre x of a platform at time `t`. */
 export function platX(p: Plat, t: number): number {
   return p.kind === 'move' ? p.x + p.amp * Math.sin(t * p.spd + p.phase) : p.x
@@ -191,7 +196,7 @@ export function stepClimber(
   if (c.vh < 0) {
     for (const p of platformsBetween(seed, c.h - 20, prev + 20)) {
       if (!(prev >= p.h && c.h <= p.h)) continue
-      const off = Math.abs(wrapDelta(c.x, platX(p, now))) / (PLAT_W / 2 + CW)
+      const off = Math.abs(wrapDelta(c.x, platX(p, now))) / (platW(p) / 2 + CW)
       if (off > 1) continue
       if (!solidFor(c, p, now)) continue
       c.h = p.h

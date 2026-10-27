@@ -21,6 +21,7 @@ import {
   PLAT_GAP,
   PLAT_W,
   ROUND_T,
+  START_W,
   solidFor,
   stepClimber,
   wrapDelta,
@@ -150,6 +151,16 @@ describe('flappy jump climber', () => {
     const c = dropOnto(s, 1, PLAT_W / 2 + CW + 40)
     for (let t = DT; t < 2; t += DT) stepClimber(s, c, DT, t, 0)
     expect(c.h).toBeLessThan(platformAt(s, 1).h)
+  })
+
+  it('lands anywhere on the wide start platform it is drawn on', () => {
+    // It used to be as narrow as the others: a kangaroo on its edge fell through.
+    const c = dropOnto(1, 0, START_W / 2 + CW - 5)
+    const ev: string[] = []
+    for (let t = DT; t < 2 && !ev.includes('bounce'); t += DT)
+      ev.push(...stepClimber(1, c, DT, t, 0))
+    expect(ev).toContain('bounce')
+    expect(c.alive).toBe(true)
   })
 
   it('a broken platform crumbles after its first bounce and then cannot be landed on', () => {
