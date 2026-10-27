@@ -178,6 +178,24 @@ describe('sling puck rules', () => {
     expect(ev.some((e) => e.kind === 'cross')).toBe(false)
   })
 
+  it('a held puck cannot shove another one through the midline wall', () => {
+    const t = newTable(2)
+    const [free, held] = t.pucks as [Table['pucks'][number], Table['pucks'][number]]
+    free.x = held.x = 200
+    free.y = MID + 80
+    held.y = MID + 300
+    const ev: Event[] = []
+    applyCmd(t, 0, { grab: { idx: 1, ptr: 1, x: 200, y: MID + 300 } }, ev, STEP)
+    // Push straight up into the wall, well away from the gap.
+    for (let i = 0; i < 40; i++) {
+      applyCmd(t, 0, { finger: { x: 200, y: MID + 300 - i * 6 } }, ev, STEP)
+      step(t, STEP, ev)
+    }
+    expect(free.half).toBe(0)
+    expect(free.y).toBeGreaterThan(MID)
+    expect(ev.some((e) => e.kind === 'cross')).toBe(false)
+  })
+
   it('keeps pucks inside the table', () => {
     const t = newTable(1)
     const p = t.pucks[0]!

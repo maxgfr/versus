@@ -295,7 +295,8 @@ function collideMidline(p: Puck, gap: number, events: Event[]): void {
   // Over the gap only the posts matter, and they were handled above.
   if (Math.abs(p.x - W / 2) < gap / 2) return
   if (Math.abs(p.y - MID) >= band) return
-  const sgn = p.y < MID ? -1 : 1
+  // Back to the half it is on, even if a held puck shoved it past the line: only the gap lets it through.
+  const sgn = p.half === 1 ? -1 : 1
   p.y = MID + sgn * band
   if (p.vy * sgn < 0) {
     const speed = Math.abs(p.vy)
@@ -357,6 +358,8 @@ export function step(t: Table, dt: number, events: Event[]): void {
         if (c && c.speed > 80) events.push({ kind: 'hit', x: c.x, y: c.y, speed: c.speed })
       }
     }
+    // A puck squeezed against the midline by a held one must not be pushed through it.
+    for (const p of t.pucks) if (!p.held) collideMidline(p, gap, events)
   }
   for (const p of t.pucks) {
     if (p.held) {
