@@ -4,6 +4,7 @@ import { Rng } from '../../core/rng.ts'
 import { ShipBot } from './bot.ts'
 import {
   BALL_LIFE,
+  BALL_SPEED,
   type Drive,
   type Ev,
   HP,
@@ -205,6 +206,31 @@ describe('ship physics', () => {
     stepWorld(w, idle(w), STEP, ev)
     expect(red.hp).toBe(HP)
     expect(ev.some((e) => e.k === 'hit')).toBe(false)
+  })
+
+  it('a ball crossing the drawn bow or stern hits, one clear of the hull does not', () => {
+    // Blue sails down the screen: its drawn hull runs from y 644 (stern) to 775 (bow).
+    for (const [y, hits] of [
+      [700 + 65, true],
+      [700 - 45, true],
+      [700 + 95, false],
+    ] as const) {
+      const w = duel()
+      w.balls.push({
+        id: 9,
+        salvo: 60,
+        owner: 0,
+        side: 0,
+        x: 300,
+        y,
+        vx: BALL_SPEED,
+        vy: 0,
+        born: w.t,
+      })
+      const ev: Ev[] = []
+      for (let t = 0; t < BALL_LIFE + 0.1; t += STEP) stepWorld(w, idle(w), STEP, ev)
+      expect(ev.some((e) => e.k === 'hit')).toBe(hits)
+    }
   })
 
   it('a round is decided by the first sinking and a draw when both go down', () => {

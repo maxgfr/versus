@@ -5,6 +5,12 @@ import { angleTo, separate } from '../../engines/arena/index.ts'
 /** Pure ship physics and broadside combat. No rendering, no randomness. */
 
 export const SHIP_R = 30
+/**
+ * Cannonballs hit the hull as drawn (56 behind to 75 ahead of the centre): a
+ * capsule of radius SHIP_R round the keel, from STERN behind to BOW ahead.
+ */
+export const BOW = 42
+export const STERN = 24
 /** Half the beam: cannons sit just outside the hull. */
 export const HULL_HALF = 22
 export const MAX_SPEED = 170
@@ -285,6 +291,14 @@ function salvo(w: World, s: Ship, foe: Ship, ev: Ev[]): void {
   })
 }
 
+/** Squared distance from (x, y) to a ship's keel line (the capsule's spine). */
+function hullDist2(s: Ship, x: number, y: number): number {
+  const fx = Math.cos(s.a)
+  const fy = Math.sin(s.a)
+  const k = Math.max(-STERN, Math.min(BOW, (x - s.x) * fx + (y - s.y) * fy))
+  return (x - s.x - fx * k) ** 2 + (y - s.y - fy * k) ** 2
+}
+
 /** Advance the world one step. `drives[i]` steers `ships[i]`. Events are appended to `ev`. */
 export function stepWorld(
   w: World,
@@ -357,7 +371,7 @@ export function stepWorld(
     let hit = false
     for (const s of w.ships) {
       if (!s.alive || s.side === b.side) continue
-      if ((s.x - b.x) ** 2 + (s.y - b.y) ** 2 > (SHIP_R + BALL_R) ** 2) continue
+      if (hullDist2(s, b.x, b.y) > (SHIP_R + BALL_R) ** 2) continue
       s.hp--
       s.hitT = w.t
       spent.add(b.salvo)
