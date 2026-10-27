@@ -30,6 +30,8 @@ const PER_SEG = 40
 export const TRACK_W = 150
 /** Half-width of the car's footprint, for car-to-car bumps. */
 export const CAR_R = 34
+/** The footprint is a capsule: this far either side of the centre, along the heading (nose at ~48). */
+export const CAR_HALF = 15
 /** Bounciness of car-to-car bumps (0 = dead stop, 1 = perfect bounce). */
 export const BUMP = 0.3
 /** Top speed on the track (units / s). */
@@ -285,8 +287,11 @@ export function stepRace(
   // speed that is aimed at each other is traded (a softer bump, not a brake).
   const [a, b] = cars
   if (a && b) {
-    const dx = b.x - a.x
-    const dy = b.y - a.y
+    // Closest points of the two footprints (capsules along each heading), so a
+    // nose that reaches the car ahead touches it, not only when the centres meet.
+    const [pa, pb] = closestPoints(a, b)
+    const dx = pb.x - pa.x
+    const dy = pb.y - pa.y
     const dd = Math.hypot(dx, dy)
     const min = CAR_R * 2
     if (dd < min && dd > 1e-6) {
@@ -306,10 +311,41 @@ export function stepRace(
         b.vy += ny * j
         // Only a real knock gets the sparks, not two cars resting side by side.
         if (closing < -40)
-          ev.push({ k: 'bump', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, speed: -closing })
+          ev.push({ k: 'bump', x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, speed: -closing })
       }
     }
   }
+}
+
+/** The closest pair of points on two cars' footprint spines (a's first). */
+function closestPoints(a: Car, b: Car): [Pt, Pt] {
+  const ux = Math.cos(a.h) * CAR_HALF
+  const uy = Math.sin(a.h) * CAR_HALF
+  const vx = Math.cos(b.h) * CAR_HALF
+  const vy = Math.sin(b.h) * CAR_HALF
+  // Spines a0 + s·2u and b0 + t·2v, s and t in 0..1.
+  const a0 = { x: a.x - ux, y: a.y - uy }
+  const b0 = { x: b.x - vx, y: b.y - vy }
+  const d1 = { x: 2 * ux, y: 2 * uy }
+  const d2 = { x: 2 * vx, y: 2 * vy }
+  const r = { x: a0.x - b0.x, y: a0.y - b0.y }
+  const aa = d1.x * d1.x + d1.y * d1.y
+  const ee = d2.x * d2.x + d2.y * d2.y
+  const f = d2.x * r.x + d2.y * r.y
+  const c = d1.x * r.x + d1.y * r.y
+  const bb = d1.x * d2.x + d1.y * d2.y
+  const den = aa * ee - bb * bb
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
+  let s = den > 1e-9 ? clamp01((bb * f - c * ee) / den) : 0
+  let t = (bb * s + f) / ee
+  if (t < 0 || t > 1) {
+    t = clamp01(t)
+    s = clamp01((bb * t - c) / aa)
+  }
+  return [
+    { x: a0.x + d1.x * s, y: a0.y + d1.y * s },
+    { x: b0.x + d2.x * t, y: b0.y + d2.y * t },
+  ]
 }
 
 function driveCar(c: Car, d: Drive, off: number, dt: number, now: number, ev: Ev[]): void {

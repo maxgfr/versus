@@ -4,6 +4,8 @@ import { Rng } from '../../core/rng.ts'
 import { RaceBot } from './bot.ts'
 import {
   buildTrack,
+  CAR_HALF,
+  CAR_R,
   type Car,
   controlPoints,
   COUNT,
@@ -214,6 +216,24 @@ describe('driving', () => {
     stepRace(cars, tr, [NO_DRIVE, NO_DRIVE], STEP, 0, 0, 1e9, ev)
     expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeGreaterThan(10)
     expect(ev.some((e) => e.k === 'bump')).toBe(true)
+  })
+
+  it('a nose that runs into the car ahead bumps it, as drawn', () => {
+    const tr = trackFor(2)
+    const cars = [gridCar(tr, 0, 0), gridCar(tr, 1, 0)]
+    const a = cars[0] as Car
+    const b = cars[1] as Car
+    // Nose to tail, both facing right: the cars are drawn ~98 long, so 84 apart they overlap.
+    a.h = 0
+    b.h = 0
+    b.x = a.x + 84
+    b.y = a.y
+    a.vx = 400
+    b.vx = 100
+    const ev: Ev[] = []
+    stepRace(cars, tr, [NO_DRIVE, NO_DRIVE], STEP, 0, 0, 1e9, ev)
+    expect(ev.some((e) => e.k === 'bump')).toBe(true)
+    expect(b.x - a.x).toBeGreaterThanOrEqual(CAR_R * 2 + CAR_HALF * 2 - 0.5)
   })
 })
 
