@@ -73,8 +73,10 @@ class FruitDuel extends BaseGame<State> {
         const seg = bot.step(lane, this.time, dt)
         if (seg) paths.push(seg)
       } else {
-        // Every finger on this side's half cuts along the path it travelled this step.
-        for (const p of ctx.input.player(side).held.values()) {
+        // Every finger on this side's half cuts along the path it travelled this
+        // step, a finger lifted this step too: a quick flick lifts mid-stroke.
+        const pi = ctx.input.player(side)
+        for (const p of [...pi.held.values(), ...pi.ups]) {
           const a = frame(side, p.px, p.py)
           const b = frame(side, p.x, p.y)
           paths.push([a.x, a.y, b.x, b.y])

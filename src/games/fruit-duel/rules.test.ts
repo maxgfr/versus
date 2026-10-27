@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { STEP } from '../../core/game.ts'
+import { type GameContext, type Side, STEP } from '../../core/game.ts'
+import { PlayerInput } from '../../core/input.ts'
+import type { Stage } from '../../core/stage.ts'
 import { SliceBot } from './bot.ts'
+import factory, { type State } from './index.ts'
 import {
   BOMB,
   BOMB_PENALTY,
@@ -178,6 +181,45 @@ describe('fruit duel rules', () => {
     expect(l.trail.every((p) => p.t === 1)).toBe(true)
     expect(l.trail[0]?.b).toBe(1)
     expect(l.trail.length).toBe(2)
+  })
+})
+
+describe('fruit duel game', () => {
+  it('a flick that lifts off right after crossing a fruit still cuts it', () => {
+    const red = new PlayerInput(0)
+    const noop = () => undefined
+    const ctx = {
+      stage: { edge: (side: Side) => (side === 0 ? 1800 : 0) } as unknown as Stage,
+      input: { player: (side: Side) => (side === 0 ? red : new PlayerInput(1)) },
+      fx: new Proxy({}, { get: () => noop }),
+      audio: new Proxy({}, { get: () => noop }),
+      rng: new Rng(7),
+      mode: '2p',
+      difficulty: 'normal',
+      bots: [false, false],
+      teams: false,
+      names: ['Red', 'Blue'],
+      local: 0,
+      seed: 7,
+    } as unknown as GameContext
+    const game = factory() as unknown as {
+      init(c: GameContext): void
+      update(dt: number): void
+      s: State
+    }
+    game.init(ctx)
+    const l = game.s.lanes[0]
+    l.next = Infinity
+    l.fruit.push({ id: 99, kind: 0, x: 500, y: 1300, vx: 0, vy: 0, rot: 0, vr: 0 })
+    red.press(1, 300, 1300)
+    game.update(STEP)
+    red.endStep()
+    // Across the fruit and off the glass before the next step.
+    red.move(1, 700, 1300)
+    red.release(1)
+    game.update(STEP)
+    expect(l.fruit).toHaveLength(0)
+    expect(l.score).toBe(FRUITS[0]?.value)
   })
 })
 
