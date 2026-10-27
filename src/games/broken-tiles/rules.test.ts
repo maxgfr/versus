@@ -10,6 +10,7 @@ import {
   DASH_BOOST,
   DASH_CD,
   DROP,
+  GAP,
   dash,
   type Ev,
   GONE,
@@ -32,6 +33,7 @@ import {
   tileAt,
   tileCentre,
   X0,
+  Y0,
 } from './rules.ts'
 
 const NONE: [number, number][] = [
@@ -153,6 +155,27 @@ describe('tiles', () => {
     expect(supported(b, gapX, row)).toBe(true)
     // Beyond the grid's edge, further than REACH: nothing holds it.
     expect(supported(b, X0 - REACH - 1, row)).toBe(false)
+  })
+
+  it('walking diagonally across the crossing of four live tiles does not fall', () => {
+    const b = newBoard(0)
+    const s = Math.SQRT1_2
+    for (let k = 1; k <= 40; k++)
+      stepBoard(
+        b,
+        [
+          [s, -s],
+          [0, 0],
+        ],
+        STEP,
+        k * STEP,
+        [],
+      )
+    // It went through the gaps' crossing between its start tile and the next one up-right.
+    expect(b.p[0].alive).toBe(true)
+    const crossX = X0 + 3 * (TILE + GAP) - GAP / 2
+    const crossY = Y0 + 8 * (TILE + GAP) - GAP / 2
+    expect(supported(b, crossX, crossY)).toBe(true)
   })
 })
 

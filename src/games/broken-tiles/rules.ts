@@ -217,12 +217,19 @@ export function live(b: Board, i: number): boolean {
   return s !== undefined && s !== GONE
 }
 
+/** Diagonal reach: where the gaps cross, only the diagonals land on the four tiles around. */
+const DIAG = REACH * Math.SQRT1_2
+
 const REACH_PTS: readonly (readonly [number, number])[] = [
   [0, 0],
   [REACH, 0],
   [-REACH, 0],
   [0, REACH],
   [0, -REACH],
+  [DIAG, DIAG],
+  [-DIAG, DIAG],
+  [DIAG, -DIAG],
+  [-DIAG, -DIAG],
 ]
 
 /** A body at (x, y) is held up if any sample point of its footprint is on a live tile. */
