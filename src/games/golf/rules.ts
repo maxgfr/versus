@@ -27,6 +27,12 @@ export const SAND_POWER = 0.6
 /** A hole's score is capped here: past it the ball is picked up. */
 export const MAX_STROKES = 8
 export const CUP_R = 26
+/**
+ * Seconds a rolling ball must spend over the cup to fall in even when it is
+ * faster than `CUP_SPEED`: a brisk putt through the middle drops, one over the
+ * edge still lips out.
+ */
+export const DROP_T = 0.18
 export const GREEN_R = 150
 export const TEE_R = 92
 /** Half the width of the fairway. */
@@ -56,8 +62,8 @@ export interface Hole {
   ponds: Blob[]
 }
 
-/** A ball in the air (`air`) or on the ground. */
-export type Ball = Shell & { air: boolean }
+/** A ball in the air (`air`) or on the ground; `over` is the time it has rolled over the cup. */
+export type Ball = Shell & { air: boolean; over: number }
 
 /** Friction per second on the ground: the speed decays as exp(-k t). */
 const FRICTION: Record<Surface, number> = {
@@ -195,7 +201,7 @@ export function newState(rng: Rng, first: Side, wind: number, count = HOLES): St
 }
 
 export function restBall(p: Pt): Ball {
-  return { x: p.x, y: p.y, z: 0, vx: 0, vy: 0, vz: 0, t: 0, air: false }
+  return { x: p.x, y: p.y, z: 0, vx: 0, vy: 0, vz: 0, t: 0, air: false, over: 0 }
 }
 
 export function surfaceAt(h: Hole, x: number, y: number): Surface {
@@ -212,12 +218,23 @@ export function surfaceAt(h: Hole, x: number, y: number): Surface {
 export function plan(h: Hole, from: Pt, shot: ShotParams): Ball {
   if (surfaceAt(h, from.x, from.y) === 'green') {
     const v = PUTT_SPEED * shot.power
-    return { x: from.x, y: from.y, z: 0, vx: shot.dx * v, vy: shot.dy * v, vz: 0, t: 0, air: false }
+    return {
+      x: from.x,
+      y: from.y,
+      z: 0,
+      vx: shot.dx * v,
+      vy: shot.dy * v,
+      vz: 0,
+      t: 0,
+      air: false,
+      over: 0,
+    }
   }
   const k = surfaceAt(h, from.x, from.y) === 'sand' ? SAND_POWER : 1
   return {
     ...launch(from.x, from.y, { dx: shot.dx, dy: shot.dy, power: shot.power * k }, BALL),
     air: true,
+    over: 0,
   }
 }
 
@@ -282,8 +299,11 @@ export function stepBall(b: Ball, dt: number, wind: number, h: Hole): Hit | null
   const surface = surfaceAt(h, b.x, b.y)
   if (surface === 'water') return { kind: 'water', x: b.x, y: b.y, surface }
   const speed = Math.hypot(b.vx, b.vy)
-  if (dist(b, h.cup) <= CUP_R && speed <= CUP_SPEED)
-    return { kind: 'sunk', x: h.cup.x, y: h.cup.y, surface }
+  if (dist(b, h.cup) <= CUP_R) {
+    b.over += dt
+    if (speed <= CUP_SPEED || b.over >= DROP_T)
+      return { kind: 'sunk', x: h.cup.x, y: h.cup.y, surface }
+  } else b.over = 0
   if (speed < REST_SPEED) return { kind: 'rest', x: b.x, y: b.y, surface }
   return null
 }

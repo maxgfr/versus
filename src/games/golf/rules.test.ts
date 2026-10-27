@@ -4,6 +4,7 @@ import { Rng } from '../../core/rng.ts'
 import { choose } from './bot.ts'
 import {
   advance,
+  CUP_R,
   done,
   fire,
   type Hole,
@@ -116,6 +117,14 @@ describe('golf strokes', () => {
     expect(weak.kind).toBe('rest')
     expect(strong.kind === 'sunk' || strong.kind === 'rest').toBe(true)
     expect(strong.y).toBeLessThan(weak.y)
+  })
+
+  it('a brisk putt through the middle of the cup drops; the same pace over the edge lips out', () => {
+    const h = flat()
+    const putt = (off: number) =>
+      runShot(h, { x: 500 + off, y: 600 }, { dx: 0, dy: -1, power: 0.9 }, 0).kind
+    expect(putt(0)).toBe('sunk')
+    expect(putt(CUP_R - 2)).toBe('rest')
   })
 
   it('wind pushes a lob sideways', () => {
