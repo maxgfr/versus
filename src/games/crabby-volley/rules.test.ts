@@ -247,6 +247,25 @@ describe('crabby volley rules', () => {
     expect(w.why).toBe('net')
   })
 
+  it('the landing spot of a ball flying wide is past the line, where it goes out', () => {
+    // The marker used to bounce it back off the side line onto the far sand.
+    const rng = new Rng(6)
+    const w = newWorld(false, 0, rng)
+    for (const c of w.crabs) c.x = -999
+    toss(w, 800, 1300, 500, -500, 200, 1000)
+    const land = landingOf(w.ball)
+    expect(land?.x).toBeGreaterThan(W)
+    for (let i = 0; i < 60 * 3 && w.phase === 'rally'; i++)
+      step(
+        w,
+        STEP,
+        none(w),
+        w.crabs.map(() => false),
+        rng,
+      )
+    expect(w.why).toBe('out')
+  })
+
   it('a fourth touch in a row is a point for the rival', () => {
     const rng = new Rng(6)
     const w = newWorld(false, 0, rng)

@@ -209,23 +209,14 @@ export function hopCrab(c: Crab, targetX: number): boolean {
   return true
 }
 
-/** Where the ball lands if nothing touches it: ground point and time. */
+/**
+ * Where the ball lands if nothing touches it: ground point and time. Nothing
+ * bounces it back in, so a ball flying past a line lands beyond it (and is out).
+ */
 export function landingOf(b: Ball): { x: number; y: number; t: number } | null {
   if (b.z <= 0 && b.vz <= 0) return { x: b.x, y: b.y, t: 0 }
   const t = (b.vz + Math.sqrt(b.vz * b.vz + 2 * G * b.z)) / G
-  let x = b.x + b.vx * t
-  let y = b.y + b.vy * t
-  const lo = COURT.x0 + BALL_R
-  const hi = COURT.x1 - BALL_R
-  const s = hi - lo
-  x = (((x - lo) % (2 * s)) + 2 * s) % (2 * s)
-  if (x > s) x = 2 * s - x
-  x += lo
-  const top = COURT.y0 + BALL_R
-  const bottom = COURT.y1 - BALL_R
-  if (y < top) y = 2 * top - y
-  if (y > bottom) y = 2 * bottom - y
-  return { x, y, t }
+  return { x: b.x + b.vx * t, y: b.y + b.vy * t, t }
 }
 
 /**
