@@ -35,6 +35,8 @@ export interface StickLook {
 }
 
 const SPIKE_H = 70
+/** The drawn blob's radius: its hitbox, so blobs that bump touch and do not sink into each other. */
+export const BODY_R = BLOB_R
 const STEEL = '#59607e'
 
 /** Each tile's spike height and telegraph (0..1), worked out once per frame. */
@@ -305,7 +307,7 @@ function blob(
 ): void {
   const [px, py] = at
   const col = SIDE[side]
-  const r = BLOB_R * 1.25
+  const r = BODY_R
   const dead = p.died >= 0
   const k = dead ? Math.min(1, (f.t - p.died) / 0.6) : 0
   const hurtNow = !dead && f.t - p.hit < 0.3

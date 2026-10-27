@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { SpikeBot } from './bot.ts'
+import { BODY_R } from './render.ts'
 import {
   BLOB_R,
   CAP,
@@ -225,6 +226,30 @@ describe('dash', () => {
     const bump = ev.find((e) => e.k === 'bump')
     expect(bump && bump.k === 'bump' && bump.speed).toBeGreaterThan(400)
     expect(b.x - bx).toBeGreaterThan(TILE * 0.6)
+  })
+
+  it('two blobs pushing into each other are drawn touching, not sunk into each other', () => {
+    const f = floorAt(4, 6)
+    f.next = 1e9
+    f.fighters[1].x = f.fighters[0].x + 200
+    f.fighters[1].y = f.fighters[0].y
+    let gap = Infinity
+    for (let i = 0; i < 120; i++) {
+      stepFloor(
+        f,
+        new Rng(1),
+        [
+          { jx: 1, jy: 0 },
+          { jx: -1, jy: 0 },
+        ],
+        STEP,
+        [],
+      )
+      const [a, b] = f.fighters
+      gap = Math.min(gap, Math.hypot(b.x - a.x, b.y - a.y))
+    }
+    // The body is drawn up to 1.02 r wide (its pear shape).
+    expect(2 * BODY_R * 1.02 - gap).toBeLessThan(2)
   })
 })
 
