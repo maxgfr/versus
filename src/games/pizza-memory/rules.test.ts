@@ -193,6 +193,19 @@ describe('pizza memory game', () => {
     })
   }
 
+  it('the computer remembers the very first order, not only the later ones', () => {
+    // It used to memorise only from the second order on, so a hard bot guessed its way through round 1.
+    let right = 0
+    for (let seed = 1; seed <= 20; seed++) {
+      const game = factory()
+      game.init(ctxFor([true, true], 'hard', seed))
+      const snap = () => (game.snapshot() as { s: State }).s
+      while (snap().phase !== 'after') game.update(1 / 60)
+      right += snap().done.filter((d) => d === true).length
+    }
+    expect(right).toBeGreaterThanOrEqual(36)
+  })
+
   it('a human rebuilds an order from the tray and a wrong pick ends the attempt', () => {
     const ctx = ctxFor([false, true], 'hard', 13)
     const game = factory()

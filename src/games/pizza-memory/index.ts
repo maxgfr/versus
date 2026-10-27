@@ -85,6 +85,7 @@ class PizzaMemory extends BaseGame<State> {
     const rng = this.ctx.rng
     const first: Side = rng.chance(0.5) ? 0 : 1
     const order = makeOrder(rng, START_LEN)
+    this.memorise(order.length)
     return {
       round: 0,
       order,
@@ -158,11 +159,15 @@ class PizzaMemory extends BaseGame<State> {
     s.builtAt = [[], []]
     s.press = [null, null]
     this.shown = 0
-    for (const side of [0, 1] as Side[]) {
-      if (this.isBot(side))
-        this.known[side] = memorise(s.order.length, this.ctx.difficulty, this.ctx.rng)
-    }
+    this.memorise(s.order.length)
     this.ctx.audio.play('swish', 1.05)
+  }
+
+  /** The computer takes in the new order as it is shown (the first one included). */
+  private memorise(len: number): void {
+    for (const side of [0, 1] as Side[]) {
+      if (this.isBot(side)) this.known[side] = memorise(len, this.ctx.difficulty, this.ctx.rng)
+    }
   }
 
   private beginBuild(): void {
