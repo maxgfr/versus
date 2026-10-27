@@ -1,4 +1,4 @@
-import type { Difficulty, Side } from '../../core/game.ts'
+import { type Difficulty, type Side, STEP } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 import { driveTo, halfBox, type Disc, disc, rink } from '../../engines/puck/index.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -180,22 +180,20 @@ function point(w: World, side: Side, why: 'land' | 'net' | 'touches', ev: Event[
   ev.push({ kind: 'point', side, why })
 }
 
-/** Where the ball lands if nothing touches it: ground point and time (or null if it never does). */
+/**
+ * Where the ball lands if nothing touches it: ground point and time (or null if
+ * it never does). It is flown forward with the real flight, so a ball coming
+ * off a wall (which takes pace off it) is shown where it really comes down.
+ */
 export function landingOf(b: Ball): { x: number; y: number; t: number } | null {
   if (b.z <= 0 && b.vz <= 0) return { x: b.x, y: b.y, t: 0 }
-  const t = (b.vz + Math.sqrt(b.vz * b.vz + 2 * G * b.z)) / G
-  let x = b.x + b.vx * t
-  let y = b.y + b.vy * t
-  // Fold into the court, like the walls do.
-  const lo = COURT.x0 + BALL_R
-  const hi = COURT.x1 - BALL_R
-  const span = hi - lo
-  x = (((x - lo) % (2 * span)) + 2 * span) % (2 * span)
-  if (x > span) x = 2 * span - x
-  x += lo
-  if (y < COURT.y0 + BALL_R) y = 2 * (COURT.y0 + BALL_R) - y
-  if (y > COURT.y1 - BALL_R) y = 2 * (COURT.y1 - BALL_R) - y
-  return { x, y, t }
+  const c: Ball = { ...b }
+  const h = STEP / SUBSTEPS
+  for (let t = h; t < 6; t += h) {
+    fly(c, h)
+    if (c.z <= 0 && c.vz <= 0) return { x: c.x, y: c.y, t }
+  }
+  return null
 }
 
 /**

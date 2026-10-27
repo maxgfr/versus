@@ -9,6 +9,7 @@ import {
   G,
   MAX_TOUCH,
   SPIKE_FULL,
+  landingOf,
   newWorld,
   step,
   TEMPO,
@@ -55,6 +56,26 @@ describe('beach ball rules', () => {
     toss(w2, 500, 300, 0, 0, 2, -10)
     run(w2, rng, [null, null], (e) => e.some((x) => x.kind === 'point'))
     expect(w2.score).toEqual([1, 0])
+  })
+
+  it('the landing marker shows where a ball off the side wall really comes down', () => {
+    // Straight down the court; off the right wall; off the left wall and the far end.
+    const throws: [number, number, number][] = [
+      [500, 0, -400],
+      [800, 1400, -500],
+      [250, -1700, -900],
+    ]
+    for (const [x, vx, vy] of throws) {
+      const rng = new Rng(1)
+      const w = newWorld(false, 0, rng)
+      w.blobs.length = 0
+      toss(w, x, 1400, vx, vy, 120, 1000)
+      const land = landingOf(w.ball)
+      const ev = run(w, rng, [null, null], (e) => e.some((k) => k.kind === 'land'))
+      const real = ev.find((e) => e.kind === 'land')
+      if (!land || real?.kind !== 'land') throw new Error('no landing')
+      expect(Math.hypot(real.x - land.x, real.y - land.y)).toBeLessThan(6)
+    }
   })
 
   it('a blob bumps the ball toward the rival, and a high ball is out of reach', () => {
