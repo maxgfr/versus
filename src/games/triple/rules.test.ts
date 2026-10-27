@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Audio } from '../../core/audio.ts'
 import type { Difficulty, GameContext, Side } from '../../core/game.ts'
+import { frame } from '../../core/frame.ts'
 import { Fx } from '../../core/fx/fx.ts'
 import { Input } from '../../core/input.ts'
 import type { Stage } from '../../core/stage.ts'
@@ -362,6 +363,31 @@ describe('triple game', () => {
     expect(t).toBe(3)
     expect(snap().score[0]).toBe(before - 1)
     expect(snap().lockUntil[0]).toBeGreaterThan(game.time)
+  })
+
+  it('the computer drops its plan when the rival takes a card it has already picked', () => {
+    for (const seed of [1, 6, 11]) {
+      const ctx = ctxFor([false, true], 'hard', seed)
+      const game = factory()
+      game.init(ctx)
+      const snap = () => (game.snapshot() as { s: State }).s
+      while (snap().sel[1].length !== 1) game.update(1 / 60)
+      // Red takes a triple through the card Blue has just picked.
+      const s = snap()
+      const set = findSets(s.table).find((t) => t.includes(s.sel[1][0] as number)) ?? []
+      let id = 1
+      for (const slot of set) {
+        const c = tableGrid(s.table.length)[slot] as { x: number; y: number }
+        const w = frame(0, c.x, c.y)
+        ctx.input.player(0).press(id++, w.x, w.y)
+      }
+      game.update(1 / 60)
+      ctx.input.endStep()
+      expect(snap().score[0]).toBe(1)
+      // Hard never slips: finishing the old plan would make a wrong triple.
+      for (let k = 0; k < 60 * 20; k++) game.update(1 / 60)
+      expect(snap().lockUntil[1]).toBe(-1)
+    }
   })
 
   it('pickTriple always returns a real triple, and nothing when there is none', () => {

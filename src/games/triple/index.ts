@@ -200,7 +200,9 @@ class Triple extends BaseGame<State> {
       return
     }
     const slot = plan[0] as number
-    if (s.table[slot] !== this.ids[side][0] || this.time < (s.placedAt[slot] ?? 0)) {
+    // A card it already picked can leave with the rival's triple: it is no longer selected.
+    const lost = s.sel[side].length !== 3 - plan.length
+    if (lost || s.table[slot] !== this.ids[side][0] || this.time < (s.placedAt[slot] ?? 0)) {
       // The cards changed under it (the rival took them): start over.
       s.sel[side] = []
       this.plan[side] = []
