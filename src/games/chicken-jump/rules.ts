@@ -9,9 +9,9 @@ import { hash01 } from '../../engines/runner/index.ts'
 
 /** Chicken centre x in the lane, fixed on screen. */
 export const RUN_X = 240
-/** Half-width of the chicken's body and its hitbox height. */
+/** Half-width of the chicken's body and its hitbox height (feet to the top of the drawn head). */
 export const CH_HALF = 22
-export const CH_TOP = 68
+export const CH_TOP = 130
 /** Ground line (feet), measured from the lane's top. */
 export const GROUND = 700
 export const GRAV = 2000

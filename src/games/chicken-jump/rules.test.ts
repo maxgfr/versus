@@ -221,6 +221,24 @@ describe('chicken jump motion', () => {
     expect(c.eggs).toBe(1)
   })
 
+  it('an egg that passes through the chicken’s head is collected', () => {
+    const seed = 1
+    let id = 0
+    while (!eggAt(seed, id)) id++
+    const e = eggAt(seed, id)
+    if (!e) throw new Error('no egg')
+    const c = newChicken()
+    c.dist = e.x - RUN_X - 60
+    c.grounded = false
+    // The head is drawn about 80 to 130 above the feet.
+    for (let k = 0; k < 60; k++) {
+      c.h = e.h - 110
+      c.vh = 0
+      stepChicken(seed, c, DT, 240, false, false, k * DT)
+    }
+    expect(c.eggs).toBeGreaterThan(0)
+  })
+
   it('the speed grows with the round, up to a cap', () => {
     expect(speedAt(0)).toBeLessThan(speedAt(30))
     expect(speedAt(1000)).toBe(620)
