@@ -20,7 +20,7 @@ import {
   toyOf,
   towerTop,
 } from './rules.ts'
-import { rebuild, simulateDrop } from './sim.ts'
+import { pieceBody, rebuild, simulateDrop } from './sim.ts'
 import { bottomOf, isConvex } from './toy.ts'
 
 const Mx = Matter as unknown as M
@@ -121,6 +121,33 @@ describe('animal stack rules', () => {
     expect(y).not.toBeNull()
     expect(bottomOf(toyOf(3), ISLAND.x, y as number, 0)).toBeCloseTo(ISLAND.top, 5)
     expect(landingOf([], 3, ISLAND.x + ISLAND.w / 2 + 300, 0)).toBeNull()
+  })
+
+  it('previews the landing where the piece really first touches the tower', () => {
+    const tower = simulateDrop(Mx, [], 0, ISLAND.x, 0).bodies
+    for (const [k, dx, a] of [
+      [0, -80, Math.PI / 4],
+      [1, -80, Math.PI / 4],
+      [2, 80, Math.PI / 4],
+      [9, 0, 0],
+    ] as const) {
+      const x = ISLAND.x + dx
+      const pre = landingOf(tower, k, x, a) as number
+      const w = rebuild(Mx, tower)
+      const body = pieceBody(Mx, k, x, pre - 30, a)
+      w.add(99, body, k)
+      let touch: number | null = null
+      Mx.Events.on(w.engine, 'collisionStart', (e) => {
+        if (
+          touch === null &&
+          e.pairs.some((p) => p.bodyA.parent === body || p.bodyB.parent === body)
+        )
+          touch = body.position.y
+      })
+      for (let i = 0; i < 120 && touch === null; i++) w.step(1 / 60)
+      expect(touch).not.toBeNull()
+      expect(Math.abs((touch as unknown as number) - pre), toyOf(k).name).toBeLessThan(15)
+    }
   })
 })
 

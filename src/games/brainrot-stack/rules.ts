@@ -2,7 +2,7 @@ import type { Side } from '../../core/game.ts'
 import type { BodySnap } from '../../engines/ragdoll/index.ts'
 import { hash01 } from '../../engines/runner/index.ts'
 import { CAST } from './cast.ts'
-import { bottomOf, topIn, topOf, type Toy } from './toy.ts'
+import { columnOf, topOf, type Toy } from './toy.ts'
 
 /** Pure rules for Brainrot Stack: the cast, the island, the claw, and who toppled what. */
 
@@ -97,11 +97,15 @@ export function spanOf(t: Toy, a: number): { x0: number; x1: number } {
   return { x0, x1 }
 }
 
+/** Vertical lines the drop preview sweeps across a falling piece. */
+const COLUMNS = 96
+
 /**
  * Where piece `k`, let go at x turned by `a`, would first touch down if it fell
- * straight: the centre height at which its lowest point meets the tower (or the
- * island). Null when nothing is under it (it would fall into the sea). A
- * preview only: the real fall can still slide and tip.
+ * straight: the centre height at which some part of its underside meets the
+ * tower (or the island) right below it. Null when nothing is under it (it
+ * would fall into the sea). A preview only: the real fall can still slide and
+ * tip.
  */
 export function landingOf(
   bodies: readonly BodySnap[],
@@ -111,15 +115,26 @@ export function landingOf(
 ): number | null {
   const t = toyOf(k)
   const span = spanOf(t, a)
-  const x0 = x + span.x0
-  const x1 = x + span.x1
-  let surface = Infinity
-  for (const b of bodies) {
-    if (b.y > FALL_LINE) continue
-    surface = Math.min(surface, topIn(toyOf(b.k), b.x, b.y, b.a, x0, x1))
+  // Only blocks that can reach under the piece.
+  const tower = bodies.filter(
+    (b) =>
+      b.y <= FALL_LINE &&
+      b.x + toyOf(b.k).radius >= x + span.x0 &&
+      b.x - toyOf(b.k).radius <= x + span.x1,
+  )
+  let best = Infinity
+  // Column by column: the piece's underside there against the highest surface there.
+  for (let i = 0; i <= COLUMNS; i++) {
+    const px = x + span.x0 + 0.5 + ((span.x1 - span.x0 - 1) * i) / COLUMNS
+    const under = columnOf(t, 0, 0, a, px - x)
+    if (!under) continue
+    let surface = Infinity
+    for (const b of tower) {
+      const col = columnOf(toyOf(b.k), b.x, b.y, b.a, px)
+      if (col && col.top < surface) surface = col.top
+    }
+    if (Math.abs(px - ISLAND.x) <= ISLAND.w / 2) surface = Math.min(surface, ISLAND.top)
+    if (surface - under.bot < best) best = surface - under.bot
   }
-  const onIsland = x1 > ISLAND.x - ISLAND.w / 2 && x0 < ISLAND.x + ISLAND.w / 2
-  if (onIsland) surface = Math.min(surface, ISLAND.top)
-  if (!Number.isFinite(surface)) return null
-  return surface - bottomOf(t, 0, 0, a)
+  return Number.isFinite(best) ? best : null
 }

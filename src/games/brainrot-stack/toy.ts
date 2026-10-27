@@ -237,32 +237,43 @@ export function bottomOf(t: Toy, _x: number, y: number, a: number): number {
 }
 
 /**
- * The top of `t` (posed at x, y, a) within the horizontal band [x0, x1], or
- * Infinity if no part of it reaches into that band. Used for the drop preview.
+ * Where the vertical line at `px` crosses `t` (posed at x, y, a): its highest
+ * and lowest points on that line, or null if the line misses it. Used for the
+ * drop preview.
  */
-export function topIn(t: Toy, x: number, y: number, a: number, x0: number, x1: number): number {
+export function columnOf(
+  t: Toy,
+  x: number,
+  y: number,
+  a: number,
+  px: number,
+): { top: number; bot: number } | null {
   const s = Math.sin(a)
   const c = Math.cos(a)
   let top = Infinity
+  let bot = -Infinity
   for (const part of t.parts) {
     const n = part.pts.length / 2
     for (let i = 0; i < n; i++) {
-      // Sample each edge so wide flat tops count, not only their corners.
-      const ax = part.pts[i * 2] as number
-      const ay = part.pts[i * 2 + 1] as number
-      const bx = part.pts[((i + 1) % n) * 2] as number
-      const by = part.pts[((i + 1) % n) * 2 + 1] as number
-      for (let k = 0; k < 4; k++) {
-        const lx = ax + ((bx - ax) * k) / 4
-        const ly = ay + ((by - ay) * k) / 4
-        const wx = x + lx * c - ly * s
-        if (wx < x0 || wx > x1) continue
-        const wy = y + lx * s + ly * c
+      const lx0 = part.pts[i * 2] as number
+      const ly0 = part.pts[i * 2 + 1] as number
+      const lx1 = part.pts[((i + 1) % n) * 2] as number
+      const ly1 = part.pts[((i + 1) % n) * 2 + 1] as number
+      const ax = x + lx0 * c - ly0 * s
+      const ay = y + lx0 * s + ly0 * c
+      const bx = x + lx1 * c - ly1 * s
+      const by = y + lx1 * s + ly1 * c
+      if ((px < ax && px < bx) || (px > ax && px > bx)) continue
+      // A vertical edge on the line counts with both ends.
+      const k = bx === ax ? 0 : (px - ax) / (bx - ax)
+      const ys = bx === ax ? [ay, by] : [ay + (by - ay) * k]
+      for (const wy of ys) {
         if (wy < top) top = wy
+        if (wy > bot) bot = wy
       }
     }
   }
-  return top
+  return top === Infinity ? null : { top, bot }
 }
 
 // ---------- physics ----------
@@ -346,19 +357,23 @@ export interface ToyLook {
 export function drawToy(g: Draw, t: Toy, x: number, y: number, a: number, o: ToyLook = {}): void {
   const c = g.ctx
   const sq = o.squash ?? 1
+  // Squash about the lowest point, so a landing never sinks into (or lifts off) what is under it.
+  const foot = sq === 1 ? 0 : bottomOf(t, 0, 0, a)
   c.save()
   if (o.ghost !== undefined) c.globalAlpha *= o.ghost
   // Lip: the silhouette nudged down the screen reads as thickness.
   c.save()
-  c.translate(x, y + 8)
+  c.translate(x, y + 8 + foot)
   c.scale(2 - sq, sq)
+  c.translate(0, -foot)
   c.rotate(a)
   trace(c, t.parts)
   c.fillStyle = shade(t.color, -0.5)
   c.fill()
   c.restore()
-  c.translate(x, y)
+  c.translate(x, y + foot)
   c.scale(2 - sq, sq)
+  c.translate(0, -foot)
   c.rotate(a)
   trace(c, t.parts)
   c.lineJoin = 'round'
