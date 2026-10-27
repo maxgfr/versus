@@ -107,6 +107,17 @@ describe('cornhole: throwing', () => {
     expect(bagPoints(s.bags[0] as Bag)).toBe(3)
   })
 
+  it('a bag that comes down past the centre of the hole, but over it, drops in', () => {
+    // It used to land inside the hole's rim too fast to be caught and slide out the far side.
+    const s = newState(0)
+    const shot = shotTo(0, { x: HOLE.x, y: HOLE.y - 30 })
+    const p = landingOf(0, shot)
+    expect(Math.hypot(p.x - HOLE.x, p.y - HOLE.y)).toBeLessThan(HOLE.r - BAG_R)
+    toss(s, shot)
+    settle(s)
+    expect(s.bags[0]?.st).toBe('hole')
+  })
+
   it('a bag that lands near the far end slides off the board', () => {
     const s = newState(0)
     toss(s, shotTo(0, { x: 500, y: 520 }))

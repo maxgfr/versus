@@ -178,6 +178,8 @@ function moveBag(b: Bag, dt: number, ev: Event[]): void {
     if (b.z > 0 || b.vz > 0) return
     b.z = 0
     b.since = 0
+    // Came down over the hole: there is no board under it to slide on.
+    if (inHole(b.x, b.y)) return sink(b, ev)
     if (onBoard(b.x, b.y)) {
       const speed = Math.hypot(b.vx, b.vy, b.vz)
       b.st = 'slide'
@@ -199,16 +201,7 @@ function moveBag(b: Bag, dt: number, ev: Event[]): void {
   }
   if (b.st !== 'slide') return
   const sp = Math.hypot(b.vx, b.vy)
-  if (inHole(b.x, b.y) && sp < CAPTURE) {
-    b.st = 'hole'
-    b.since = 0
-    b.x = HOLE.x
-    b.y = HOLE.y
-    b.vx = 0
-    b.vy = 0
-    ev.push({ kind: 'hole', side: b.side, x: HOLE.x, y: HOLE.y })
-    return
-  }
+  if (inHole(b.x, b.y) && sp < CAPTURE) return sink(b, ev)
   const ns = Math.max(0, sp - DECEL * dt)
   if (sp > 0) {
     const k = ns / sp
@@ -283,13 +276,19 @@ function reseat(c: Bag, ev: Event[]): void {
     c.st = 'off'
     c.since = 0
     ev.push({ kind: 'off', side: c.side, x: c.x, y: c.y })
-  } else if (inHole(c.x, c.y)) {
-    c.st = 'hole'
-    c.since = 0
-    c.x = HOLE.x
-    c.y = HOLE.y
-    ev.push({ kind: 'hole', side: c.side, x: HOLE.x, y: HOLE.y })
-  }
+  } else if (inHole(c.x, c.y)) sink(c, ev)
+}
+
+/** The bag drops into the hole. */
+function sink(b: Bag, ev: Event[]): void {
+  b.st = 'hole'
+  b.since = 0
+  b.x = HOLE.x
+  b.y = HOLE.y
+  b.vx = 0
+  b.vy = 0
+  b.vz = 0
+  ev.push({ kind: 'hole', side: b.side, x: HOLE.x, y: HOLE.y })
 }
 
 const live = (b: Bag): boolean => b.st === 'air' || b.st === 'slide' || b.st === 'rest'
