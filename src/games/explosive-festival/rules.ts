@@ -409,7 +409,10 @@ export function stepWorld(
     gone.add(b)
     const cells = blastCells(w, b.i, b.range)
     for (const i of cells) {
-      if (!w.flames.some((f) => f.i === i)) w.flames.push({ i, t: FLAME_T })
+      // A fresh blast over a dying flame relights it for the full time.
+      const lit = w.flames.find((f) => f.i === i)
+      if (lit) lit.t = FLAME_T
+      else w.flames.push({ i, t: FLAME_T })
       const other = w.bombs.find((k) => k.i === i && !gone.has(k) && !due.includes(k))
       if (other) due.push(other)
       if (w.tiles[i] === CRATE) {

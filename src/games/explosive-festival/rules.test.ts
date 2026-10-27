@@ -237,6 +237,24 @@ describe('festival bombs', () => {
     expect(ev.filter((e) => e.k === 'boom').length).toBe(2)
   })
 
+  it('a later blast over a dying flame burns for its full life there too', () => {
+    // Two bombs in column 0 whose crosses share row 10; the second goes off 0.4 s later.
+    const w = field({ red: [8, 14], blue: [8, 0] })
+    w.bombs.push({ i: idx(0, 12), owner: 0, t: 0.01, range: 2, through: [] })
+    w.bombs.push({ i: idx(0, 8), owner: 1, t: 0.4, range: 2, through: [] })
+    run(w, Math.ceil(0.6 / STEP))
+    // The second cross is still burning, all of it: no cold gap where the first one was.
+    expect(w.flames.some((f) => f.i === idx(0, 9))).toBe(true)
+    expect(w.flames.some((f) => f.i === idx(0, 10))).toBe(true)
+    // A player stepping into the shared cell is caught.
+    const red = w.players[0] as Player
+    const c = centreOf(0, 10)
+    red.x = c.x
+    red.y = c.y
+    run(w, 1)
+    expect(red.alive).toBe(false)
+  })
+
   it('flames die out after their short life', () => {
     const w = field({ red: [5, 5], blue: [10, 0] })
     w.flames.push({ i: idx(8, 8), t: FLAME_T })
