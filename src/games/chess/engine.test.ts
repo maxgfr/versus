@@ -7,6 +7,7 @@ import {
   fromFen,
   fromOf,
   inCheck,
+  keyOf,
   legal,
   make,
   MATE,
@@ -100,6 +101,27 @@ describe('chess engine search', () => {
     const e = fromFen('4k3/8/8/3q4/8/8/3R4/4K3 w - - 0 1')
     const best = rootScores(e, 4, 50000)[0]
     expect(best && nameOf(fromOf(best.move)) + nameOf(toOf(best.move))).toBe('d2d5')
+  })
+
+  it('scores a root move back into a position already seen as a draw', () => {
+    // 1.Nf3 Nf6 2.Ng1 Ng8: Nf3 again walks back into the position after 1.Nf3.
+    const c = new Chess()
+    const seen = new Set([keyOf(fromFen(c.fen()))])
+    for (const san of ['Nf3', 'Nf6', 'Ng1', 'Ng8']) {
+      c.move(san)
+      seen.add(keyOf(fromFen(c.fen())))
+    }
+    const e = fromFen(c.fen())
+    const avoid = (m: number) => {
+      make(e, m)
+      const k = keyOf(e)
+      unmake(e)
+      return seen.has(k)
+    }
+    const nf3 = rootScores(e, 2, 30000, avoid, 40).find(
+      (s) => nameOf(fromOf(s.move)) + nameOf(toOf(s.move)) === 'g1f3',
+    )
+    expect(nf3?.score).toBe(-40)
   })
 
   it('evaluates the start as level', () => {

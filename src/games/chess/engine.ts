@@ -568,9 +568,11 @@ export function rootScores(
     const scored: Scored[] = []
     let a = -Infinity
     for (const m of order) {
+      // Asked before the move is made: `avoid` plays it from the root position.
+      const repeats = avoid(m)
       make(e, m)
       // Full window for every root move: the bot wants true scores to pick among (and add its noise).
-      const v = avoid(m) ? -contempt : -search(c, depth - 1, -Infinity, Infinity, 1)
+      const v = repeats ? -contempt : -search(c, depth - 1, -Infinity, Infinity, 1)
       unmake(e)
       if (c.stop) break
       if (v > a) a = v
