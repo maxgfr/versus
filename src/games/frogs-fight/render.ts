@@ -465,6 +465,13 @@ function marker(
 }
 
 /**
+ * A hop to pad `i` would shove this rival: it stands there, or is flying there
+ * on its own hop. A frog that has landed off a shove still has `shoved` set.
+ */
+export const shoveMarked = (rival: Frog, i: number): boolean =>
+  rival.pad === i && !(rival.air && rival.shoved)
+
+/**
  * Where each human's frog can hop, outlined in their shape and colour; a rival
  * within reach gets the yellow target and one chevron per pad the shove would
  * send it (solid when it would go into the pond). A tap buffered mid-air is
@@ -481,7 +488,7 @@ function hints(g: Draw, w: World, now: number, show: readonly boolean[]): void {
     for (const i of hopsFor(w, f)) {
       const { x, y } = padXY(i)
       const k = 0.5 + 0.5 * Math.sin(now * 4 + i * 0.7)
-      if (rival && rival.pad === i && !rival.shoved) {
+      if (rival && shoveMarked(rival, i)) {
         const dc = Math.sign(padCol(i) - padCol(f.pad))
         const dr = Math.sign(padRow(i) - padRow(f.pad))
         const d = padDist(i, f.pad)

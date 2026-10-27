@@ -3,6 +3,7 @@ import type { Difficulty } from '../../core/game.ts'
 import { STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { FrogBot } from './bot.ts'
+import { shoveMarked } from './render.ts'
 import {
   BUFFER_T,
   COLS,
@@ -133,6 +134,18 @@ describe('frog pond', () => {
     settle(w)
     expect(blue.air).toBe(false)
     expect(w.uses[padIdx(2, 3)]).toBe(1)
+  })
+
+  it('a rival that landed off a shove is still marked as a target, and is shoved again', () => {
+    const [w, red, blue] = stage([2, 5], [2, 4])
+    stepWorld(w, [padIdx(2, 4), undefined], STEP, [])
+    settle(w)
+    expect(blue.pad).toBe(padIdx(2, 3))
+    expect(hopsFor(w, red)).toContain(blue.pad)
+    expect(shoveMarked(blue, blue.pad)).toBe(true)
+    stepWorld(w, [padIdx(2, 3), undefined], STEP, [])
+    wait(w, HOP_T)
+    expect(blue.pad).toBe(padIdx(2, 2))
   })
 
   it('a long leap shoves twice as far', () => {
