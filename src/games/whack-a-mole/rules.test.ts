@@ -50,6 +50,14 @@ describe('whack a mole rules', () => {
     expect(holeAt(500, 880)).toBe(-1)
   })
 
+  it('a tap on the top of a risen head whacks that hole, not the one behind it', () => {
+    // A risen mole's head is drawn 80 above its hole with a radius of 62.
+    const { x, y } = holeXY(4)
+    for (const dy of [-80, -120, -140]) expect(holeAt(x, y + dy)).toBe(4)
+    // The front lip of the hole still counts.
+    expect(holeAt(x, y + 50)).toBe(4)
+  })
+
   it('the schedule is seeded and covers the whole match', () => {
     const a = scheduleFor(new Rng(12), false)
     const b = scheduleFor(new Rng(12), false)

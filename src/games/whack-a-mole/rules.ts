@@ -24,6 +24,12 @@ export const QUICK = 0.5
 export const QUICK_BONUS = 1
 /** Taps further than this from a hole's centre miss it (world units). */
 export const REACH = 130
+/**
+ * A pop stands up out of its hole, so taps are measured from this far above
+ * the hole's centre: the top of a risen head is still that hole, not the one
+ * behind it.
+ */
+export const LIFT = 50
 
 /**
  * Against the computer its level also sets the pace: pops come thicker and
@@ -61,7 +67,7 @@ export function holeAt(x: number, y: number): number {
   let bestD = REACH * REACH
   for (let i = 0; i < HOLES; i++) {
     const h = holeXY(i)
-    const d = (h.x - x) ** 2 + (h.y - y) ** 2
+    const d = (h.x - x) ** 2 + (h.y - LIFT - y) ** 2
     if (d <= bestD) {
       bestD = d
       best = i
