@@ -19,6 +19,8 @@ import {
 
 /** The pitch: a rounded rink with goal mouths; each end leaves room for a scoreboard behind the net. */
 export const RINK = rink({ y0: 200, y1: 1600, goal: 360 })
+/** Depth of each net behind its goal line: a disc that slides into a mouth stops at the netting. */
+export const NET_D = 74
 export const PLAYER_R = 74
 export const BALL_R = 46
 /** Seconds before a disc can be flicked again. */
@@ -176,6 +178,19 @@ function fullTime(w: World, ev: Event[]): void {
   ev.push({ kind: 'golden' })
 }
 
+/** The back of the net: the engine's goal pocket has side walls only. */
+function stopAtNet(p: Disc): void {
+  const top = RINK.y0 - NET_D + p.r
+  const bottom = RINK.y1 + NET_D - p.r
+  if (p.y < top) {
+    p.y = top
+    p.vy = Math.abs(p.vy) * 0.7
+  } else if (p.y > bottom) {
+    p.y = bottom
+    p.vy = -Math.abs(p.vy) * 0.7
+  }
+}
+
 /**
  * Advance one fixed step. Flicks apply first; then the discs, the ball and the
  * rink are integrated in substeps, with contacts reported as events.
@@ -208,6 +223,7 @@ export function step(w: World, dt: number, cmd: Cmd): Event[] {
       integrate(p, h, DRAG_PLAYER)
       capSpeed(p, MAX_PLAYER)
       collideWalls(p, RINK, 0.7)
+      stopAtNet(p)
     }
     integrate(b, h, DRAG_BALL)
     const wall = collideWalls(b, RINK, 0.9)

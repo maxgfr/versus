@@ -5,7 +5,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { Disc } from '../../engines/puck/index.ts'
-import { BALL_R, cooldownOf, GOAL_PAUSE, RINK, type World } from './rules.ts'
+import { BALL_R, cooldownOf, GOAL_PAUSE, NET_D, RINK, type World } from './rules.ts'
 
 export interface Look {
   ball: Disc
@@ -28,7 +28,6 @@ export interface Look {
 
 const BAND_T = 118
 const BAND_B = 1682
-const NET_D = 74
 const GRASS = '#2f8c48'
 const GRASS_DARK = '#287a3e'
 const GOAL_HALF = RINK.goal / 2

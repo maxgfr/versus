@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { type Difficulty, type Side, STEP } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
-import { disc } from '../../engines/puck/index.ts'
+import { type Disc, disc } from '../../engines/puck/index.ts'
 import { decide, type BotMemory, judge, newMemory } from './bot.ts'
 import {
   BALL_R,
@@ -13,8 +13,10 @@ import {
   GOAL_PAUSE,
   homeOf,
   KICKOFF_DEPTH,
+  NET_D,
   nearestDisc,
   newWorld,
+  PLAYER_R,
   RINK,
   RUSH_AT,
   step,
@@ -174,6 +176,18 @@ describe('players', () => {
         expect(p.x).toBeLessThanOrEqual(RINK.x1 + 1e-6)
       }
     }
+  })
+
+  it('a disc flicked into a goal mouth stops at the back of the net', () => {
+    const w = newWorld(90)
+    const p = w.players[2] as Disc
+    p.x = W / 2
+    p.y = RINK.y0 + 200
+    w.ball.x = 850
+    w.ball.y = MID
+    step(w, STEP, { flicks: [{ index: 2, dx: 0, dy: -1, power: 1 }] })
+    for (let i = 0; i < 180; i++) step(w, STEP, none())
+    expect(p.y).toBeGreaterThanOrEqual(RINK.y0 - NET_D + PLAYER_R - 1e-6)
   })
 })
 
