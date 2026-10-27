@@ -186,7 +186,9 @@ class Blocks extends BaseGame<State> {
       // The finger's speed as it lets go: a flick slams the piece down.
       const speed = Math.hypot(p.x - p.px, p.y - p.py) * 60
       b.slam = Math.max(0, Math.min(1, (speed - 300) / 2200))
-      this.drop(side, d.slot, q.x, q.y - l.lift)
+      // Lifted as far as the render has grown it: a quick flick lands under the piece drawn.
+      const grow = outCubic(prog(this.time - d.at, 0, PICKUP))
+      this.drop(side, d.slot, q.x, q.y - l.lift * grow)
     }
   }
 

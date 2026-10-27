@@ -63,3 +63,30 @@ describe('blocks match length', () => {
     expect((g.snapshot() as { t: number }).t).toBeLessThan(5)
   })
 })
+
+describe('blocks drop', () => {
+  it('lands a quick flick under the piece as drawn, not a full lift above it', () => {
+    const pi = { downs: [] as unknown[], ups: [] as unknown[], held: new Map<number, unknown>() }
+    const c = { ...ctx(90), mode: '1p', bots: [false, false], input: { player: () => pi } }
+    const g = game()
+    g.init(c as unknown as GameContext)
+    const board = () => (g.snapshot() as { s: { boards: { placed: number[] }[] } }).s.boards[0]
+    const ptr = (x: number, y: number) => ({ id: 1, x, y, x0: x, y0: y, px: x, py: y, t0: 0 })
+    const dt = 1 / 60
+    // Seed 17 deals a 4 × 1 bar first: pick it up from the tray, sweep it onto the grid, let go.
+    const down = ptr(150, 1300)
+    pi.downs = [down]
+    pi.held = new Map([[1, down]])
+    g.update(dt)
+    pi.downs = []
+    for (const y of [1000, 760]) {
+      pi.held = new Map([[1, ptr(400, y)]])
+      g.update(dt)
+    }
+    pi.held = new Map()
+    pi.ups = [ptr(400, 760)]
+    g.update(dt)
+    // Two steps after pickup the bar is drawn (and ghosted) on row 3; a full lift dropped it on row 2.
+    expect(board()?.placed).toEqual([25, 26, 27, 28])
+  })
+})
