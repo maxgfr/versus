@@ -1,9 +1,10 @@
 import { audio } from '../core/audio.ts'
 import type { Difficulty } from '../core/game.ts'
-import { forgetRooms, resetScores, save, store } from '../core/store.ts'
+import { forgetRooms, resetScores, save as saveStore, store } from '../core/store.ts'
 import { h, onTap } from './dom.ts'
 import { icon } from './icons.ts'
 import { ui } from './state.ts'
+import { toast } from './toast.ts'
 import { checkForUpdate } from './updates.ts'
 
 /** Bottom sheet; tap the backdrop or Done to close. */
@@ -70,6 +71,13 @@ export function segmented<T extends string>(
   return el
 }
 
+const UNSAVED = 'Storage for this site is full or blocked: this change will be lost on reload.'
+
+/** A change the player made here: say so when it cannot be kept. */
+function save(): void {
+  if (!saveStore()) toast(UNSAVED)
+}
+
 export function openSettings(parent: HTMLElement, changed: () => void): void {
   const s = store.settings
   const nameField = (i: 0 | 1) => {
@@ -95,7 +103,7 @@ export function openSettings(parent: HTMLElement, changed: () => void): void {
     'Reset',
   )
   onTap(reset, () => {
-    resetScores()
+    if (!resetScores()) toast(UNSAVED)
     ui.shownScore = null
     reset.textContent = 'Done'
     reset.setAttribute('disabled', '')
