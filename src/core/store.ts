@@ -72,11 +72,17 @@ function load(): Saved {
 
 export const store: Saved = load()
 
-export function save(): void {
+/**
+ * False when the browser refused the write: storage blocked, or full — the
+ * site shares maxgfr.github.io, and so one storage quota, with other sites.
+ * The session keeps working in memory either way.
+ */
+export function save(): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(store))
+    return true
   } catch {
-    // Storage full or blocked: the session keeps working in memory.
+    return false
   }
 }
 
@@ -99,9 +105,9 @@ export function submitRecord(id: string, value: number, lowerIsBetter: boolean):
   return better
 }
 
-export function resetScores(): void {
+export function resetScores(): boolean {
   store.score = [0, 0]
-  save()
+  return save()
 }
 
 const MAX_ROOMS = 6
