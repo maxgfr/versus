@@ -228,16 +228,42 @@ export function jitter(shot: ShotParams, rng: Rng, angleErr: number, powerErr: n
 
 // ---------- drawing ----------
 
-/** Dotted ground track of the preview; dots grow with height so the arc reads. */
+/**
+ * Dotted preview of a flight, the ball lifted by its height (up and to the
+ * left, as shells are drawn) above its track on the ground.
+ *
+ * `target` says where the shot is aimed. 'ground' (cups, boards, greens,
+ * forts): the ground track is the bold aim line, straight along the shot and
+ * the same for both players, and the lifted dots are a faint hint of the arc.
+ * Cut off part way, the lifted dots show only the climb, drifting up and left
+ * of where the ball comes down, so they must not be what the player aims with.
+ * 'air' (a target hanging at height, drawn lifted the same way): the lifted
+ * dots are the aim line and the track is a faint shadow.
+ */
 export function drawTrajectory(
   g: Draw,
   pts: readonly { x: number; y: number; z: number }[],
   color: string = C.white,
+  target: 'ground' | 'air' = 'ground',
 ): void {
+  const fade = (i: number) => 1 - i / (pts.length + 2)
+  if (target === 'air') {
+    pts.forEach((p, i) => {
+      const a = fade(i)
+      g.alpha(a * 0.25, () => g.circle(p.x, p.y, 8, '#000'))
+      g.alpha(a, () => g.circle(p.x - p.z * 0.12, p.y - p.z * 0.18, 7 + p.z * 0.03, color))
+    })
+    return
+  }
   pts.forEach((p, i) => {
-    const a = 1 - i / (pts.length + 2)
-    g.alpha(a * 0.25, () => g.circle(p.x, p.y, 8, '#000'))
-    g.alpha(a, () => g.circle(p.x - p.z * 0.12, p.y - p.z * 0.18, 7 + p.z * 0.03, color))
+    g.alpha(fade(i) * 0.3, () =>
+      g.circle(p.x - p.z * 0.12, p.y - p.z * 0.18, 4 + p.z * 0.02, color),
+    )
+  })
+  pts.forEach((p, i) => {
+    const a = fade(i)
+    g.alpha(a * 0.5, () => g.circle(p.x, p.y, 14, '#000'))
+    g.alpha(a, () => g.circle(p.x, p.y, 10, color))
   })
 }
 

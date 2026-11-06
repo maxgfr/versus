@@ -3,8 +3,8 @@ import { banner, hudY } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, SIDE, shade } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
-import { drawTrajectory, type Shell, trace } from '../../engines/aim/index.ts'
-import { BALL, ballistics, type Cup, CUP_R, type Flick, originOf, type State } from './rules.ts'
+import { drawTrajectory, type Shell } from '../../engines/aim/index.ts'
+import { BALL, type Cup, CUP_R, type Flick, originOf, previewOf, type State } from './rules.ts'
 
 /** Where a cup's rim sits relative to its foot: up toward the light, so the wall shows below it. */
 const LX = -6
@@ -135,10 +135,13 @@ export function drawBall(g: Draw, sh: Shell, side: Side): void {
   g.ball(sh.x - sh.z * 0.12, sh.y - sh.z * 0.18, 18 * k, BALL_COL, 1)
 }
 
-/** Dotted start of the flick being held, at its arc: the first part only, so the aim is still a skill. */
+/**
+ * Dotted start of the flick being held, at its arc: most of the way to the
+ * rims, not all of it, so the aim is still a skill. The track on the table is
+ * the aim line; the lifted dots above it show the arc.
+ */
 function drawPreview(g: Draw, side: Side, shot: Flick): void {
-  const o = originOf(side)
-  drawTrajectory(g, trace(o.x, o.y, shot, ballistics(shot.arc), 0, 0.5, 12), SIDE[side].light)
+  drawTrajectory(g, previewOf(side, shot), SIDE[side].light)
 }
 
 export interface Look {

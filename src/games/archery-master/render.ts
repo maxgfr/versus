@@ -353,7 +353,9 @@ export function render(g: Draw, s: State, look: Look, t: number, mood: [Mood, Mo
   if (res && s.lastArrow) drawAfter(g, s, s.lastArrow, since)
   // The flight preview is the shooter's control: online, only their own phone shows it.
   const own = g.viewer === null || g.viewer === s.turn
-  if (look.aim && s.phase === 'aim' && own) drawTrajectory(g, look.aim.preview, SIDE[s.turn].light)
+  // The apple hangs at height and is drawn lifted: the lifted dots are the aim line.
+  if (look.aim && s.phase === 'aim' && own)
+    drawTrajectory(g, look.aim.preview, SIDE[s.turn].light, 'air')
   for (const side of [0, 1] as Side[]) {
     const mine = s.phase === 'aim' && s.turn === side ? look.aim : null
     drawArcher(g, side, s.gap, mine, look.glow[side], mood[side], t, look.kick[side])

@@ -357,3 +357,27 @@ export function landingOf(side: Side, shot: Flick, z = 0): { x: number; y: numbe
   }
   return { x: sh.x, y: sh.y }
 }
+
+/** Share of the way to the rims the flick preview reaches: enough to judge the length, short of the cup. */
+export const PREVIEW_REACH = 0.65
+
+/**
+ * The flick preview: `n` points of the flight (ground position + height) out to
+ * PREVIEW_REACH of the time it takes to come down through rim height. Measured
+ * to the rims rather than the table, so a lob and a drive of the same length
+ * preview the same share of the way, whatever their arc.
+ */
+export function previewOf(side: Side, shot: Flick, n = 14): { x: number; y: number; z: number }[] {
+  const o = originOf(side)
+  const b = ballistics(shot.arc)
+  const sh = launch(o.x, o.y, shot, b)
+  for (let i = 0; i < 1200 && !(sh.z <= CUP_H && sh.vz < 0); i++) stepShell(sh, 1 / 120, 0, b)
+  const dt = (sh.t * PREVIEW_REACH) / n
+  const p = launch(o.x, o.y, shot, b)
+  const out: { x: number; y: number; z: number }[] = []
+  for (let i = 0; i < n; i++) {
+    stepShell(p, dt, 0, b)
+    out.push({ x: p.x, y: p.y, z: p.z })
+  }
+  return out
+}

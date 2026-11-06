@@ -19,6 +19,8 @@ import {
   MIN_FLICK,
   newState,
   originOf,
+  PREVIEW_REACH,
+  previewOf,
   type State,
   shotFromFlick,
   standing,
@@ -361,5 +363,27 @@ describe('cup pong: cups stand tall', () => {
     }
     expect(shots('hard')).toBeLessThan(shots('normal'))
     expect(shots('normal')).toBeLessThan(shots('easy'))
+  })
+})
+
+describe('flick preview', () => {
+  it('runs straight along the flick, the same share of the way to the rims for both sides and every arc', () => {
+    for (const side of [0, 1] as Side[]) {
+      for (const arc of [arcOf(0), 1, arcOf(1e9)]) {
+        const a = side === 0 ? -Math.PI / 2 + 0.15 : Math.PI / 2 + 0.15
+        const shot = { dx: Math.cos(a), dy: Math.sin(a), power: 0.55, arc }
+        const o = originOf(side)
+        const pts = previewOf(side, shot)
+        const end = pts[pts.length - 1] as { x: number; y: number; z: number }
+        // On the shot's line: no sideways drift.
+        expect(Math.abs((end.x - o.x) * shot.dy - (end.y - o.y) * shot.dx)).toBeLessThan(1e-6)
+        // Reaches PREVIEW_REACH of the way to where it comes down through the rims.
+        const land = landingOf(side, shot, CUP_H)
+        const k = Math.hypot(end.x - o.x, end.y - o.y) / Math.hypot(land.x - o.x, land.y - o.y)
+        expect(k).toBeCloseTo(PREVIEW_REACH, 1)
+        // Still above the rims: it never shows the ball coming down.
+        expect(end.z).toBeGreaterThan(CUP_H)
+      }
+    }
   })
 })
