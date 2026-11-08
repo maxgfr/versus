@@ -78,4 +78,6 @@ export function mix(a: string, b: string, t: number): string {
 }
 
 export const FONT = '"Fredoka", ui-rounded, "SF Pro Rounded", system-ui, sans-serif'
-export const EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif'
+/** Only exists where a game has loaded it for a system without flag emoji; ignored elsewhere. */
+export const FLAG_FONT = 'Twemoji Country Flags'
+export const EMOJI_FONT = `"${FLAG_FONT}", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`

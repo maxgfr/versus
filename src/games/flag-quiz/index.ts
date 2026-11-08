@@ -1,5 +1,8 @@
+import { polyfillCountryFlagEmojis } from 'country-flag-emoji-polyfill'
+import flagFont from 'country-flag-emoji-polyfill/dist/TwemojiCountryFlags.woff2?url'
 import type { MatchSpec, Side } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
+import { FLAG_FONT } from '../../core/render/palette.ts'
 import type { BotPlan } from '../math-quiz/bot.ts'
 import { noPresses, QuizRace, type State as RaceState } from '../math-quiz/race.ts'
 import { drawOptions, drawSum } from '../math-quiz/render.ts'
@@ -7,6 +10,11 @@ import { TARGET, type Answer } from '../math-quiz/rules.ts'
 import { planFlagBot } from './bot.ts'
 import { drawFlag, FLAG_GAP, FLAG_PANEL, nameLabel } from './render.ts'
 import { dealFlag, nextFlag, type FlagRace } from './rules.ts'
+
+// Windows has no country flags and shows "FR" instead. Waited for here because
+// a glyph drawn before the font arrives would stay in the emoji cache as letters.
+if (polyfillCountryFlagEmojis(FLAG_FONT, flagFont))
+  await document.fonts.load(`16px "${FLAG_FONT}"`, '🇫🇷').catch(() => [])
 
 /** Match length: first to N points. */
 export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 21 }
