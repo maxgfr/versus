@@ -1,4 +1,5 @@
 import type { Draw } from '../../core/render/draw.ts'
+import { EMOJI_FONT } from '../../core/render/palette.ts'
 import { OPT, PANEL, type OptionLabel } from '../math-quiz/render.ts'
 import { COUNTRIES } from './countries.ts'
 
@@ -49,6 +50,51 @@ export const nameLabel: OptionLabel = (g, v, color, drop) => {
   )
 }
 
+/** A flag is drawn this many bitmap pixels to its `FLAG_SIZE`, like the largest emoji sprite. */
+const FLAG_EM = 256
+const GLYPH_PX = FLAG_EM * 0.86
+/** Room for a glyph drawn a whole flag-width off its mark. */
+const PROBE_PX = 640
+
+const bitmaps = new Map<number, HTMLCanvasElement>()
+
+/**
+ * The flag cropped to what was actually painted. Safari on iOS draws flag glyphs
+ * well to the right of the point `textAlign` asks for, so the font can't be trusted to centre them.
+ */
+function flagBitmap(country: number): HTMLCanvasElement {
+  const known = bitmaps.get(country)
+  if (known) return known
+  const out = document.createElement('canvas')
+  bitmaps.set(country, out)
+  const probe = document.createElement('canvas')
+  probe.width = probe.height = PROBE_PX
+  const x = probe.getContext('2d', { willReadFrequently: true })
+  if (!x) return out
+  x.font = `${GLYPH_PX}px ${EMOJI_FONT}`
+  x.textAlign = 'center'
+  x.textBaseline = 'middle'
+  x.fillText(COUNTRIES[country]?.flag ?? '', PROBE_PX / 2, PROBE_PX / 2)
+  const { data } = x.getImageData(0, 0, PROBE_PX, PROBE_PX)
+  let [left, top, right, bottom] = [PROBE_PX, PROBE_PX, -1, -1]
+  for (let py = 0; py < PROBE_PX; py++) {
+    for (let px = 0; px < PROBE_PX; px++) {
+      if ((data[(py * PROBE_PX + px) * 4 + 3] ?? 0) < 16) continue
+      left = Math.min(left, px)
+      right = Math.max(right, px)
+      top = Math.min(top, py)
+      bottom = Math.max(bottom, py)
+    }
+  }
+  if (right < 0) return out
+  out.width = right - left + 1
+  out.height = bottom - top + 1
+  out.getContext('2d')?.drawImage(probe, -left, -top)
+  return out
+}
+
 export function drawFlag(g: Draw, country: number): void {
-  g.emoji(COUNTRIES[country]?.flag ?? '', 0, 0, g.flipTop ? FLAG_SIZE.shared : FLAG_SIZE.alone)
+  const img = flagBitmap(country)
+  const k = (g.flipTop ? FLAG_SIZE.shared : FLAG_SIZE.alone) / FLAG_EM
+  g.ctx.drawImage(img, (-img.width * k) / 2, (-img.height * k) / 2, img.width * k, img.height * k)
 }
