@@ -5,7 +5,8 @@ import { hudY } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
-import type { State } from './index.ts'
+import type { Answer } from './rules.ts'
+import type { State } from './race.ts'
 
 /** Distance between the two copies of the sum in local 2P (each reads from its own side). */
 export const SUM_GAP = 110
@@ -59,8 +60,16 @@ export function drawBackdrop(g: Draw): void {
 }
 
 /** The scoreboard in the middle: one copy of the sum per reader in local 2P. */
-export function drawSum(g: Draw, s: State, now: number, names: readonly string[]): void {
-  const h = g.flipTop ? PANEL.h2p : PANEL.h1p
+export function drawSum(
+  g: Draw,
+  s: State<Answer>,
+  now: number,
+  names: readonly string[],
+  paint: () => void,
+  panel = PANEL,
+  gap = SUM_GAP,
+): void {
+  const h = g.flipTop ? panel.h2p : panel.h1p
   const x0 = W / 2 - PANEL.w / 2
   const y0 = MID - h / 2
   const bump = 1 + 0.025 * Math.sin(Math.PI * prog(now - s.qAt, 0, 0.3))
@@ -118,8 +127,8 @@ export function drawSum(g: Draw, s: State, now: number, names: readonly string[]
   )
   const copies: [number, number][] = g.flipTop
     ? [
-        [MID + SUM_GAP, 0],
-        [MID - SUM_GAP, Math.PI],
+        [MID + gap, 0],
+        [MID - gap, Math.PI],
       ]
     : [[MID, g.stage.rot]]
   const pop = outBack(prog(now - s.qAt, 0, 0.4))
@@ -129,9 +138,7 @@ export function drawSum(g: Draw, s: State, now: number, names: readonly string[]
       g.at(W / 2, y, angle, () => drawWinner(g, s.winner ?? 0, names), k, k)
       continue
     }
-    g.alpha(Math.min(1, pop * 1.5), () =>
-      g.at(W / 2, y, angle, () => drawEquation(g, s, now), 0.7 + 0.3 * pop),
-    )
+    g.alpha(Math.min(1, pop * 1.5), () => g.at(W / 2, y, angle, paint, 0.7 + 0.3 * pop))
   }
 }
 
@@ -151,7 +158,7 @@ function drawWinner(g: Draw, side: Side, names: readonly string[]): void {
 }
 
 /** "a + b = ?" with the answer slot: yellow and pulsing while live, the scorer's colour once solved. */
-function drawEquation(g: Draw, s: State, now: number): void {
+export function drawEquation(g: Draw, s: State, now: number): void {
   const q = s.q
   const size = 100
   const lhs = `${q.a} ${q.op} ${q.b} =`
@@ -203,8 +210,20 @@ function drawEquation(g: Draw, s: State, now: number): void {
   )
 }
 
+/** Paints the text of one answer button, centred on the origin. */
+export type OptionLabel = (g: Draw, v: number, color: string, drop: string) => void
+
+const numberLabel: OptionLabel = (g, v, color, drop) =>
+  g.text(String(v), 0, 0, { size: 104, weight: 700, color, drop })
+
 /** One player's four answer buttons, drawn on their half. */
-export function drawOptions(g: Draw, s: State, side: Side, now: number): void {
+export function drawOptions(
+  g: Draw,
+  s: State<Answer>,
+  side: Side,
+  now: number,
+  paintLabel = numberLabel,
+): void {
   const col = SIDE[side]
   const ta = textAngle(g, side)
   const out = s.locked[side] && !s.done
@@ -265,12 +284,12 @@ export function drawOptions(g: Draw, s: State, side: Side, now: number): void {
             g.tile(-OPT.w / 2, -OPT.h / 2, OPT.w, OPT.h, OPT.r, face, OPT.depth, pressed)
             const ty = -OPT.depth / 2 + 4 + pressed * OPT.depth
             g.at(0, ty, g.stage.rot, () => {
-              g.text(String(v), 0, 0, {
-                size: 104,
-                weight: 700,
-                color: slip || out ? alpha(C.white, 0.45) : label,
-                drop: alpha('#000000', won ? 0.12 : 0.28),
-              })
+              paintLabel(
+                g,
+                v,
+                slip || out ? alpha(C.white, 0.45) : label,
+                alpha('#000000', won ? 0.12 : 0.28),
+              )
               if (slip)
                 g.text('✗', OPT.w / 2 - 50, -OPT.h / 2 + 50, {
                   size: 52,

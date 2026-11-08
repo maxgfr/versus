@@ -77,8 +77,13 @@ export function makeOptions(rng: Rng, q: Question): number[] {
   return [q.answer, ...wrong]
 }
 
-export interface QuizState {
-  q: Question
+/** What the race needs of a question: the value of the right button. */
+export interface Answer {
+  answer: number
+}
+
+export interface QuizState<Q extends Answer = Question> {
+  q: Q
   /** Each side's option buttons, in the order that side sees them. */
   choices: [number[], number[]]
   score: [number, number]
@@ -121,10 +126,14 @@ export function effort(q: Question): number {
   return Math.min(2, e)
 }
 
-/** Each side sees the same four options, in its own shuffled order. */
-export function dealSum(rng: Rng, d: Difficulty, now: number, sums: number, heat = 0): QuizState {
-  const q = makeQuestion(rng, d, heat)
-  const opts = makeOptions(rng, q)
+/** Each side sees the same options, in its own shuffled order. */
+export function freshRace<Q extends Answer>(
+  rng: Rng,
+  q: Q,
+  opts: readonly number[],
+  now: number,
+  sums: number,
+): QuizState<Q> {
   return {
     q,
     choices: [rng.shuffle([...opts]), rng.shuffle([...opts])],
@@ -139,6 +148,11 @@ export function dealSum(rng: Rng, d: Difficulty, now: number, sums: number, heat
   }
 }
 
+export function dealSum(rng: Rng, d: Difficulty, now: number, sums: number, heat = 0): QuizState {
+  const q = makeQuestion(rng, d, heat)
+  return freshRace(rng, q, makeOptions(rng, q), now, sums)
+}
+
 /** Replace the current sum with a fresh one (scores carry over). */
 export function nextSum(s: QuizState, rng: Rng, d: Difficulty, now: number, heat = 0): void {
   const fresh = dealSum(rng, d, now, s.sums, heat)
@@ -151,7 +165,7 @@ export type Press = 'right' | 'wrong' | 'ignored'
  * A side taps option `idx`. Right: +1 and the sum is settled. Wrong: -1 and that
  * side is locked out for this sum; if both sides are locked the sum is void.
  */
-export function press(s: QuizState, side: Side, idx: number, now: number): Press {
+export function press(s: QuizState<Answer>, side: Side, idx: number, now: number): Press {
   if (s.done || s.locked[side]) return 'ignored'
   const v = s.choices[side][idx]
   if (v === undefined) return 'ignored'
@@ -175,13 +189,13 @@ export function press(s: QuizState, side: Side, idx: number, now: number): Press
 }
 
 /** The side that has reached the target, if any. */
-export function champion(s: QuizState, target = TARGET): Side | null {
+export function champion(s: QuizState<Answer>, target = TARGET): Side | null {
   if (s.score[0] >= target) return 0
   if (s.score[1] >= target) return 1
   return null
 }
 
 /** True on the step the next sum should appear. */
-export function due(s: QuizState, now: number): boolean {
+export function due(s: QuizState<Answer>, now: number): boolean {
   return s.done && s.dealAt >= 0 && now >= s.dealAt
 }

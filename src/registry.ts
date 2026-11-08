@@ -174,6 +174,12 @@ const TABLE: Record<Family, Row[]> = {
       'Tap the right answer before your rival. A wrong answer costs a point.',
     ],
     [
+      'flag-quiz',
+      'Flag Quiz',
+      '🚩',
+      'Name the flag before your rival. Lookalikes are everywhere, and a wrong answer costs a point.',
+    ],
+    [
       'reflex-race',
       'Reflex Race',
       '⚡',

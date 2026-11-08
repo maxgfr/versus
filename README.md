@@ -13,13 +13,13 @@ Two-player mini-games for one phone, played face to face: put the phone flat on 
 
 <!-- games:start -->
 
-114 games, all playable two players on one phone.
+115 games, all playable two players on one phone.
 
 **Board** (11): ❌ Tic Tac Toe · 🔲 Ultimate Tic Tac Toe · 🔴 4 in a Row · ♟️ Chess · 🏁 Checkers · ⚪ Reversi · 🫘 Mancala · ✏️ Dots and Boxes · 🚢 Sea Battle · 🎨 Color Wars · 🫧 Pop It
 
 **Dice** (6): 🎲 Backgammon · 🐎 Ludo · 🪜 Snakes & Ladders · 💯 Yazy · 📋 Yazy Classic · 📦 Shut the Box
 
-**Cards & quiz** (7): 🕵️ Guess the Person · 🃏 Triple · 🧠 Memory · 🍕 Pizza Memory · ➗ Math Quiz · ⚡ Reflex Race · 🔍 Find Match
+**Cards & quiz** (8): 🕵️ Guess the Person · 🃏 Triple · 🧠 Memory · 🍕 Pizza Memory · ➗ Math Quiz · 🚩 Flag Quiz · ⚡ Reflex Race · 🔍 Find Match
 
 **Ball** (20): 🏓 Ping Pong · 🎾 Tennis · 🏒 Air Hockey · ⚽ Penalty Kicks · 🥅 Mini Soccer · 🏟️ Soccer Pool · 🏀 Basket Ball · 🏐 Beach Ball · 🦀 Crabby Volley · 🎱 Pool · ⛳ Mini Golf · 🎳 Bowling · 🟤 Carrom · 🥋 Sumo · 🧱 Brick Blast · 🪀 Sling Puck · 🦛 Happy Hippos · 🌀 Spin War · 👑 King of the Hill · 🕹️ Pinball
 
