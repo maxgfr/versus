@@ -22,6 +22,10 @@ export const match: MatchSpec = { unit: 'points', default: TARGET, min: 3, max: 
 type State = RaceState<Answer> & FlagRace
 
 class FlagQuizGame extends QuizRace<Answer, State> {
+  // A wrong answer only locks the player out of this flag.
+  protected override penalty = 0
+  protected override showRival = true
+
   protected setup(): State {
     const rng = this.ctx.rng
     const state: State = { ...dealFlag(rng, rng.int(0, 2 ** 31 - 1), 0, 0), ...noPresses() }

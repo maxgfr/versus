@@ -43,6 +43,11 @@ export const noPresses = () => ({
 
 /** A race to answer: each player has their own buttons, first right answer takes the point. */
 export abstract class QuizRace<Q extends Answer, S extends State<Q>> extends BaseGame<S> {
+  /** Points a wrong answer costs. */
+  protected penalty = 1
+  /** Online, each phone also draws the rival's answer buttons. */
+  protected showRival = false
+
   protected get target(): number {
     return this.ctx.target || TARGET
   }
@@ -95,7 +100,7 @@ export abstract class QuizRace<Q extends Answer, S extends State<Q>> extends Bas
 
   private answer(side: Side, idx: number): void {
     const s = this.s
-    const out = press(s, side, idx, this.time)
+    const out = press(s, side, idx, this.time, this.penalty)
     if (out === 'ignored') return
     s.pressAt[side] = this.time
     s.pressIdx[side] = idx
@@ -133,7 +138,8 @@ export abstract class QuizRace<Q extends Answer, S extends State<Q>> extends Bas
       return
     }
     fx.burst(b.x, b.y, C.ink4, { count: 14, speed: 340, size: 10, gravity: 700, kind: 'square' })
-    fx.float('-1', b.x, b.y + (side === 0 ? -40 : 40), C.redLight, 110, side)
+    if (this.penalty)
+      fx.float(`-${this.penalty}`, b.x, b.y + (side === 0 ? -40 : 40), C.redLight, 110, side)
     fx.shake(0.28)
     fx.stop(2)
     audio.play('buzz')
@@ -151,9 +157,9 @@ export abstract class QuizRace<Q extends Answer, S extends State<Q>> extends Bas
     const s = this.s
     drawBackdrop(g)
     this.drawQuestion(g)
-    // Online, each phone draws only its own player's answer buttons.
+    // Online, each phone draws only its own player's answer buttons, unless the game shows both.
     for (const side of [0, 1] as Side[])
-      if (g.viewer === null || g.viewer === side) this.drawButtons(g, side)
+      if (this.showRival || g.viewer === null || g.viewer === side) this.drawButtons(g, side)
     for (const side of [0, 1] as Side[]) {
       const bot = this.isBot(side)
       const ended = s.endAt >= 0

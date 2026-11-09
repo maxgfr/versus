@@ -162,10 +162,16 @@ export function nextSum(s: QuizState, rng: Rng, d: Difficulty, now: number, heat
 export type Press = 'right' | 'wrong' | 'ignored'
 
 /**
- * A side taps option `idx`. Right: +1 and the sum is settled. Wrong: -1 and that
- * side is locked out for this sum; if both sides are locked the sum is void.
+ * A side taps option `idx`. Right: +1 and the sum is settled. Wrong: -`penalty` and
+ * that side is locked out for this sum; if both sides are locked the sum is void.
  */
-export function press(s: QuizState<Answer>, side: Side, idx: number, now: number): Press {
+export function press(
+  s: QuizState<Answer>,
+  side: Side,
+  idx: number,
+  now: number,
+  penalty = 1,
+): Press {
   if (s.done || s.locked[side]) return 'ignored'
   const v = s.choices[side][idx]
   if (v === undefined) return 'ignored'
@@ -177,7 +183,7 @@ export function press(s: QuizState<Answer>, side: Side, idx: number, now: number
     s.dealAt = now + NEXT_DELAY
     return 'right'
   }
-  s.score[side]--
+  s.score[side] -= penalty
   s.locked[side] = true
   if (s.locked[0] && s.locked[1]) {
     s.done = true

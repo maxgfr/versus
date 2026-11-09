@@ -82,6 +82,15 @@ describe('flag quiz deal', () => {
     expect(s.locked).toEqual([false, false])
     expect(s.q.answer).toBe(flagAt(5, 1))
   })
+
+  it('can lock a side out without costing it a point', () => {
+    const s = dealFlag(new Rng(2), 5, 0, 0)
+    s.score = [3, 1]
+    const wrong = s.choices[0].findIndex((v) => v !== s.q.answer)
+    expect(press(s, 0, wrong, 1, 0)).toBe('wrong')
+    expect(s.score).toEqual([3, 1])
+    expect(s.locked).toEqual([true, false])
+  })
 })
 
 describe('flag quiz bot', () => {
