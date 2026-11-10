@@ -102,6 +102,20 @@ const S: Record<string, Voice[]> = {
     { wave: 'sine', f: 160, f2: 60, dur: 0.1, vol: 0.4 },
   ],
   buzz: [{ wave: 'sawtooth', f: 110, dur: 0.35, vol: 0.18, lp: 900 }],
+  // A drum kit and a bass, for games that play a beat (Freestyle Battle).
+  kick: [
+    { wave: 'sine', f: 160, f2: 42, dur: 0.24, vol: 0.85 },
+    { wave: 'triangle', f: 420, f2: 90, dur: 0.03, vol: 0.25 },
+  ],
+  snare: [
+    { wave: 'noise', f: 1, dur: 0.17, vol: 0.45, lp: 7000 },
+    { wave: 'triangle', f: 240, f2: 150, dur: 0.09, vol: 0.32 },
+  ],
+  hat: [{ wave: 'noise', f: 1, dur: 0.035, vol: 0.1, lp: 11000 }],
+  bass: [
+    { wave: 'sawtooth', f: 110, dur: 0.32, vol: 0.2, lp: 520 },
+    { wave: 'sine', f: 55, dur: 0.34, vol: 0.4 },
+  ],
 }
 
 export type SoundName = keyof typeof S

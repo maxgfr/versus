@@ -384,6 +384,13 @@ const TABLE: Record<Family, Row[]> = {
       'Mash to run, keep the rhythm for a boost. First across the line.',
     ],
     ['disco-battle', 'Disco Battle', '🪩', 'Hit the arrows on the beat. Best groove wins.'],
+    [
+      'freestyle',
+      'Freestyle Battle',
+      '🎤',
+      'Take turns rapping over the beat and fit the imposed words in. When the beat stops, agree on who won.',
+      'lxn',
+    ],
   ],
   arena: [
     [

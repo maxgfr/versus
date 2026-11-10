@@ -13,7 +13,7 @@ Two-player mini-games for one phone, played face to face: put the phone flat on 
 
 <!-- games:start -->
 
-115 games, all playable two players on one phone.
+116 games, all playable two players on one phone.
 
 **Board** (11): ❌ Tic Tac Toe · 🔲 Ultimate Tic Tac Toe · 🔴 4 in a Row · ♟️ Chess · 🏁 Checkers · ⚪ Reversi · 🫘 Mancala · ✏️ Dots and Boxes · 🚢 Sea Battle · 🎨 Color Wars · 🫧 Pop It
 
@@ -25,7 +25,7 @@ Two-player mini-games for one phone, played face to face: put the phone flat on 
 
 **Aim** (13): 🏌️ Golf · 🏈 Golf Football · 🎯 Darts · 🏹 Archery · 🌽 Cornhole · 🎪 Target Practice · 🍎 Archery Master · 🔪 Knife Thrower · ⚔️ Sword Thrower · 🥎 Throw · 💣 Cannon Duel · 🎋 Shuriken Bamboo · 🥤 Cup Pong
 
-**Reflex** (15): 🪢 Pull the Rope · 🔨 Hammer Hit · 👋 Hand Slap · 🍣 The Last Sashimi · 🐹 Whack a Mole · 🥔 Hot Potato · 💎 Light Fingers · 🍉 Fruit Duel · 🎣 Unfair Fishing · 💰 Money Grabber · ⭐ Star Catcher · 🐸 Sticky Tongues · 🪓 Lumber Jack · 🐀 Rat Race · 🪩 Disco Battle
+**Reflex** (16): 🪢 Pull the Rope · 🔨 Hammer Hit · 👋 Hand Slap · 🍣 The Last Sashimi · 🐹 Whack a Mole · 🥔 Hot Potato · 💎 Light Fingers · 🍉 Fruit Duel · 🎣 Unfair Fishing · 💰 Money Grabber · ⭐ Star Catcher · 🐸 Sticky Tongues · 🪓 Lumber Jack · 🐀 Rat Race · 🪩 Disco Battle · 🎤 Freestyle Battle
 
 **Arena** (21): 🪖 Tanks · ⛵ Ship Battle · 🤖 Robot Arena · 🧨 Explosive Festival · 🖌️ Paint Fight · 🪷 Frogs Fight · 🪲 Dung Battle · 🥷 Guard and Thief · 🦔 Spike Attacks · 🗡️ Fatal Knights · 🐧 Frozen Penguins · 🧊 Broken Tiles · 💫 Snakes · 🐍 Neon Snake · 🏎️ Racing Cars · 🚗 Slot Cars · 🚦 Traffic Jam · 🚙 Road Dodge · 🚕 Taxi Race · 🐟 Piranha Rush · 🦬 Stampede
 
