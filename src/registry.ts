@@ -639,3 +639,20 @@ export async function loadGame(id: string): Promise<GameModule> {
   if (!l) throw new Error(`Unknown game ${id}`)
   return l()
 }
+
+/** Lower case, accents dropped: "Échecs" is found by "echecs". */
+const fold = (s: string): string =>
+  s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+/** Every word typed appears in the game's name or its family's label. */
+export function matches(g: GameMeta, query: string): boolean {
+  const words = fold(query).split(/\s+/).filter(Boolean)
+  if (!words.length) return true
+  const family = FAMILIES.find((f) => f.id === g.family)?.label ?? ''
+  const hay = fold(`${g.name} ${family}`)
+  return words.every((w) => hay.includes(w))
+}

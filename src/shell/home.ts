@@ -1,7 +1,7 @@
 import type { Mode } from '../core/game.ts'
 import type { Link } from '../core/net/link.ts'
 import { store } from '../core/store.ts'
-import { FAMILIES, builtGames, findGame, isBuilt, type GameMeta } from '../registry.ts'
+import { FAMILIES, builtGames, findGame, isBuilt, matches, type GameMeta } from '../registry.ts'
 import { capture, cardArt, familyColor } from './art.ts'
 import { h, onTap } from './dom.ts'
 import { icon, type IconName } from './icons.ts'
@@ -130,14 +130,16 @@ export function home(root: HTMLElement, initial: Mode = ui.local, panel?: HTMLEl
     const chip = (id: typeof ui.filter, label: string, n: number, lead?: Node) => {
       const b = h(
         'button.chip',
-        { 'aria-pressed': String(ui.filter === id) },
+        { 'aria-pressed': String(!ui.query && ui.filter === id) },
         lead,
         label,
         h('span.n', n),
       )
       onTap(b, () => {
-        if (ui.filter === id) return
+        if (!ui.query && ui.filter === id) return
         ui.filter = id
+        // A family picked by hand ends the search.
+        clearSearch()
         renderChips()
         renderGrid(true)
       })
@@ -239,8 +241,10 @@ export function home(root: HTMLElement, initial: Mode = ui.local, panel?: HTMLEl
       for (const el of scroller.querySelectorAll<HTMLElement>('.card'))
         before.set(el.dataset.id ?? '', el.getBoundingClientRect())
     const pool = games.filter((g) => visible(g, mode))
-    const list =
-      ui.filter === 'all'
+    const query = ui.query
+    const list = query
+      ? pool.filter((g) => matches(g, query))
+      : ui.filter === 'all'
         ? pool
         : ui.filter === 'fav'
           ? pool.filter((g) => store.favorites.includes(g.id))
@@ -249,14 +253,15 @@ export function home(root: HTMLElement, initial: Mode = ui.local, panel?: HTMLEl
     const b = banner()
     if (b) nodes.push(b)
     const favs = pool.filter((g) => store.favorites.includes(g.id))
-    if (ui.filter === 'all' && favs.length) {
+    if (!query && ui.filter === 'all' && favs.length) {
       nodes.push(
         h('h2.section-title', 'Favourites'),
         h('div.grid', ...favs.map(card)),
         h('h2.section-title', 'All games'),
       )
     }
-    nodes.push(list.length ? h('div.grid', ...list.map(card)) : h('p.empty', 'No games here yet.'))
+    const empty = query ? `No game matches “${query.trim()}”.` : 'No games here yet.'
+    nodes.push(list.length ? h('div.grid', ...list.map(card)) : h('p.empty', empty))
     scroller.replaceChildren(...nodes)
     if (!animate) return
     for (const el of scroller.querySelectorAll<HTMLElement>('.card')) {
@@ -281,6 +286,51 @@ export function home(root: HTMLElement, initial: Mode = ui.local, panel?: HTMLEl
       }
     }
   }
+
+  // Search: looks through every game by name or family, whatever chip is on.
+  const input = h('input.field.search-input', {
+    type: 'search',
+    placeholder: 'Search games',
+    'aria-label': 'Search games',
+    autocomplete: 'off',
+    spellcheck: 'false',
+    enterKeyHint: 'search',
+    value: ui.query,
+  }) as HTMLInputElement
+  const clearBtn = h(
+    'button.search-clear',
+    { 'aria-label': 'Clear search', hidden: !ui.query },
+    icon('close'),
+  )
+  const searchEl = h('div.search', icon('search', 'search-ico'), input, clearBtn)
+  const searched = () => {
+    clearBtn.hidden = !ui.query
+    renderChips()
+    renderGrid(false)
+    scroller.scrollTop = 0
+  }
+  const clearSearch = () => {
+    if (!ui.query) return
+    ui.query = ''
+    input.value = ''
+    clearBtn.hidden = true
+  }
+  input.addEventListener('input', () => {
+    ui.query = input.value
+    searched()
+  })
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') input.blur()
+    if (e.key === 'Escape' && ui.query) {
+      clearSearch()
+      searched()
+    }
+  })
+  onTap(clearBtn, () => {
+    clearSearch()
+    searched()
+    input.focus()
+  })
 
   const settingsBtn = h('button.icon-btn.tile', { 'aria-label': 'Settings' }, icon('gear'))
   onTap(settingsBtn, () => openSettings(screen, () => rebuild()))
@@ -310,7 +360,7 @@ export function home(root: HTMLElement, initial: Mode = ui.local, panel?: HTMLEl
   renderChips()
   renderGrid(false)
   if (panel) screen.append(top, modesEl, scroller)
-  else screen.append(top, modesEl, chipsEl, scroller, board)
+  else screen.append(top, modesEl, searchEl, chipsEl, scroller, board)
   root.append(screen)
   if (!panel) scroller.scrollTop = ui.scrollTop
 

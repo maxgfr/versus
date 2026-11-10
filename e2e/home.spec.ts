@@ -31,6 +31,24 @@ test('swiping across a game card scrolls instead of opening it', async ({ page }
   await expect(page).toHaveURL(/#\/play\//)
 })
 
+test('the search box narrows the games, and clearing it brings them all back', async ({ page }) => {
+  await page.goto('./')
+  const all = await page.locator('.card').count()
+  const box = page.getByRole('searchbox', { name: 'Search games' })
+  await box.fill('chess')
+  await expect(page.locator('.card')).toHaveCount(1)
+  await expect(page.locator('.card-name')).toHaveText('Chess')
+  await box.fill('zzzz')
+  await expect(page.locator('.empty')).toHaveText('No game matches “zzzz”.')
+  await page.getByRole('button', { name: 'Clear search' }).click()
+  await expect(page.locator('.card')).toHaveCount(all)
+  // Picking a family ends the search.
+  await box.fill('chess')
+  await page.locator('.chip', { hasText: 'Ball' }).click()
+  await expect(box).toHaveValue('')
+  expect(await page.locator('.card').count()).toBeGreaterThan(1)
+})
+
 test('landscape asks to rotate the phone', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 380 })
   await page.goto('./')

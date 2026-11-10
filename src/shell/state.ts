@@ -6,6 +6,8 @@ export const ui: {
   /** 1P or 2P on this phone (online is a place: `#/online/CODE`). */
   local: Exclude<Mode, 'online'>
   filter: Family | 'all' | 'fav'
+  /** Text typed in the home search box; while set, it looks through every game. */
+  query: string
   link: Link | null
   /** Scoreboard values last shown, so returning home can roll from them. */
   shownScore: [number, number] | null
@@ -13,6 +15,7 @@ export const ui: {
 } = {
   local: '2p',
   filter: 'all',
+  query: '',
   link: null,
   shownScore: null,
   scrollTop: 0,
