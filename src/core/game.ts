@@ -43,6 +43,11 @@ export interface GameContext {
    * `this.ctx.target || match.default` (tests' fake contexts may omit it).
    */
   target?: number
+  /**
+   * Game settings chosen on the ready screen, by option id (see OptionSpec).
+   * Read them as `this.ctx.options?.[id] ?? default` (tests' fake contexts may omit them).
+   */
+  options?: Record<string, string>
 }
 
 /**
@@ -76,6 +81,34 @@ export function matchLabel(spec: MatchSpec, n: number): string {
   }
 }
 
+/**
+ * A game setting, declared by a module as `export const options: OptionSpec[]`.
+ * The ready screen lists them in a settings sheet, remembers the choice per
+ * game and passes it to the game in `ctx.options`.
+ */
+export interface OptionSpec {
+  id: string
+  label: string
+  /** Value and label of each choice. */
+  choices: [string, string][]
+  default: string
+  /** Many choices: lay them out over several rows. */
+  wrap?: boolean
+}
+
+/** The value of each option: the saved choice when it is still offered, else the default. */
+export function optionValues(
+  specs: readonly OptionSpec[],
+  saved: Record<string, string> = {},
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const o of specs) {
+    const v = saved[o.id]
+    out[o.id] = v !== undefined && o.choices.some(([c]) => c === v) ? v : o.default
+  }
+  return out
+}
+
 export interface Game {
   init(ctx: GameContext): void
   /** Fixed step, `dt` is always 1/60 s. */
@@ -93,6 +126,7 @@ export type GameFactory = () => Game
 export interface GameModule {
   default: GameFactory
   match?: MatchSpec
+  options?: OptionSpec[]
 }
 
 export const STEP = 1 / 60

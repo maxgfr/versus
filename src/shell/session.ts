@@ -2,11 +2,13 @@ import { audio } from '../core/audio.ts'
 import { Fx, type FxCmd } from '../core/fx/fx.ts'
 import {
   matchLabel,
+  optionValues,
   type Game,
   type GameContext,
   type GameFactory,
   type MatchSpec,
   type Mode,
+  type OptionSpec,
   type Result,
   type Side,
 } from '../core/game.ts'
@@ -21,13 +23,15 @@ import { roomGame, save, store, toggleFavorite } from '../core/store.ts'
 import type { GameMeta } from '../registry.ts'
 import { h, onTap, reducedMotion, sleep } from './dom.ts'
 import { icon } from './icons.ts'
-import { segmented } from './settings.ts'
+import { segmented, sheet } from './settings.ts'
 
 export interface SessionOpts {
   meta: GameMeta
   factory: GameFactory
   /** The game's match-length setting, if it has one. */
   match?: MatchSpec | undefined
+  /** The game's settings, listed in a sheet on the ready screen. */
+  options?: OptionSpec[] | undefined
   mode: Mode
   link: Link | null
   /** Guest only: the seed the host sent with the round. */
@@ -41,6 +45,8 @@ export interface SessionOpts {
   banner?: string
   /** Guest only: the match length the host chose. */
   target?: number
+  /** Guest only: the game settings the host chose. */
+  chosen?: Record<string, string>
   /** Computer vs computer, no ready screen, `speed`× time (end-to-end tests, card captures). */
   demo?: { speed: number; clean?: boolean }
 }
@@ -83,6 +89,8 @@ export class Session {
   private disposed = false
   /** Match length (see MatchSpec); 0 when the game has no setting. */
   private target = 0
+  /** Game settings (see OptionSpec), by option id; empty when the game has none. */
+  private chosen: Record<string, string> = {}
 
   constructor(
     parent: HTMLElement,
@@ -97,6 +105,10 @@ export class Session {
       this.target = clampTarget(spec, saved ?? spec.default)
     }
     if (o.target !== undefined) this.target = o.target
+    if (o.options) {
+      const saved = o.demo ? undefined : store.options[o.meta.id]
+      this.chosen = optionValues(o.options, o.chosen ?? saved)
+    }
     this.root = h('div.screen.game-screen')
     parent.append(this.root)
     this.stage = new Stage(this.root)
@@ -159,6 +171,7 @@ export class Session {
       local: this.local,
       seed: s,
       target: this.target,
+      options: { ...this.chosen },
     }
     this.game = this.o.factory()
     this.game.init(ctx)
@@ -223,7 +236,12 @@ export class Session {
   // ---------- online ----------
 
   private sendRound(): void {
-    this.o.link?.send('round', { id: this.o.meta.id, seed: this.seed, target: this.target })
+    this.o.link?.send('round', {
+      id: this.o.meta.id,
+      seed: this.seed,
+      target: this.target,
+      options: this.chosen,
+    })
   }
 
   private broadcast(link: Link): void {
@@ -248,9 +266,15 @@ export class Session {
       })
     } else {
       on('round', (d) => {
-        const r = d as { id: string; seed: number; target?: number }
+        const r = d as {
+          id: string
+          seed: number
+          target?: number
+          options?: Record<string, string>
+        }
         if (r.id !== this.o.meta.id) return
         if (typeof r.target === 'number') this.target = r.target
+        if (this.o.options && r.options) this.chosen = optionValues(this.o.options, r.options)
         this.newRound(r.seed)
       })
       on('ready', () => this.markReady(0))
@@ -337,6 +361,11 @@ export class Session {
               },
               'Computer difficulty',
             ),
+          )
+        } else if (m.family !== 'puzzle') {
+          half.append(
+            h('span.ready-team', { style: { color: 'var(--ink-6)' } }, 'Solo practice'),
+            h('p.ready-rules', 'Just you and the game, no rival.'),
           )
         } else {
           const rec = store.records[m.id]
@@ -431,6 +460,8 @@ export class Session {
     strip.append(favBtn)
     const spec = this.o.match
     if (spec) strip.append(this.matchStepper(spec))
+    const opts = this.o.options
+    if (opts?.length && !this.guest) strip.append(this.optionsButton(opts))
 
     const top = halfFor(1)
     const bottom = halfFor(0)
@@ -444,6 +475,36 @@ export class Session {
     }
     this.overlay = ov
     this.root.append(ov)
+  }
+
+  /** Gear button opening the game's settings; a change starts the round afresh. */
+  private optionsButton(specs: OptionSpec[]): HTMLElement {
+    const b = h('button.icon-btn.tile', { 'aria-label': 'Game settings' }, icon('gear'))
+    onTap(b, () => {
+      audio.unlock()
+      audio.play('click')
+      let changed = false
+      const rows = specs.map((o) => {
+        const seg = segmented(
+          o.choices,
+          this.chosen[o.id] ?? o.default,
+          (v) => {
+            this.chosen[o.id] = v
+            store.options[this.o.meta.id] = { ...this.chosen }
+            changed = true
+            save()
+            audio.play('click')
+          },
+          o.label,
+        )
+        if (o.wrap) seg.classList.add('wrap')
+        return h(o.wrap ? 'div.row.stack' : 'div.row', h('span', o.label), seg)
+      })
+      sheet(this.root, 'Game settings', rows, () => {
+        if (changed) this.newRound()
+      })
+    })
+    return b
   }
 
   /** − value + : the match length, editable by the host / local players only. */

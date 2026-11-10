@@ -7,6 +7,7 @@ import { h } from './shell/dom.ts'
 import { home } from './shell/home.ts'
 import { icon } from './shell/icons.ts'
 import { beforeRoute, type Cleanup, go, route, startRouter } from './shell/router.ts'
+import type { Pending } from './shell/online.ts'
 import { Session } from './shell/session.ts'
 import { sheet } from './shell/settings.ts'
 import { ui } from './shell/state.ts'
@@ -47,7 +48,7 @@ async function play(root: HTMLElement, id: string, code?: string): Promise<Clean
     return
   }
   let link: Link | null = null
-  let pending: { seed: number; target?: number } | undefined
+  let pending: Pending | undefined
   if (code) {
     const online = await import('./shell/online.ts')
     link = online.room(code)
@@ -66,10 +67,12 @@ async function play(root: HTMLElement, id: string, code?: string): Promise<Clean
     meta,
     factory: mod.default,
     match: mod.match,
+    options: mod.options,
     mode: code ? 'online' : ui.local,
     link,
     ...(pending ? { seed: pending.seed } : {}),
     ...(pending?.target !== undefined ? { target: pending.target } : {}),
+    ...(pending?.options !== undefined ? { chosen: pending.options } : {}),
     ...(demo ? { demo, mode: '1p' as const } : {}),
     onExit: () => go(back),
   })

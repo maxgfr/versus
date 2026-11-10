@@ -166,6 +166,7 @@ export function tournament(root: HTMLElement): () => void {
       meta,
       factory: mod.default,
       match: mod.match,
+      options: mod.options,
       mode: '2p',
       link: null,
       banner: `Game ${c.at + 1} of ${c.games.length}`,

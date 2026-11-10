@@ -17,9 +17,10 @@ import { toast } from './toast.ts'
  */
 
 /** Guests follow the host: when the host starts a round, jump into that game. */
-let pending: { seed: number; target?: number } | undefined
+export type Pending = { seed: number; target?: number; options?: Record<string, string> }
+let pending: Pending | undefined
 
-export function takePending(): { seed: number; target?: number } | undefined {
+export function takePending(): Pending | undefined {
   const p = pending
   pending = undefined
   return p
@@ -63,10 +64,12 @@ function connect(code: string, role: Role): Link {
   rememberRoom(code, role)
   if (role === 'guest') {
     link.on('round', (d) => {
-      const r = d as { id: string; seed: number; target?: number }
+      const r = d as Pending & { id: string }
       const path = `${roomPath(code)}/play/${r.id}`
       if (location.hash === `#${path}`) return
-      pending = r.target === undefined ? { seed: r.seed } : { seed: r.seed, target: r.target }
+      pending = { seed: r.seed }
+      if (r.target !== undefined) pending.target = r.target
+      if (r.options !== undefined) pending.options = r.options
       go(path)
     })
   } else {

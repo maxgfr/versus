@@ -33,6 +33,8 @@ export interface Saved {
   plays: Record<string, number>
   /** Match length chosen per game (see MatchSpec). */
   match: Record<string, number>
+  /** Game settings chosen per game (see OptionSpec), by option id. */
+  options: Record<string, Record<string, string>>
   iosGuideSeen: boolean
   /** Newest first. */
   rooms: RecentRoom[]
@@ -54,6 +56,7 @@ const defaults = (): Saved => ({
   records: {},
   plays: {},
   match: {},
+  options: {},
   iosGuideSeen: false,
   rooms: [],
 })

@@ -48,4 +48,13 @@ describe('store', () => {
     const { store } = await import('./store.ts')
     expect(store.score).toEqual([0, 0])
   })
+
+  it('loads a save from before game settings existed', async () => {
+    const ls = storage(() => {})
+    ls.data.set('versus:v1', JSON.stringify({ v: 1, score: [2, 1], match: { chess: 3 } }))
+    vi.stubGlobal('localStorage', ls)
+    const { store } = await import('./store.ts')
+    expect(store.options).toEqual({})
+    expect(store.match).toEqual({ chess: 3 })
+  })
 })
