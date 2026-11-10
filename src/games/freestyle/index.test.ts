@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { STEP, type GameContext, type Mode } from '../../core/game.ts'
+import { optionValues, STEP, type GameContext, type Mode } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
 import createGame, { match, options } from './index.ts'
 
@@ -57,6 +57,17 @@ describe('Freestyle Battle', () => {
     copy.init(context('2p', [true, true]))
     copy.restore(JSON.parse(JSON.stringify(game.snapshot())))
     expect((copy.snapshot() as { s: unknown }).s).toEqual(s)
+  })
+
+  it('plays in English with imposed words and no theme by default', () => {
+    for (const o of [undefined, optionValues(options)]) {
+      const game = createGame()
+      game.init(context('2p', [true, true], o))
+      const s = (game.snapshot() as { s: { lang: string; theme: unknown; words: string[][] } }).s
+      expect(s.lang).toBe('en')
+      expect(s.theme).toBeNull()
+      expect(s.words.flat().length).toBeGreaterThan(0)
+    }
   })
 
   it('declares every option default among its choices', () => {

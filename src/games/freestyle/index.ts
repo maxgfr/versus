@@ -29,10 +29,10 @@ export const options: OptionSpec[] = [
     id: 'lang',
     label: 'Language',
     choices: [
-      ['fr', 'Français'],
       ['en', 'English'],
+      ['fr', 'Français'],
     ],
-    default: 'fr',
+    default: 'en',
   },
   {
     id: 'words',
@@ -51,7 +51,7 @@ export const options: OptionSpec[] = [
       ['random', 'Random'],
       ...THEME_IDS.map((id): [string, string] => [id, `${THEMES[id]?.en} · ${THEMES[id]?.fr}`]),
     ],
-    default: 'random',
+    default: 'none',
     wrap: true,
   },
 ]
@@ -72,9 +72,9 @@ class Freestyle extends BaseGame<State> {
     return battleNew(
       ctx.rng,
       {
-        lang: (o.lang === 'en' ? 'en' : 'fr') as Lang,
+        lang: (o.lang === 'fr' ? 'fr' : 'en') as Lang,
         words: o.words !== 'off',
-        theme: o.theme ?? 'random',
+        theme: o.theme ?? 'none',
       },
       ctx.target || match.default,
       this.look.solo,
