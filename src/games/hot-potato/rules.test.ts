@@ -15,6 +15,8 @@ import {
   FOLLOW,
   FUMBLE,
   HEAT_THROWS,
+  HOLD_COOL,
+  HOLD_HEAT,
   LIMIT_B,
   LIMIT_R,
   SPEED0,
@@ -23,6 +25,7 @@ import {
   boomDelay,
   canThrow,
   followThrough,
+  heatNow,
   heatOf,
   holderOf,
   incoming,
@@ -35,6 +38,21 @@ import {
 } from './rules.ts'
 
 describe('hot potato rules', () => {
+  it('a potato held in the mitt heats up, and cools back once thrown', () => {
+    // It used to keep the same colour however long you held it.
+    const p = potatoNew(0, 0)
+    expect(heatNow(p, 0, 0)).toBe(0)
+    expect(heatNow(p, HOLD_HEAT / 2, 0)).toBeCloseTo(0.5, 6)
+    expect(heatNow(p, HOLD_HEAT * 3, 0)).toBe(1)
+    // Thrown after a second in the mitt: the extra heat fades over HOLD_COOL…
+    throwPotato(p, 0, 1)
+    const base = heatOf(p.throws)
+    expect(heatNow(p, 1, 0)).toBeCloseTo(base + 1 / HOLD_HEAT, 6)
+    expect(heatNow(p, 1 + HOLD_COOL / 2, 0)).toBeCloseTo(base + 0.5 / HOLD_HEAT, 6)
+    // …down to the heat of its throws alone.
+    expect(heatNow(p, 1 + HOLD_COOL, 0)).toBeCloseTo(base, 6)
+  })
+
   it('the half a potato is in decides who holds it', () => {
     expect(holderOf(1200)).toBe(0)
     expect(holderOf(600)).toBe(1)

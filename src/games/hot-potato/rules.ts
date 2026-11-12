@@ -99,6 +99,27 @@ export const speedOf = (throws: number): number => Math.min(SPEED_MAX, SPEED0 + 
 /** 0..1 how hot the potato is. */
 export const heatOf = (throws: number): number => Math.min(1, throws / HEAT_THROWS)
 
+/** Seconds of sitting in a mitt that take the potato from its throws' heat to full heat. */
+export const HOLD_HEAT = 2.5
+/** Seconds the heat built up in a mitt takes to fade once the potato is thrown. */
+export const HOLD_COOL = 0.5
+
+/**
+ * 0..1 how hot the potato looks right now: its throws' heat plus the heat it
+ * builds up while someone holds on to it (`heldSince`: game time it landed in
+ * the mitt, or was served). Thrown, that extra heat fades over HOLD_COOL. Looks
+ * only: speed still comes from the throws.
+ */
+export function heatNow(p: Potato, now: number, heldSince: number): number {
+  let extra = 0
+  if (p.held) extra = Math.max(0, now - heldSince) / HOLD_HEAT
+  else if (p.thrownAt >= 0) {
+    const built = Math.max(0, p.thrownAt - heldSince) / HOLD_HEAT
+    extra = built * Math.max(0, 1 - (now - p.thrownAt) / HOLD_COOL)
+  }
+  return Math.min(1, heatOf(p.throws) + extra)
+}
+
 /** Move the potato, and note when it crosses into a half. */
 export function potatoStep(p: Potato, dt: number, now: number): void {
   if (!p.held) {

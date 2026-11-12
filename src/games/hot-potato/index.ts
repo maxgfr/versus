@@ -108,7 +108,7 @@ class HotPotato extends BaseGame<State> {
       server,
       throwAt: -1,
       thrower: server,
-      landAt: -10,
+      landAt: 0,
       lock: [-1, -1],
       fumbleAt: [-10, -10],
       winner: null,

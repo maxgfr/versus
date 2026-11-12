@@ -6,7 +6,7 @@ import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE, alpha, mix, shade } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
 import type { Rounds } from '../../engines/reflex/index.ts'
-import { canThrow, heatOf, incoming, LIMIT_B, LIMIT_R, warmth, type Potato } from './rules.ts'
+import { canThrow, heatNow, incoming, LIMIT_B, LIMIT_R, warmth, type Potato } from './rules.ts'
 import type { State } from './index.ts'
 
 /*
@@ -179,8 +179,8 @@ function potato(
   now: number,
   squash: number,
   flying: boolean,
+  heat: number,
 ): void {
-  const heat = heatOf(pot.throws)
   const x = W / 2
   // Speed ghosts behind it while it flies: longer and brighter for a flicked throw.
   if (flying) {
@@ -499,7 +499,8 @@ export function renderPotato(
 ): void {
   const pot = s.pot
   const exploded = s.boomed >= 0
-  const heat = exploded ? 0 : heatOf(pot.throws)
+  // Held, it heats up in the mitt: the longer you keep it, the redder it gets.
+  const heat = exploded ? 0 : heatNow(pot, now, s.landAt)
   const loser: Side | null = exploded ? (pot.y > MID ? 0 : 1) : null
   const glow: [number, number] = [0, 0]
   if (s.winner !== null) glow[s.winner] = 0.55 + 0.45 * Math.sin(now * 8)
@@ -521,7 +522,7 @@ export function renderPotato(
   if (exploded) blast(g, pot.y, s.boomed, now)
   else if (s.rounds.phase === 'play') {
     steam(g, o.y, heat, now)
-    potato(g, pot, o.y, now, o.potSq, !pot.held)
+    potato(g, pot, o.y, now, o.potSq, !pot.held, heat)
   }
   if (!o.over) {
     for (const side of [0, 1] as Side[]) {
