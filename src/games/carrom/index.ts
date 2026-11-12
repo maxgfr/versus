@@ -47,6 +47,8 @@ interface State extends TurnState {
   wonAt: number
   /** The computer's shot being lined up, null otherwise. */
   cue: Cue | null
+  /** A player's shot being lined up (synced, so the online guest sees its own aim). */
+  aim: Aim | null
 }
 
 /** Boards to win the match: first to N, each board a full game of carrom. */
@@ -138,7 +140,6 @@ class Carrom extends TurnGame<State> {
   ]
   private flicks: [Flick, Flick] = [new Flick(), new Flick()]
   /** Cosmetic: the flick being lined up. */
-  private aiming: Aim | null = null
   /** The turn side is sliding the striker along its baseline. */
   private placing = false
   private gone = false
@@ -177,6 +178,7 @@ class Carrom extends TurnGame<State> {
       trayAt: [-9, -9],
       wonAt: -1,
       cue: null,
+      aim: null,
     }
   }
 
@@ -287,6 +289,7 @@ class Carrom extends TurnGame<State> {
     s.wonAt = -1
     s.sinks = []
     s.cue = null
+    s.aim = null
     this.shownX = null
     this.ctx.audio.play('whoosh', 0.8)
   }
@@ -323,11 +326,11 @@ class Carrom extends TurnGame<State> {
       // A swipe off the striker is a flick; anything else is the slingshot pull.
       if (f.on) {
         a.cancel()
-        this.aiming = f.aim
+        this.s.aim = f.aim
         return
       }
       a.update(input)
-      this.aiming = a.aim ? { dx: a.aim.dx, dy: a.aim.dy, power: a.aim.power } : null
+      this.s.aim = a.aim ? { dx: a.aim.dx, dy: a.aim.dy, power: a.aim.power } : null
       if (a.shot) this.flick(a.shot.dx, a.shot.dy, a.shot.power)
     }
   }
@@ -359,14 +362,13 @@ class Carrom extends TurnGame<State> {
     this.prev.n = -1
     this.trail.length = 0
     this.shownX = null
-    this.aiming = null
   }
 
   private flick(dx: number, dy: number, power: number): void {
     const b = this.s.board
     strike(b, dx, dy, power)
     this.placing = false
-    this.aiming = null
+    this.s.aim = null
     this.s.cue = null
     for (const a of this.aims) a.cancel()
     for (const f of this.flicks) f.cancel()
@@ -495,7 +497,7 @@ class Carrom extends TurnGame<State> {
     // The computer's shot ramps up on screen like a pull being drawn.
     // Online, each phone shows only its own player's aim and coaching.
     const mine = g.viewer === null || g.viewer === b.turn
-    let aim = mine ? this.aiming : null
+    let aim = mine ? s.aim : null
     if (s.cue) {
       const k = Math.min(1, (this.time - s.cue.at) / CUE_TIME)
       aim = { dx: s.cue.dx, dy: s.cue.dy, power: s.cue.power * k * (2 - k) }

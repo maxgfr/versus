@@ -36,6 +36,9 @@ interface State {
   calls: [Call | null, Call | null]
   /** Game time the match was decided (the closing banner). */
   endAt: number
+  /** The swipe being drawn on each lane and the path it would bowl (synced, so the
+   * online guest sees its own swipe). */
+  trails: [Trail | null, Trail | null]
 }
 
 /** Frames to bowl, chosen by the players before the match. */
@@ -53,7 +56,6 @@ class Bowling extends BaseGame<State> {
     null,
     null,
   ]
-  private trails: [Trail | null, Trail | null] = [null, null]
   /** Cosmetic: recent ball positions per lane (lane coordinates). */
   private ballTrails: [{ x: number; y: number }[], { x: number; y: number }[]] = [[], []]
   /** Cosmetic: last step's ball and pin positions per lane, for interpolation. */
@@ -76,6 +78,7 @@ class Bowling extends BaseGame<State> {
     return {
       lanes: [this.fresh(n), this.fresh(n)],
       calls: [null, null],
+      trails: [null, null],
       endAt: -1,
     }
   }
@@ -161,7 +164,7 @@ class Bowling extends BaseGame<State> {
       if (!last || Math.hypot(q.x - last.x, q.y - last.y) > 2)
         sw.pts.push({ x: q.x, y: q.y, t: this.time })
       const t = swipeThrow(sw.pts)
-      this.trails[side] = {
+      this.s.trails[side] = {
         pts: sw.pts.slice(-40).map((k) => ({ x: k.x, y: k.y })),
         path: t ? trajectory(t.dx, t.dy, t.speed, t.curve, 0.9, 26, lane.ball.x) : [],
         power: t ? prog(t.speed, MIN_SPEED, MAX_SPEED) : 0,
@@ -170,7 +173,7 @@ class Bowling extends BaseGame<State> {
     }
     // Released: the swipe is the throw (or nothing, for a tap).
     this.swipes[side] = null
-    this.trails[side] = null
+    this.s.trails[side] = null
     const t = swipeThrow(sw.pts)
     if (!t) return
     throwBall(lane, t.dx, t.dy, t.speed, t.curve, this.time, lane.ball.x)
@@ -304,7 +307,6 @@ class Bowling extends BaseGame<State> {
   override restore(snap: unknown): void {
     super.restore(snap)
     this.swipes = [null, null]
-    this.trails = [null, null]
     this.ballTrails = [[], []]
     this.prev = [null, null]
   }
@@ -348,7 +350,7 @@ class Bowling extends BaseGame<State> {
         lane,
         side,
         time: this.time,
-        trail: this.trails[side],
+        trail: s.trails[side],
         hint: !this.isBot(side) && lane.frames.length === 1 && lane.frames[0]?.length === 0,
         call: s.calls[side],
         ballTrail: bt,

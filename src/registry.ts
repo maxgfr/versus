@@ -312,7 +312,7 @@ const TABLE: Record<Family, Row[]> = {
       '⚔️',
       "Throw swords at your rival's spinning shield. Most hits wins.",
     ],
-    ['throw', 'Throw', '🥎', 'Swing and let go at the right moment. Longest throw of three wins.'],
+    ['throw', 'Throw', '🥎', 'Swing and let go at the right moment. Longest throw wins.'],
     [
       'cannon-duel',
       'Cannon Duel',

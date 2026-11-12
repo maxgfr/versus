@@ -249,8 +249,11 @@ export function winner(w: World): Side | 'draw' | null {
   if (w.crown[0] >= w.target) return 0
   if (w.crown[1] >= w.target) return 1
   if (w.t >= LIMIT) {
-    if (w.crown[0] === w.crown[1]) return 'draw'
-    return w.crown[0] > w.crown[1] ? 0 : 1
+    // Out of time: the whole seconds the result screen shows decide it.
+    const a = Math.floor(w.crown[0])
+    const b = Math.floor(w.crown[1])
+    if (a === b) return 'draw'
+    return a > b ? 0 : 1
   }
   return null
 }

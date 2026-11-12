@@ -208,6 +208,14 @@ export function fire(s: State, side: Side, x: number, y: number): boolean {
     }
   }
   if (!best) return false
+  // A tap just off the rim is a shot at that target: the bolt flies to its edge
+  // (it used to land on the tap point, a sure miss called "too late").
+  const d = Math.hypot(x - best.x, y - best.y)
+  const reach = best.r + HIT_PAD * 0.5
+  if (d > reach) {
+    x = best.x + ((x - best.x) / d) * reach
+    y = best.y + ((y - best.y) / d) * reach
+  }
   s.bolts.push({ side, x, y, target: best.id, at: s.now + BOLT_TIME })
   s.reload[side] = RELOAD
   const bow = BOW[side] as { x: number; y: number }

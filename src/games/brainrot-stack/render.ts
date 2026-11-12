@@ -347,7 +347,8 @@ function hover(g: Draw, v: SceneView): void {
 function claw(g: Draw, v: SceneView): void {
   const e = v.time - v.dropAt
   if (e < 0 || e > 0.8) return
-  const col = SIDE[v.turn === 0 ? 1 : 0]
+  // The turn only passes once the tower settles, after this swing: it is still the dropper's.
+  const col = SIDE[v.turn]
   const y = v.hoverY - 120 - outCubic(e / 0.8) * 200
   const open = 10 + 26 * outBack(Math.min(1, e / 0.2))
   g.alpha(1 - e / 0.8, () => clawAt(g, v.dropX, v.dropX, y, col, open))

@@ -68,6 +68,17 @@ describe('target practice: firing', () => {
     expect(s.targets.find((x) => x.id === t.id)).toBeUndefined()
   })
 
+  it('a tap just off the rim, still in tap reach, hits that target', () => {
+    // It used to load a bolt aimed at the tap point: a sure miss, called "too late".
+    const s = newState()
+    const t = target(s, { x: 500, y: 900 })
+    const off = t.r + (HIT_PAD + TAP_PAD) / 2
+    expect(off - t.r).toBeGreaterThan(HIT_PAD)
+    expect(fire(s, 0, 500 + off, 900)).toBe(true)
+    const ev = advance(s, BOLT_TIME + STEP, new Rng(1))
+    expect(ev.find((e) => e.kind === 'hit')).toBeDefined()
+  })
+
   it('the bow reloads: no second bolt until RELOAD has passed', () => {
     const s = newState()
     target(s, { x: 300, y: 900 })

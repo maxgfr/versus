@@ -235,6 +235,12 @@ class StickyTongues extends BaseGame<State> {
       endAt: this.s.endAt,
     })
   }
+
+  /** Online guest: no steps run here, so interpolate from the snapshot itself (no flicker). */
+  override restore(snap: unknown): void {
+    super.restore(snap)
+    this.prevLen = [this.s.frogs[0].tongue.len, this.s.frogs[1].tongue.len]
+  }
 }
 
 export default () => new StickyTongues()

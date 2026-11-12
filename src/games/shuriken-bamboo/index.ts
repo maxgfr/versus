@@ -67,7 +67,7 @@ class ShurikenBamboo extends BaseGame<Game> {
       if (w !== null) fx.confetti(w)
       this.finish(w ?? 'draw', {
         score: [this.s.score[0], this.s.score[1]],
-        note: w === null ? 'Even' : `${w === 0 ? 'Red' : 'Blue'} cut the most bamboo`,
+        note: w === null ? 'Even' : `${this.ctx.names[w]} cut the most bamboo`,
         delay: 2.4,
       })
     }

@@ -55,6 +55,8 @@ interface State extends TurnState {
     power: number
     at: number
   } | null
+  /** The putt being lined up (synced, so the online guest sees its own aim line). */
+  aim: Aim | null
 }
 
 /** Holes to play, chosen by the players before the match. */
@@ -72,7 +74,6 @@ class MiniGolf extends TurnGame<State> {
   private waiting = false
   private gone = false
   /** Cosmetic: the putt being lined up. */
-  private aiming: Aim | null = null
   /** Cosmetic: recent positions of each rolling ball. */
   private trails: [Pt[], Pt[]] = [[], []]
   /** Cosmetic: each ball's position at the previous step, for smooth motion between steps. */
@@ -101,6 +102,7 @@ class MiniGolf extends TurnGame<State> {
       holeAt: 0,
       bumpAt: geo.bumpers.map(() => -9),
       shot: null,
+      aim: null,
     }
   }
 
@@ -138,7 +140,7 @@ class MiniGolf extends TurnGame<State> {
     const side = this.s.turn
     const a = this.aims[side]
     a.update(this.ctx.input.player(side))
-    this.aiming = a.aim ? { dx: a.aim.dx, dy: a.aim.dy, power: a.aim.power } : null
+    this.s.aim = a.aim ? { dx: a.aim.dx, dy: a.aim.dy, power: a.aim.power } : null
     if (a.shot) this.strike(side, a.shot.dx, a.shot.dy, a.shot.power)
   }
 
@@ -166,7 +168,7 @@ class MiniGolf extends TurnGame<State> {
     s.rollAt = this.time
     const from = s.table.balls[side]
     s.shot = { side, x: from.x, y: from.y, dx, dy, power, at: this.time }
-    this.aiming = null
+    s.aim = null
     for (const a of this.aims) a.cancel()
     const b = s.table.balls[side]
     const { fx, audio } = this.ctx
@@ -338,7 +340,6 @@ class MiniGolf extends TurnGame<State> {
   override restore(snap: unknown): void {
     super.restore(snap)
     this.prev = null
-    this.aiming = null
   }
 
   render(g: Draw, alpha = 1): void {
@@ -366,7 +367,7 @@ class MiniGolf extends TurnGame<State> {
       time: this.time,
       turn: s.turn,
       live: s.phase === 'aim',
-      aiming: s.phase === 'aim' ? this.aiming : null,
+      aiming: s.phase === 'aim' ? s.aim : null,
       bumpAt: s.bumpAt,
       trails: this.trails,
       pos,
