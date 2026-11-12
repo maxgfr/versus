@@ -4,7 +4,7 @@ import { forgetRooms, type RecentRoom, rememberRoom, store } from '../core/store
 import qrcode from 'qrcode-generator'
 import { findGame, isBuilt } from '../registry.ts'
 import { clear, h, onTap } from './dom.ts'
-import { home, playOnline } from './home.ts'
+import { home } from './home.ts'
 import { icon } from './icons.ts'
 import { go } from './router.ts'
 import { ROOM_KEY, ui } from './state.ts'
@@ -49,9 +49,6 @@ function saved(): Saved | null {
 
 /** The room just left, so "Rejoin" gets the same seat back. */
 let last: Saved | null = null
-
-/** Rejoined from "Your rooms": go straight back into its last game once the friend is in. */
-let resume: { code: string; id: string } | null = null
 
 export const roomPath = (code: string): string => `/online/${code}`
 const inGame = (code: string) => location.hash.startsWith(`#${roomPath(code)}/play/`)
@@ -123,7 +120,6 @@ export function leaveRoom(): void {
   const link = ui.link
   if (!link) return
   last = { code: link.code, role: link.role }
-  resume = null
   link.leave()
   ui.link = null
   remember(null)
@@ -225,7 +221,12 @@ function ago(t: number): string {
   return hr < 24 ? `${hr} h ago` : `${Math.round(hr / 24)} d ago`
 }
 
-/** Rooms this phone was in: one tap back into the same seat. */
+/**
+ * Rooms this phone was in: one tap back into the same seat, on the room's game
+ * grid. Not straight into its last game: that started a game for both phones
+ * the moment the friend came in. A game still under way pulls the other phone
+ * back in on its own (the host's round, the guest's answer to "lobby").
+ */
 function recent(): HTMLElement[] {
   if (!store.rooms.length) return []
   const list = h('ul.rooms')
@@ -233,17 +234,16 @@ function recent(): HTMLElement[] {
     const game = r.game ? findGame(r.game) : undefined
     const open = h(
       'button.room-open',
-      { 'aria-label': game ? `Back to ${game.name} in room ${r.code}` : `Rejoin room ${r.code}` },
+      { 'aria-label': `Rejoin room ${r.code}` },
       h('span.room-code', r.code),
       h(
         'span.room-meta',
-        game ? `Back to ${game.name}` : r.role === 'host' ? 'You created it' : 'You joined',
+        game ? `Last game: ${game.name}` : r.role === 'host' ? 'You created it' : 'You joined',
         h('span.sub', ago(r.at)),
       ),
     )
     onTap(open, () => {
       audio.unlock()
-      resume = game ? { code: r.code, id: game.id } : null
       room(r.code, r.role)
       go(roomPath(r.code))
     })
@@ -311,14 +311,6 @@ export function roomScreen(root: HTMLElement, code: string): () => void {
     clear(root)
     if (link.connected) cleanup = home(root, 'online')
     else cleanup = waiting(root, link)
-    const back = resume?.code === code ? findGame(resume.id) : undefined
-    if (link.connected && back) {
-      resume = null
-      // After this screen is in place, not in the middle of routing to it.
-      setTimeout(() => {
-        if (location.hash === `#${roomPath(code)}`) playOnline(link, back)
-      })
-    }
   }
   show()
   const unwatch = link.watch(show)

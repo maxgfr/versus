@@ -169,7 +169,7 @@ test('online has its own address, and leaving it leaves the room', async ({ brow
   // The address bar is the invite.
   await guest.goto(`./#/online/${code}`)
   await expect(host.locator('.online-banner')).toBeVisible({ timeout: 60_000 })
-  await expect(host.locator('.card')).toHaveCount(114)
+  await expect(host.locator('.card')).toHaveCount(115)
   // A game opens under the room's address on both phones.
   await host.locator('.card[data-id="air-hockey"]').click()
   await expect(host).toHaveURL(new RegExp(`#/online/${code}/play/air-hockey$`))
@@ -216,17 +216,18 @@ test('online has its own address, and leaving it leaves the room', async ({ brow
   await host.goto('./#/online')
   await expect(host.locator('.rooms li')).toHaveCount(1)
   await expect(host.locator('.room-open')).toContainText(code)
-  // The room remembers its last game: one tap goes straight back into it.
-  await expect(host.locator('.room-open')).toContainText('Back to Air Hockey')
+  // The room shows its last game, but rejoining lands on the grid: no game
+  // starts on its own when the friend comes in.
+  await expect(host.locator('.room-open')).toContainText('Last game: Air Hockey')
   await guest.goto('./#/online')
-  await expect(guest.locator('.room-open')).toContainText('Back to Air Hockey')
+  await expect(guest.locator('.room-open')).toContainText('Last game: Air Hockey')
   await host.locator('.room-open').click()
   await guest.locator('.room-open').click()
-  await host.waitForURL(new RegExp(`#/online/${code}/play/air-hockey$`), { timeout: 60_000 })
-  await guest.waitForURL(new RegExp(`#/online/${code}/play/air-hockey$`), { timeout: 30_000 })
-  await host.getByRole('button', { name: 'Back to games' }).click()
-  await expect(host.locator('.online-banner')).toContainText('you are Red')
-  await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 20_000 })
+  await expect(host.locator('.online-banner')).toContainText('you are Red', { timeout: 60_000 })
+  await expect(guest.locator('.online-banner')).toContainText('you are Blue', { timeout: 30_000 })
+  await host.waitForTimeout(3000)
+  await expect(host).toHaveURL(new RegExp(`#/online/${code}$`))
+  await expect(guest).toHaveURL(new RegExp(`#/online/${code}$`))
   // Forgetting a room takes it off the list.
   await host.goto('./#/')
   await host.goto('./#/online')
