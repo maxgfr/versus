@@ -10,6 +10,7 @@ import {
   BAT_R,
   bandOf,
   type Cmd,
+  MATCH_RAMP,
   MAX_SPEED,
   newWorld,
   predictCross,
@@ -219,7 +220,8 @@ describe('ball physics', () => {
     inPlay(w, bat.x, bat.y - 120, 0, 900)
     step(w, STEP, idle(), new Rng(4))
     expect(w.speed).toBeGreaterThan(1500)
-    expect(w.speed).toBeLessThanOrEqual(2100)
+    // The cap, quickened only by the match ramp (one step in: a hair).
+    expect(w.speed).toBeLessThanOrEqual(2100 * w.tempo)
   })
 
   it('a ball leaving the bottom edge is a point for blue, and the server alternates', () => {
@@ -350,8 +352,21 @@ describe('tempo', () => {
     expect(newWorld(0).tempo).toBe(1)
     const p = pace()
     expect(p.serve).toBe(BASE_SPEED)
-    expect(p.top).toBeCloseTo(MAX_SPEED, 6)
+    // One step into the rally the match ramp has barely started.
+    expect(p.top).toBeCloseTo(MAX_SPEED, 0)
     expect(pace(TEMPO.normal)).toEqual(p)
+  })
+
+  it('the match quickens the longer it is played, from the level’s tempo', () => {
+    const w = newWorld(0, 7, TEMPO.hard)
+    // Holding the serve does not count.
+    for (let i = 0; i < 300; i++) step(w, STEP, idle(), new Rng(1))
+    expect(w.played).toBe(0)
+    const bat = w.bats[0]
+    inPlay(w, bat.x, bat.y - 300, 0, -900)
+    w.played = MATCH_RAMP.over
+    step(w, STEP, idle(), new Rng(1))
+    expect(w.tempo).toBeCloseTo(TEMPO.hard * MATCH_RAMP.max, 6)
   })
 
   it('hard plays faster, easy calmer', () => {

@@ -1,4 +1,5 @@
 import { type Difficulty, other, type Side } from '../../core/game.ts'
+import { paceAt, type Ramp } from '../../core/pace.ts'
 import type { Rng } from '../../core/rng.ts'
 import { MID, W } from '../../core/stage.ts'
 import { type Box, type Disc, disc, driveTo, rink } from '../../engines/puck/index.ts'
@@ -43,7 +44,13 @@ export const POINT_PAUSE = 1.1
  */
 export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.28 }
 
-/** The tempo of a match, fixed once at setup. */
+/**
+ * The longer the match, the quicker the table: every shot speeds up by 35 %
+ * over three minutes of play, on top of the level's tempo and the rally ramp.
+ */
+export const MATCH_RAMP: Ramp = { max: 1.35, over: 180 }
+
+/** The tempo a match starts at, fixed once at setup. */
 export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
   return bots.some(Boolean) ? TEMPO[d] : 1
 }
@@ -74,8 +81,12 @@ export interface World {
   bounced: boolean
   /** Sidespin: lateral acceleration (units/s²) the ball curves with, from a brushing stroke. */
   spin: number
-  /** Pace multiplier on every shot (1 = normal), fixed for the match. */
+  /** Pace multiplier on every shot (1 = normal): the base tempo, quickened by the match ramp. */
   tempo: number
+  /** The base tempo set at the start (the level's). */
+  base: number
+  /** Seconds of play so far (serves held and point pauses do not count). */
+  played: number
 }
 
 export type Event =
@@ -160,6 +171,8 @@ export function newWorld(first: Side, target = 7, tempo = 1): World {
     bounced: false,
     spin: 0,
     tempo,
+    base: tempo,
+    played: 0,
   }
   holdBall(w)
   return w
@@ -389,6 +402,10 @@ export function step(w: World, dt: number, cmd: Cmd, rng: Rng): Event[] {
       holdBall(w)
     }
     return ev
+  }
+  if (w.phase === 'play') {
+    w.played += dt
+    w.tempo = w.base * paceAt(w.played, MATCH_RAMP)
   }
   const h = dt / SUBSTEPS
   const from = [

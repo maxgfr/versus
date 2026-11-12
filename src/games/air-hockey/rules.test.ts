@@ -13,6 +13,8 @@ import { decide, newMemory, TUNING } from './bot.ts'
 import {
   MAX_PUCK,
   newWorld,
+  paceOf,
+  RAMP,
   RINK,
   step,
   TARGET,
@@ -161,5 +163,40 @@ describe('tempo', () => {
     for (let s = 1; s <= 4; s++)
       if (winner(botMatch('hard', 'easy', s, false, TARGET, fast).w) === 0) hard++
     expect(hard).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('ramp', () => {
+  /** Speed of the puck after a mallet drives into it at rest, with `played` seconds on the clock. */
+  function shot(played: number): number {
+    const w = newWorld(false, 0)
+    w.played = played
+    const m = w.mallets[0]!
+    w.puck = disc(W / 2, MID + 200, w.puck.r)
+    m.x = W / 2
+    m.y = MID + 200 + w.puck.r + m.r + 30
+    step(w, STEP, [{ x: W / 2, y: MID }, null], [2400, 2400])
+    for (let i = 0; i < 3 && Math.hypot(w.puck.vx, w.puck.vy) === 0; i++)
+      step(w, STEP, [{ x: W / 2, y: MID }, null], [2400, 2400])
+    return Math.hypot(w.puck.vx, w.puck.vy)
+  }
+
+  it('counts play time, not goal pauses', () => {
+    const w = newWorld(false, 0)
+    step(w, 0.5, [null, null], [0, 0])
+    expect(w.played).toBeCloseTo(0.5, 9)
+    w.phase = 'goal'
+    w.pause = 1
+    step(w, 0.5, [null, null], [0, 0])
+    expect(w.played).toBeCloseTo(0.5, 9)
+  })
+
+  it('a later shot flies harder, up to the ramp top', () => {
+    const early = shot(0)
+    expect(early).toBeGreaterThan(0)
+    expect(shot(RAMP.over)).toBeGreaterThan(early * 1.25)
+    const w = newWorld(false, 0)
+    w.played = RAMP.over * 5
+    expect(paceOf(w)).toBeCloseTo(RAMP.max, 9)
   })
 })

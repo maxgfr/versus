@@ -12,6 +12,7 @@ import {
   type Cmd,
   COURT,
   newWorld,
+  RAMP,
   REACH,
   step,
   TEMPO,
@@ -350,6 +351,23 @@ describe('tempo', () => {
     expect(hard.steps).toBeLessThan(normal.steps / 1.18)
     expect(easy.steps).toBeGreaterThan(normal.steps * 1.1)
     expect(Math.abs(hard.y - normal.y)).toBeLessThan(30)
+  })
+
+  it('the ball quickens the longer the rallies last, from the level’s tempo', () => {
+    const w = newWorld(0, 'clay', TEMPO.hard)
+    // Waiting to serve does not count.
+    for (let i = 0; i < 600; i++) step(w, STEP, idle())
+    expect(w.played).toBe(0)
+    expect(w.tempo).toBe(TEMPO.hard)
+    const cmd = idle()
+    cmd.serve[0] = true
+    while (w.phase === 'serve') step(w, STEP, cmd)
+    w.played = RAMP.over / 2
+    step(w, STEP, idle())
+    expect(w.tempo).toBeCloseTo(TEMPO.hard * (1 + (RAMP.max - 1) / 2), 2)
+    w.played = RAMP.over * 10
+    step(w, STEP, idle())
+    expect(w.tempo).toBeCloseTo(TEMPO.hard * RAMP.max, 6)
   })
 
   it('only a match with a computer changes pace', () => {

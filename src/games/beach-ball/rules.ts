@@ -1,4 +1,5 @@
 import { type Difficulty, type Side, STEP } from '../../core/game.ts'
+import { paceAt, type Ramp } from '../../core/pace.ts'
 import type { Rng } from '../../core/rng.ts'
 import { driveTo, halfBox, type Disc, disc, rink } from '../../engines/puck/index.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -52,7 +53,13 @@ export const HUMAN_SPEED = 3800
  */
 export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
 
-/** The tempo of a match, fixed once at setup. */
+/**
+ * The longer the match, the quicker the ball: its clock speeds up by 30 % over
+ * three minutes of rallies, on top of the level's tempo and the rally's own pace.
+ */
+export const RAMP: Ramp = { max: 1.3, over: 180 }
+
+/** The tempo a match starts at, fixed once at setup. */
 export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
   return bots.some(Boolean) ? TEMPO[d] : 1
 }
@@ -95,8 +102,12 @@ export interface World {
   dropping: boolean
   /** Bumps so far in this rally (pace escalates with it). */
   hits: number
-  /** Ball clock multiplier (1 = normal), fixed for the match. */
+  /** Ball clock multiplier (1 = normal): the base tempo, quickened by the ramp. */
   tempo: number
+  /** The base tempo set at the start (the level's). */
+  base: number
+  /** Seconds of rallies played so far (point pauses do not count). */
+  played: number
 }
 
 export type Event =
@@ -150,6 +161,8 @@ export function newWorld(teams: boolean, server: Side, rng: Rng, tempo = 1): Wor
     dropping: false,
     hits: 0,
     tempo,
+    base: tempo,
+    played: 0,
   }
   serve(w, server, rng)
   return w
@@ -217,6 +230,8 @@ export function step(
     }
     return ev
   }
+  w.played += dt
+  w.tempo = w.base * paceAt(w.played, RAMP)
   const h = dt / SUBSTEPS
   // The finger moves once per frame: walk each target evenly through the
   // substeps so a blob's velocity is its real speed in every one of them.
@@ -310,6 +325,10 @@ function flight(w: World, h: number, ev: Event[], rng: Rng): void {
     const ny = d > 0 ? dy / d : fwd(bl.side)
     b.x = bl.x + nx * r
     b.y = bl.y + ny * r
+    // Never through the net: a blob at the net pushes the ball out on its own
+    // side (it used to pop it across below the tape, with no fault called).
+    const own = -fwd(bl.side)
+    if ((b.y - MID) * own < 0 && b.z < NET_H) b.y = MID + own
     if (w.last === bl.side) w.count++
     else {
       w.last = bl.side

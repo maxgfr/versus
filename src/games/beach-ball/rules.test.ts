@@ -11,6 +11,7 @@ import {
   SPIKE_FULL,
   landingOf,
   newWorld,
+  RAMP,
   step,
   TEMPO,
   tempoOf,
@@ -192,6 +193,21 @@ describe('beach ball rules', () => {
     expect(w.why).toBe('net')
   })
 
+  it('a blob at the net never pushes the ball through it below the tape', () => {
+    const rng = new Rng(6)
+    const w = newWorld(false, 0, rng)
+    const red = w.blobs[0]!
+    red.x = 500
+    red.y = MID + 70
+    red.vx = red.vy = 0
+    // A ball just on red's side of the net, low, right above red's blob.
+    toss(w, 500, MID + 20, 0, 0, 200, 0)
+    const ev = run(w, rng, [{ x: 500, y: MID + 70 }, null], (e) => e.length > 0, 30)
+    // It used to pop across under the tape with no fault: now the low bump is a net.
+    expect(ev.some((e) => e.kind === 'net')).toBe(true)
+    expect(w.score).toEqual([0, 1])
+  })
+
   it('a ball that clears the net high is not a net fault', () => {
     const rng = new Rng(5)
     const w = newWorld(false, 0, rng)
@@ -316,6 +332,17 @@ describe('tempo', () => {
     }
     throw new Error('no landing')
   }
+
+  it('the ball quickens the longer the match runs, from the level’s tempo', () => {
+    const rng = new Rng(2)
+    const w = newWorld(false, 0, rng, TEMPO.hard)
+    const still = w.blobs.map(() => null)
+    step(w, STEP, still, speeds(w), rng)
+    expect(w.played).toBeCloseTo(STEP, 9)
+    w.played = RAMP.over * 4
+    step(w, STEP, still, speeds(w), rng)
+    expect(w.tempo).toBeCloseTo(TEMPO.hard * RAMP.max, 6)
+  })
 
   it('normal keeps the ball flight exactly as before', () => {
     expect(TEMPO.normal).toBe(1)

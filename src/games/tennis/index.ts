@@ -7,6 +7,7 @@ import { MID, W } from '../../core/stage.ts'
 import { type Disc, fingerTarget } from '../../engines/puck/index.ts'
 import { type BotMemory, decide, newMemory, TUNING } from './bot.ts'
 import { type Look, type Mark, render } from './render.ts'
+import { paceCue, paceStep } from '../../core/pace.ts'
 import { type Ball, type Cmd, type Event, newWorld, step, tempoOf, type World } from './rules.ts'
 
 interface State {
@@ -79,6 +80,8 @@ class Tennis extends BaseGame<State> {
         cmd.target[side] = fingerTarget(p)
         cmd.serve[side] = p.downs.length > 0
       }
+      // The blobs speed up with the ball: the same court, less time to react.
+      cmd.speed[side] *= w.tempo / w.base
     }
     return cmd
   }
@@ -86,8 +89,10 @@ class Tennis extends BaseGame<State> {
   protected step(dt: number): void {
     const w = this.s.w
     this.prev = { ball: { ...w.ball }, blobs: [{ ...w.blobs[0] }, { ...w.blobs[1] }] }
+    const was = paceStep(w.tempo / w.base)
     const events = step(w, dt, this.commands(dt))
     for (const e of events) this.juice(e)
+    if (paceStep(w.tempo / w.base) > was) paceCue(this.ctx)
     this.dust(dt)
   }
 

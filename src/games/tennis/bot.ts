@@ -152,7 +152,7 @@ export function decide(
   // Aim the return at the side of the court away from the rival.
   const rival = w.blobs[other(side)]
   const u = Math.max(-1, Math.min(1, -(rival.x - W / 2) / 340 + (rng.next() - 0.5) * 0.4))
-  const spot = intercept(w, side, tune.speed, u * REACH * 0.8)
+  const spot = intercept(w, side, (tune.speed * w.tempo) / w.base, u * REACH * 0.8)
   if (!spot) {
     mem.target = home
     return { target: mem.target, serve: false }

@@ -1,4 +1,5 @@
 import { type Difficulty, other, type Side } from '../../core/game.ts'
+import { paceAt, type Ramp } from '../../core/pace.ts'
 import { MID, W } from '../../core/stage.ts'
 import { type Box, type Disc, disc, driveTo } from '../../engines/puck/index.ts'
 
@@ -49,7 +50,13 @@ export const POINT_PAUSE = 1.3
  */
 export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.25 }
 
-/** The tempo of a match, fixed once at setup. */
+/**
+ * The longer the match, the quicker the ball: its clock speeds up by a third
+ * over three minutes of rallies, on top of the level's tempo.
+ */
+export const RAMP: Ramp = { max: 1.35, over: 180 }
+
+/** The tempo a match starts at, fixed once at setup. */
 export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
   return bots.some(Boolean) ? TEMPO[d] : 1
 }
@@ -86,8 +93,12 @@ export interface World {
   /** Seconds left in each racket's swing (also its cooldown). */
   swing: [number, number]
   surface: 'clay' | 'grass'
-  /** Ball clock multiplier (1 = normal), fixed for the match. */
+  /** Ball clock multiplier (1 = normal): the match's base tempo, quickened by the ramp. */
   tempo: number
+  /** The base tempo set at the start (the level's). */
+  base: number
+  /** Seconds of rallies played so far (serves and pauses do not count). */
+  played: number
 }
 
 export type Reason = 'out' | 'short' | 'net' | 'double' | 'ace'
@@ -155,6 +166,8 @@ export function newWorld(first: Side, surface: 'clay' | 'grass', tempo = 1): Wor
     swing: [0, 0],
     surface,
     tempo,
+    base: tempo,
+    played: 0,
   }
   holdBall(w)
   return w
@@ -364,6 +377,8 @@ export function step(w: World, dt: number, cmd: Cmd): Event[] {
     if (w.phase === 'serve') holdBall(w)
     return ev
   }
+  w.played += dt
+  w.tempo = w.base * paceAt(w.played, RAMP)
   const h = dt / SUBSTEPS
   const from = [
     { x: w.blobs[0].x, y: w.blobs[0].y },

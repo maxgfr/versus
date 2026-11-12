@@ -1,6 +1,7 @@
 import { floatFor } from '../../core/fx/fx.ts'
 import { lerp, Spring } from '../../core/fx/ease.ts'
 import { BaseGame, type MatchSpec, other, type Side } from '../../core/game.ts'
+import { paceCue, paceStep } from '../../core/pace.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID, W } from '../../core/stage.ts'
@@ -86,7 +87,8 @@ class PingPong extends BaseGame<State> {
         )
         cmd.target[side] = d.target
         cmd.serve[side] = d.serve
-        cmd.speed[side] = TUNING[this.ctx.difficulty].speed
+        // The computer's bat keeps up as the match quickens.
+        cmd.speed[side] = (TUNING[this.ctx.difficulty].speed * w.tempo) / w.base
       } else {
         // The bat follows the finger; the bat's own band keeps it on its edge.
         const p = this.ctx.input.player(side)
@@ -104,8 +106,10 @@ class PingPong extends BaseGame<State> {
       bats: [{ ...w.bats[0] }, { ...w.bats[1] }],
       z: heightOf(w),
     }
+    const was = paceStep(w.tempo / w.base)
     const events = step(w, dt, this.commands(dt), this.ctx.rng)
     for (const e of events) this.juice(e)
+    if (paceStep(w.tempo / w.base) > was) paceCue(this.ctx)
     this.netCross(this.prev.ball.y, w)
   }
 

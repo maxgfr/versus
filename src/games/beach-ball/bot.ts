@@ -166,7 +166,8 @@ export function decide(
     if (w.phase === 'point') return home
     if (bl === striker && ours) {
       const spot =
-        intercept(w, side, bl, tune.speed, bl.lane) ?? (land && { ...land, t: land.t / w.tempo })
+        intercept(w, side, bl, (tune.speed * w.tempo) / w.base, bl.lane) ??
+        (land && { ...land, t: land.t / w.tempo })
       if (spot) {
         const e = tune.error
         const box = halfBox(side, COURT, BLOB_R, bl.lane)

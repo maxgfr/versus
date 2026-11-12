@@ -1,4 +1,5 @@
 import type { Difficulty, Side } from '../../core/game.ts'
+import { paceAt, type Ramp } from '../../core/pace.ts'
 import { MID, W } from '../../core/stage.ts'
 import {
   capSpeed,
@@ -26,7 +27,13 @@ export const MAX_PUCK = 3000
  */
 export const TEMPO: Record<Difficulty, number> = { easy: 0.85, normal: 1, hard: 1.28 }
 
-/** The tempo of a match, fixed once at setup. */
+/**
+ * The longer the match, the livelier the table: shots fly harder and the puck's
+ * top speed rises, by 40 % over three minutes of play, on top of the level's tempo.
+ */
+export const RAMP: Ramp = { max: 1.4, over: 180 }
+
+/** The tempo a match starts at, fixed once at setup. */
 export function tempoOf(d: Difficulty, bots: readonly boolean[]): number {
   return bots.some(Boolean) ? TEMPO[d] : 1
 }
@@ -49,7 +56,12 @@ export interface World {
   pause: number
   /** Who serves next (the side that conceded). */
   server: Side
+  /** Seconds of play so far (goal pauses do not count): drives the ramp. */
+  played: number
 }
+
+/** How much quicker than at the start the table plays now (1 → RAMP.max). */
+export const paceOf = (w: World): number => paceAt(w.played, RAMP)
 
 export type Event =
   | Contact
@@ -79,6 +91,7 @@ export function newWorld(teams: boolean, server: Side): World {
     phase: 'play',
     pause: 0,
     server,
+    played: 0,
   }
   serve(w, server)
   return w
@@ -96,7 +109,8 @@ export type Target = { x: number; y: number } | null
 /**
  * Advance one fixed step. `targets[i]` is where mallet i wants to go (null =
  * stay), `speeds[i]` its top speed, `maxPuck` the puck's (scaled by the
- * tempo). Returns what happened for juice.
+ * tempo, then by the ramp: shots also hit harder as the match goes on).
+ * Returns what happened for juice.
  */
 export function step(
   w: World,
@@ -120,6 +134,8 @@ export function step(
     }
     return events
   }
+  w.played += dt
+  const pace = paceOf(w)
   const h = dt / SUBSTEPS
   for (let s = 0; s < SUBSTEPS; s++) {
     w.mallets.forEach((m, i) => {
@@ -131,14 +147,19 @@ export function step(
     const c = collideWalls(w.puck, RINK)
     if (c && c.speed > 60) events.push(c)
     for (const m of w.mallets) {
+      const vx = w.puck.vx
+      const vy = w.puck.vy
       const hit = collideKinematic(w.puck, m)
       if (hit) {
+        // A later shot carries more: the mallet's kick is scaled by the pace.
+        w.puck.vx = vx + (w.puck.vx - vx) * pace
+        w.puck.vy = vy + (w.puck.vy - vy) * pace
         events.push(hit)
         // A puck squeezed against a wall by a mallet must not tunnel out.
         collideWalls(w.puck, RINK)
       }
     }
-    capSpeed(w.puck, maxPuck)
+    capSpeed(w.puck, maxPuck * pace)
     const scorer = scoredBy(w.puck, RINK)
     if (scorer !== null) {
       w.score[scorer]++

@@ -1,6 +1,7 @@
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
 import { floatFor } from '../../core/fx/fx.ts'
 import { lerp, Spring } from '../../core/fx/ease.ts'
+import { paceCue, paceStep } from '../../core/pace.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { W } from '../../core/stage.ts'
@@ -11,6 +12,7 @@ import {
   type Event,
   MAX_PUCK,
   newWorld,
+  paceOf,
   RINK,
   step,
   type Target,
@@ -80,11 +82,14 @@ class AirHockey extends BaseGame<State> {
       if (this.isBot(m.side)) return botTargets[m.side]?.[i] ?? null
       return fingerTarget(this.ctx.input.player(m.side), m.lane)
     })
+    // The computer's mallet keeps up with the quickening puck.
     const speeds = w.mallets.map((m) =>
-      this.isBot(m.side) ? TUNING[this.ctx.difficulty].speed : HUMAN_SPEED,
+      this.isBot(m.side) ? TUNING[this.ctx.difficulty].speed * paceOf(w) : HUMAN_SPEED,
     )
+    const was = paceStep(paceOf(w))
     const events = step(w, dt, targets, speeds, this.maxPuck)
     for (const e of events) this.juice(e)
+    if (paceStep(paceOf(w)) > was) paceCue(this.ctx)
   }
 
   protected override afterEnd(dt: number): void {

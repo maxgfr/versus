@@ -1,6 +1,7 @@
 import { fingerTarget, type Disc } from '../../engines/puck/index.ts'
 import { lerp, Spring } from '../../core/fx/ease.ts'
 import { BaseGame, type MatchSpec, type Side } from '../../core/game.ts'
+import { paceCue, paceStep } from '../../core/pace.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { MID } from '../../core/stage.ts'
@@ -70,10 +71,14 @@ class BeachBall extends BaseGame<State> {
       if (this.isBot(b.side)) return botTargets[b.side]?.[i] ?? null
       return fingerTarget(this.ctx.input.player(b.side), b.lane)
     })
-    const speeds = w.blobs.map((b) =>
-      this.isBot(b.side) ? TUNING[this.ctx.difficulty].speed : HUMAN_SPEED,
+    // The blobs speed up with the ball: the same beach, less time to react.
+    const pace = w.tempo / w.base
+    const speeds = w.blobs.map(
+      (b) => (this.isBot(b.side) ? TUNING[this.ctx.difficulty].speed : HUMAN_SPEED) * pace,
     )
+    const was = paceStep(pace)
     for (const e of step(w, dt, targets, speeds, this.ctx.rng)) this.juice(e)
+    if (paceStep(w.tempo / w.base) > was) paceCue(this.ctx)
     const won = winner(w, this.target)
     if (won !== null && !this.over) {
       this.s.end = { side: won, at: this.time }
