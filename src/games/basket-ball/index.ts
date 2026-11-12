@@ -206,6 +206,9 @@ class BasketBall extends BaseGame<State> {
       audio.play('bounce', 0.8 + k * 0.5)
       if (k > 0.3) fx.puff(e.x, e.y, 'rgba(255,236,210,0.35)', Math.round(3 + k * 5))
       this.squash[e.side].kick(-3 - k * 5)
+    } else if (e.kind === 'out') {
+      // The spent ball goes in a puff of dust; the next one pops up right after.
+      fx.puff(e.x, e.y, 'rgba(255,236,210,0.45)', 6)
     }
   }
 

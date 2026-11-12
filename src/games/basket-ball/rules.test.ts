@@ -105,6 +105,23 @@ describe('basket ball rules', () => {
     expect(w.score).toEqual([1, 0])
   })
 
+  it('the next ball is ready soon after a basket: no long wait between shots', () => {
+    // It used to bounce twice and roll before a 0.6 s wait, about 2.5 s a shot.
+    const rng = new Rng(1)
+    const w = newWorld(45, rng)
+    w.balls[1].state = 'wait'
+    w.balls[1].wait = 99
+    expect(perfectRedShot(w)).toBe(true)
+    let steps = 0
+    while (w.balls[0].state !== 'ready') {
+      step(w, STEP, rng)
+      if (++steps > 60 * 10) throw new Error('no new ball')
+    }
+    expect(w.score).toEqual([1, 0])
+    // Flight to the rim (T_RING), the drop through the net, one hop and a short wait.
+    expect(steps * STEP).toBeLessThan(T_RING + 1.4)
+  })
+
   it('a shot that is too short or too long misses the rim plane', () => {
     const rng = new Rng(2)
     for (const k of [0.5, 1.6]) {
@@ -212,6 +229,27 @@ describe('basket ball rules', () => {
     expect(w.overtime).toBe(false)
     expect(over(w)).toBe(true)
     expect(ready(w, 0)).toBe(false)
+  })
+
+  it('a buzzer-beater that levels the score goes to sudden death, not a draw', () => {
+    const rng = new Rng(3)
+    const w = newWorld(45, rng)
+    w.score = [1, 0]
+    w.balls[0].state = 'wait'
+    w.balls[0].wait = 99
+    w.left = 0.3
+    // Blue shoots just before the buzzer; the ball drops in after it.
+    expect(perfectShot(w, 1)).toBe(true)
+    let swish = false
+    for (let i = 0; i < 60 * 4; i++) {
+      for (const e of step(w, STEP, rng)) if (e.kind === 'swish') swish = true
+      if (swish && w.balls[1].state !== 'fly') break
+    }
+    expect(swish).toBe(true)
+    expect(w.score).toEqual([1, 1])
+    step(w, STEP, rng)
+    expect(w.overtime).toBe(true)
+    expect(over(w)).toBe(false)
   })
 
   it('a tied clock goes to sudden death, and the next basket ends it', () => {

@@ -45,14 +45,13 @@ export const GAIN = 1.25
 export const MIN_SWIPE = 70
 export const MAX_SWIPE = 620
 const SUBSTEPS = 4
-const RESPAWN = 0.6
+const RESPAWN = 0.3
 /** Crunch time: in the last CRUNCH seconds (and in sudden death) balls come back faster. */
 export const CRUNCH = 10
-const RESPAWN_CRUNCH = 0.3
+const RESPAWN_CRUNCH = 0.15
 /** Sudden-death length after a tied clock (s). */
 export const OVERTIME = 12
 /** How long a ball rolls on the court before the shot is over (s). */
-const ROLL_TIME = 0.3
 const MAX_FLIGHT = 5
 const ROLL_BOUNCE = 0.25
 const RIM_E = 0.5
@@ -269,6 +268,19 @@ export function step(w: World, dt: number, rng: Rng): Event[] {
       for (let s = 0; s < SUBSTEPS && b.state === 'fly'; s++) flyStep(w, side, h, ev)
     }
   }
+  // A buzzer-beater that levels the score still goes to sudden death, once
+  // every ball has landed (it used to end the match as a draw).
+  if (
+    w.ended &&
+    !w.overtime &&
+    w.score[0] === w.score[1] &&
+    w.balls.every((b) => b.state !== 'fly')
+  ) {
+    w.ended = false
+    w.overtime = true
+    w.left = OVERTIME
+    for (const b of w.balls) if (b.state === 'wait') b.wait = RESPAWN_CRUNCH
+  }
   return ev
 }
 
@@ -361,26 +373,21 @@ function flyStep(w: World, side: Side, h: number, ev: Event[]): void {
       ev.push({ kind: 'rim', side, x: cx, y: cy, speed })
     }
   }
-  // Ground: bounce a couple of times, then the ball lies there and rolls to a stop.
+  // Ground: one hop, then the shot is over and the next ball comes. A ball off
+  // the floor can never climb back to the rim, so there is nothing to wait for.
   if (!b.grounded && b.z <= 0) {
     b.z = 0
     const speed = Math.max(0, -b.vz)
     b.bounces++
     if (speed > 120) ev.push({ kind: 'land', side, x: b.x, y: b.y, speed })
-    if (b.bounces <= 2 && speed * ROLL_BOUNCE > 60) b.vz = speed * ROLL_BOUNCE
+    if (b.bounces <= 1 && speed * ROLL_BOUNCE > 60) b.vz = speed * ROLL_BOUNCE
     else {
       b.vz = 0
       b.grounded = true
       b.landed = b.t
     }
   }
-  if (b.grounded) {
-    const k = Math.exp(-2.5 * h)
-    b.vx *= k
-    b.vy *= k
-    if (b.t - b.landed > ROLL_TIME || Math.hypot(b.vx, b.vy) < 40) finish(w, side, ev)
-  }
-  if (b.t > MAX_FLIGHT) finish(w, side, ev)
+  if (b.grounded || b.t > MAX_FLIGHT) finish(w, side, ev)
 }
 
 function finish(w: World, side: Side, ev: Event[]): void {
