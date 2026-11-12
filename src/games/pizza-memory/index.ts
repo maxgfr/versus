@@ -25,7 +25,7 @@ import {
 /** Seconds the finished attempts stay on screen before the next order (or the result). */
 const AFTER = 2.4
 
-/** Match length: a number of rounds (orders), the score deciding if no round is clean. */
+/** Match length: a number of rounds (orders), the higher score winning. */
 export const match: MatchSpec = { unit: 'rounds', default: MAX_ORDERS, min: 1, max: 10 }
 
 export interface State {
@@ -67,7 +67,8 @@ export interface State {
 /**
  * Pizza Memory: an order of toppings appears one by one on the shared pizza,
  * then hides. Both players rebuild it from their own tray, one topping at a
- * time. A round where only one player gets it right decides the game.
+ * time. Each order rebuilt right scores a point; after the rounds the players
+ * chose, the higher score wins.
  */
 class PizzaMemory extends BaseGame<State> {
   /** Computer: which slots of the current order it remembers. */
@@ -279,7 +280,7 @@ class PizzaMemory extends BaseGame<State> {
       floatFor(this.ctx.fx, side, '+1', side === 0 ? 130 : 870, side === 0 ? 1600 : 200)
     }
     const rounds = s.round + 1
-    const w = decide(right, s.scores, rounds, this.total)
+    const w = decide(s.scores, rounds, this.total)
     if (w !== null) {
       // The ticket keeps showing the order just played (round + 1 while on).
       s.endAt = this.time

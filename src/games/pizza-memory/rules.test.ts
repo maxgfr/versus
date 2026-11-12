@@ -55,28 +55,31 @@ describe('pizza memory rules', () => {
     expect(nextLength(MAX_LEN, true)).toBe(MAX_LEN)
   })
 
-  it('ends the game on a round only one side got right', () => {
-    expect(decide([true, false], [1, 0], 1)).toBe(0)
-    expect(decide([false, true], [0, 1], 1)).toBe(1)
-    // Even on the last round, a clean split decides it.
-    expect(decide([false, true], [3, 4], MAX_ORDERS)).toBe(1)
+  it('a slip costs only the round: the game goes on', () => {
+    // It used to end the whole match on the first round only one side got right.
+    expect(decide([1, 0], 1)).toBeNull()
+    expect(decide([0, 1], 1)).toBeNull()
+    expect(decide([1, 1], 2)).toBeNull()
+    expect(decide([0, 0], 2)).toBeNull()
   })
 
-  it('keeps going while both are right or both are wrong', () => {
-    expect(decide([true, true], [1, 1], 1)).toBeNull()
-    expect(decide([false, false], [0, 0], 2)).toBeNull()
+  it('after the last round the higher score wins, and equal scores draw', () => {
+    expect(decide([5, 4], MAX_ORDERS)).toBe(0)
+    expect(decide([3, 6], MAX_ORDERS)).toBe(1)
+    expect(decide([4, 4], MAX_ORDERS)).toBe('draw')
   })
 
-  it('after eight rounds the higher score wins, and equal scores draw', () => {
-    expect(decide([true, true], [5, 4], MAX_ORDERS)).toBe(0)
-    expect(decide([true, true], [3, 6], MAX_ORDERS)).toBe(1)
-    expect(decide([false, false], [4, 4], MAX_ORDERS)).toBe('draw')
+  it('ends early once the trailing side can no longer catch up', () => {
+    // Eight rounds: 5–1 after six, two left, the lead holds.
+    expect(decide([5, 1], 6)).toBe(0)
+    // 4–2 after six: blue can still level it.
+    expect(decide([4, 2], 6)).toBeNull()
   })
 
   it('uses the match length the players chose', () => {
     // Three rounds: the score decides after the third, not before.
-    expect(decide([true, true], [2, 1], 2, 3)).toBeNull()
-    expect(decide([true, true], [2, 1], 3, 3)).toBe(0)
+    expect(decide([1, 1], 2, 3)).toBeNull()
+    expect(decide([2, 1], 3, 3)).toBe(0)
   })
 
   it('times a watch: appear one by one, then hold', () => {
@@ -192,6 +195,24 @@ describe('pizza memory game', () => {
       expect(w === 0 || w === 1 || w === 'draw').toBe(true)
     })
   }
+
+  it('a slip does not end the match: it runs its rounds unless the lead is out of reach', () => {
+    for (let seed = 1; seed <= 12; seed++) {
+      const ctx = { ...ctxFor([true, true], 'easy', seed), target: 5 }
+      const game = factory()
+      game.init(ctx)
+      const snap = () => (game.snapshot() as { s: State }).s
+      let steps = 0
+      while (!game.result) {
+        game.update(1 / 60)
+        if (++steps > 60 * 900) throw new Error('no result')
+      }
+      const s = snap()
+      const rounds = s.round + 1
+      const lead = Math.abs(s.scores[0] - s.scores[1])
+      expect(rounds === 5 || lead > 5 - rounds).toBe(true)
+    }
+  })
 
   it('the computer remembers the very first order, not only the later ones', () => {
     // It used to memorise only from the second order on, so a hard bot guessed its way through round 1.

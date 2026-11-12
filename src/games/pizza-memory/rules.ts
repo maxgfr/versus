@@ -4,8 +4,8 @@ import type { Rng } from '../../core/rng.ts'
 /**
  * Pure Pizza Memory rules over plain numbers. An order is a list of distinct
  * topping ids (indexes into TOPPINGS). A player rebuilds it from their own tray
- * one topping at a time; the first wrong pick ends their attempt. Everything
- * here is unit-tested.
+ * one topping at a time; the first wrong pick ends their attempt at that order.
+ * Everything here is unit-tested.
  */
 
 export const TOPPINGS = ['🍅', '🧀', '🍄', '🫑', '🧅', '🫒', '🌶️', '🍍', '🥓', '🌽'] as const
@@ -58,20 +58,20 @@ export function rightPick(
 }
 
 /**
- * Who has won once a round is resolved, or null while the game goes on. A
- * round where exactly one player rebuilt the order decides it; after `total`
- * rounds (the match length the players chose) the higher score wins (equal
- * scores draw).
+ * Who has won once a round is resolved, or null while the game goes on. Every
+ * order rebuilt right scores a point and a slip only costs that round: the
+ * match runs its `total` rounds (the length the players chose) and the higher
+ * score wins (equal scores draw). It ends early once the trailing player can
+ * no longer catch up.
  */
 export function decide(
-  right: [boolean, boolean],
   scores: [number, number],
   rounds: number,
   total = MAX_ORDERS,
 ): Side | 'draw' | null {
-  if (right[0] !== right[1]) return right[0] ? 0 : 1
-  if (rounds < total) return null
-  return scores[0] === scores[1] ? 'draw' : scores[0] > scores[1] ? 0 : 1
+  const lead = scores[0] - scores[1]
+  if (rounds < total && Math.abs(lead) <= total - rounds) return null
+  return lead === 0 ? 'draw' : lead > 0 ? 0 : 1
 }
 
 /** Seconds from the start of an order until the first topping shows. */
