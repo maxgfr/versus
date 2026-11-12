@@ -1,7 +1,7 @@
 import type MatterNS from 'matter-js'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, alpha, shade } from '../../core/render/palette.ts'
-import type { M } from '../../engines/ragdoll/index.ts'
+import { fixCompoundInertia, type M } from '../../engines/ragdoll/index.ts'
 
 /**
  * Toy pieces with real silhouettes: each one is a handful of convex polygons
@@ -320,6 +320,7 @@ export function buildToy(
     restitution: o.restitution ?? 0,
     label: t.name,
   })
+  fixCompoundInertia(Mx, body)
   Mx.Body.setPosition(body, { x, y })
   Mx.Body.setAngle(body, a)
   return body

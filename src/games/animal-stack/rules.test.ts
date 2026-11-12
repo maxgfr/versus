@@ -152,6 +152,21 @@ describe('animal stack rules', () => {
 })
 
 describe('animal stack physics', () => {
+  it('every animal turns as hard as its spread-out shape says', () => {
+    // matter-js leaves the parallel-axis term out of a compound's inertia: a
+    // giraffe turned 5× too easily, a caterpillar 14×, and towers flew apart.
+    for (let k = 0; k < PIECES.length; k++) {
+      const b = pieceBody(Mx, k, 0, 0, 0)
+      let own = 0
+      let shift = 0
+      for (const p of b.parts.slice(1)) {
+        own += p.inertia
+        shift += p.mass * ((p.position.x - b.position.x) ** 2 + (p.position.y - b.position.y) ** 2)
+      }
+      expect(b.inertia).toBeCloseTo(own + 4 * shift, 0)
+    }
+  })
+
   it('a centred drop lands on the island', () => {
     const o = simulateDrop(Mx, [], 3, ISLAND.x, 0)
     expect(o.fallen).toBe(false)

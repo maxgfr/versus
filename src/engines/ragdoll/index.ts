@@ -98,6 +98,26 @@ export function makeBody(Mx: M, s: Shape, x: number, y: number, angle = 0, o: Bo
   }
 }
 
+/**
+ * Give a compound body its true moment of inertia. matter-js sums each part's
+ * own inertia but leaves out the parallel-axis term (part mass × its distance²
+ * to the body's centre of mass), so a long or spread-out compound turns far
+ * too easily: a giraffe or a caterpillar whirled off at the slightest knock.
+ * Kept on matter's scale (it inflates every polygon's inertia by
+ * `Body._inertiaScale`, 4) so compounds behave like plain bodies.
+ */
+export function fixCompoundInertia(Mx: M, body: Body): void {
+  if (body.parts.length < 2) return
+  const scale = (Mx.Body as unknown as { _inertiaScale?: number })._inertiaScale ?? 4
+  let shift = 0
+  for (const p of body.parts.slice(1)) {
+    const dx = p.position.x - body.position.x
+    const dy = p.position.y - body.position.y
+    shift += p.mass * (dx * dx + dy * dy)
+  }
+  Mx.Body.setInertia(body, body.inertia + scale * shift)
+}
+
 /** A body as plain data: what states carry and what renderers draw. */
 export interface BodySnap {
   id: number
@@ -154,7 +174,10 @@ export class PhysicsWorld {
     for (const b of this.bodies.values()) {
       // Bodies sunk far below (fallen into the sea) do not count.
       if (b.position.y > 4000) continue
-      max = Math.max(max, b.speed, Math.abs(b.angularSpeed) * 20)
+      // Turning counts at the speed of its far edge: a big animal slowly
+      // tipping over is not at rest, however small its angular speed.
+      const reach = Math.max(20, (b.bounds.max.x - b.bounds.min.x) / 2)
+      max = Math.max(max, b.speed, Math.abs(b.angularSpeed) * reach)
     }
     this.calm = max < 0.3 ? this.calm + 1 : 0
   }
