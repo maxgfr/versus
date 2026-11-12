@@ -1,6 +1,6 @@
 import { outBack } from '../../core/fx/ease.ts'
 import type { Side } from '../../core/game.ts'
-import { banner, bigScore, pips } from '../../core/hud.ts'
+import { banner, bigScore, hudY, pips } from '../../core/hud.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { alpha, C, shade, SIDE } from '../../core/render/palette.ts'
 import { H, MID, W } from '../../core/stage.ts'
@@ -11,6 +11,7 @@ import {
   DARTS_PER_TURN,
   DOUBLE_IN,
   type Dart,
+  finishOf,
   forceOf,
   OUTER_BULL,
   type Pt,
@@ -345,7 +346,11 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       const x = side === 0 ? t.x - 190 : t.x + 190
       g.forSide(side, x, t.y, () => {
         g.rrect(-70, -34, 140, 68, 34, alpha(C.ink, 0.85))
-        g.text(`+${sum}`, 0, 2, { size: 40, weight: 700, color: SIDE[side].light })
+        g.text(s.bust ? 'Bust' : `${sum}`, 0, 2, {
+          size: 40,
+          weight: 700,
+          color: s.bust ? C.redLight : SIDE[side].light,
+        })
       })
     }
   }
@@ -357,8 +362,14 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
 
   // Round banner as each round starts.
   const roundAge = now - s.roundAt
-  if (roundAge < 2 && s.rounds < s.total && s.endAt < 0) {
-    const label = s.rounds === s.total - 1 ? 'Final round' : `Round ${s.rounds + 1} of ${s.total}`
+  if (roundAge < 2 && s.endAt < 0 && s.checkout === null) {
+    const leg = s.legs[0] + s.legs[1] + 1
+    const label =
+      s.rounds > 0
+        ? `Round ${s.rounds + 1}`
+        : s.goal > 1
+          ? `Leg ${leg} · ${s.start}`
+          : `${s.start} · finish on a double`
     const k = outBack(clamp01(roundAge / 0.35))
     g.alpha(Math.min(1, (2 - roundAge) * 2.5), () =>
       g.at(
@@ -380,14 +391,33 @@ export function render(g: Draw, s: State, look: Look, now: number): void {
       alpha: 0.75 + 0.25 * Math.sin(now * 4),
     })
   }
-  if (s.endAt >= 0) tally(g, s.totals, result(s), now - s.endAt - 0.8, 'Final score')
+  if (s.endAt >= 0)
+    tally(
+      g,
+      s.goal > 1 ? s.legs : s.left,
+      result(s),
+      now - s.endAt - 0.8,
+      s.goal > 1 ? 'Legs' : 'Points left',
+    )
 }
 
-/** HUD: totals big at the edge, darts left in the turn as pips. */
+/**
+ * HUD: the points still to score big at the edge (with the double that
+ * finishes them, once one does), darts left in the visit as pips, and the legs
+ * won in a longer match.
+ */
 export function hud(g: Draw, s: State, pulse: [number, number] = [0, 0]): void {
   for (const side of [0, 1] as const) {
-    bigScore(g, side, s.totals[side], { x: 130, size: 64 + Math.min(30, pulse[side] * 1.6) })
+    bigScore(g, side, s.left[side], { x: 130, size: 64 + Math.min(30, pulse[side] * 1.6) })
+    const out = finishOf(s.left[side])
+    if (out) {
+      // Just inward of the score, read the right way up by its player.
+      g.forSide(side, 130, hudY(g, side, 132), () =>
+        g.text(out, 0, 0, { size: 30, weight: 700, color: C.yellow }),
+      )
+    }
     const left = s.turn === side ? DARTS_PER_TURN - s.throws : DARTS_PER_TURN
     pips(g, side, left, DARTS_PER_TURN, { x: W - 150 })
+    if (s.goal > 1) pips(g, side, s.legs[side], s.goal, { x: W / 2 })
   }
 }

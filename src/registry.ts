@@ -270,7 +270,12 @@ const TABLE: Record<Family, Row[]> = {
       '🏈',
       'Kick through the posts from ever further out. Miss and your rival can steal it.',
     ],
-    ['darts', 'Darts', '🎯', 'Three darts a turn. Highest total after five rounds.'],
+    [
+      'darts',
+      'Darts',
+      '🎯',
+      'Official 501: count down to zero and finish on a double. Go bust and the visit is wiped.',
+    ],
     [
       'archery',
       'Archery',

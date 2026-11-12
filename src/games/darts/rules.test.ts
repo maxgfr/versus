@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { type Difficulty, STEP, type Side } from '../../core/game.ts'
 import { Rng } from '../../core/rng.ts'
-import { bestAim, choose, expected, SPREAD } from './bot.ts'
+import { aimFor, bedOf, bestAim, choose, expected, SPREAD } from './bot.ts'
 import {
   advance,
   BOARD,
@@ -13,9 +13,10 @@ import {
   landingOf,
   newState,
   type Pt,
+  finishOf,
   result,
-  ROUNDS,
   scoreAt,
+  scoreDart,
   type State,
   sagOf,
   sagVec,
@@ -37,21 +38,28 @@ function match(
   seed: number,
   a: Difficulty,
   b: Difficulty,
-  total = ROUNDS,
+  legs = 1,
   first?: Side,
+  start = 501,
 ): { s: State; steps: number } {
   const rng = new Rng(seed)
-  const s = newState(first ?? (rng.chance(0.5) ? 0 : 1), total)
+  const s = newState(first ?? (rng.chance(0.5) ? 0 : 1), legs, start)
   let steps = 0
-  while (!done(s) && steps < 60 * 60 * 10) {
+  while (!done(s) && steps < 60 * 60 * 30) {
     if (s.phase === 'aim') {
       const side = s.turn
-      throwDart(s, landingOf(side, choose(side, side === 0 ? a : b, rng)))
+      throwDart(s, landingOf(side, choose(side, side === 0 ? a : b, rng, s.left[side])))
     }
     advance(s, STEP)
     steps++
   }
   return { s, steps }
+}
+
+/** Throw one dart at `p` and let it land and the pause run out. */
+function throwAt(s: State, p: Pt): void {
+  throwDart(s, p)
+  for (let i = 0; i < 60 * 3 && s.phase !== 'aim' && !done(s); i++) advance(s, STEP)
 }
 
 describe('dartboard', () => {
@@ -140,43 +148,90 @@ describe('flick to landing', () => {
   })
 })
 
-describe('darts turns', () => {
-  it('three darts a turn, then the other side; a round ends with the blue turn', () => {
+describe('darts turns (501, double out)', () => {
+  it('every dart comes off the score; three darts a visit, then the other side', () => {
     const s = newState(0)
-    const throwOne = () => {
-      throwDart(s, BOARD)
-      for (let i = 0; i < 60 * 3 && s.phase !== 'aim'; i++) advance(s, STEP)
-    }
-    throwOne()
-    throwOne()
+    expect(s.left).toEqual([501, 501])
+    throwAt(s, BOARD)
+    throwAt(s, BOARD)
     expect(s.turn).toBe(0)
     expect(s.throws).toBe(2)
-    throwOne()
+    throwAt(s, BOARD)
     expect(s.turn).toBe(1)
     expect(s.throws).toBe(0)
-    expect(s.totals[0]).toBe(150)
+    expect(s.left[0]).toBe(501 - 150)
     expect(s.rounds).toBe(0)
-    for (let i = 0; i < DARTS_PER_TURN; i++) {
-      throwDart(s, at(0.4 * BOARD.r, -90))
-      for (let k = 0; k < 60 * 3 && s.phase !== 'aim'; k++) advance(s, STEP)
-    }
+    for (let i = 0; i < DARTS_PER_TURN; i++) throwAt(s, at(0.4 * BOARD.r, -90))
     expect(s.rounds).toBe(1)
     expect(s.turn).toBe(0)
-    expect(s.totals[1]).toBe(60)
+    expect(s.left[1]).toBe(501 - 60)
   })
 
-  it('when blue opens, red still gets as many visits as blue (a round ends back with the opener)', () => {
-    for (const first of [0, 1] as Side[]) {
-      const r = match(31, 'normal', 'normal', 3, first)
-      expect(done(r.s)).toBe(true)
-      const red = r.s.darts.filter((d) => d.side === 0).length
-      const blue = r.s.darts.filter((d) => d.side === 1).length
-      expect(red).toBe(3 * DARTS_PER_TURN)
-      expect(blue).toBe(3 * DARTS_PER_TURN)
+  it('a leg is won on exactly zero with a double, the bull counting as one', () => {
+    expect(scoreDart(40, 40, 'double')).toBe('checkout')
+    expect(scoreDart(50, 50, 'bull')).toBe('checkout')
+    expect(scoreDart(100, 60, 'treble')).toBe(40)
+  })
+
+  it('a bust (below zero, one, or zero off a double) wipes the visit', () => {
+    expect(scoreDart(20, 20, 'single')).toBe('bust')
+    expect(scoreDart(20, 19, 'single')).toBe('bust')
+    expect(scoreDart(20, 40, 'double')).toBe('bust')
+    const s = newState(0)
+    s.left = [70, 501]
+    s.visitFrom = 70
+    // Single 20 → 50, then treble 20 would go below zero: back to 70, and the visit is over.
+    throwAt(s, bedOf(20, 'single'))
+    expect(s.left[0]).toBe(50)
+    throwAt(s, bedOf(20, 'treble'))
+    expect(s.left[0]).toBe(70)
+    expect(s.turn).toBe(1)
+    expect(s.throws).toBe(0)
+  })
+
+  it('checking out takes the leg; the next leg restarts both scores and the other player opens', () => {
+    const s = newState(0, 2)
+    s.left = [32, 200]
+    s.visitFrom = 32
+    throwAt(s, bedOf(16, 'double'))
+    expect(s.legs).toEqual([1, 0])
+    expect(done(s)).toBe(false)
+    expect(s.left).toEqual([501, 501])
+    expect(s.turn).toBe(1)
+    expect(s.first).toBe(1)
+    s.left = [501, 40]
+    s.visitFrom = 40
+    throwAt(s, bedOf(20, 'double'))
+    expect(s.legs).toEqual([1, 1])
+    s.turn = 0
+    s.left = [50, 40]
+    s.visitFrom = 50
+    throwAt(s, BOARD)
+    expect(done(s)).toBe(true)
+    expect(result(s)).toBe(0)
+  })
+
+  it('shows the double that finishes, once one dart can', () => {
+    expect(finishOf(40)).toBe('D20')
+    expect(finishOf(2)).toBe('D1')
+    expect(finishOf(50)).toBe('Bull')
+    expect(finishOf(41)).toBeNull()
+    expect(finishOf(60)).toBeNull()
+  })
+
+  it('the computer sets up a double and goes for it, never into a bust', () => {
+    expect(scoreAt(aimFor(32, SPREAD.hard)).label).toBe('Double 16')
+    expect(scoreAt(aimFor(50, SPREAD.hard)).ring).toBe('bull')
+    // 41: a single 9 leaves 32 (double 16).
+    expect(left41()).toBe(32)
+    for (let left = 2; left <= 61; left++) {
+      const p = aimFor(left, SPREAD.hard)
+      const sc = scoreAt(p)
+      expect(scoreDart(left, sc.pts, sc.ring), `left ${left}`).not.toBe('bust')
     }
   })
 
-  it('the computer aims where its arm scores most: treble 20 when steady, safer beds when shaky', () => {
+  it('the computer aims where its arm scores most far from the finish: treble 20 when steady', () => {
     const hard = bestAim(SPREAD.hard)
     expect(scoreAt(hard).label).toBe('Treble 20')
     for (const d of ['easy', 'normal'] as const) {
@@ -185,36 +240,28 @@ describe('darts turns', () => {
     }
   })
 
-  it('the highest total after five rounds wins, and equal totals draw', () => {
-    const s = newState(0)
-    s.totals = [120, 80]
-    s.rounds = ROUNDS
-    expect(result(s)).toBe(0)
-    s.totals = [80, 80]
-    expect(result(s)).toBe('draw')
-    s.totals = [80, 81]
-    expect(result(s)).toBe(1)
+  it('computer vs computer checks out a leg of 501 in bounded steps, at every level', () => {
+    for (const d of ['easy', 'normal', 'hard'] as const) {
+      const r = match(12, d, d)
+      expect(done(r.s), d).toBe(true)
+      expect(r.s.legs[0] + r.s.legs[1]).toBe(1)
+    }
   })
 
-  it('computer vs computer finishes all five rounds in bounded steps', () => {
-    const r = match(12, 'normal', 'normal')
-    expect(done(r.s)).toBe(true)
-    expect(r.s.darts.length).toBe(ROUNDS * 2 * DARTS_PER_TURN)
-    expect(r.steps).toBeLessThan(60 * 60 * 10)
-  })
-
-  it('the match length sets how many rounds are thrown', () => {
-    // Red opens, so each side throws exactly two turns.
+  it('the match length is the legs to win, and 301 is shorter', () => {
     const r = match(13, 'normal', 'normal', 2, 0)
-    expect(r.s.total).toBe(2)
-    expect(done(r.s)).toBe(true)
-    expect(r.s.darts.length).toBe(2 * 2 * DARTS_PER_TURN)
+    expect(Math.max(...r.s.legs)).toBe(2)
+    const long = match(14, 'hard', 'hard', 1, 0, 501).s
+    const short = match(14, 'hard', 'hard', 1, 0, 301).s
+    expect(short.start).toBe(301)
+    expect(done(short)).toBe(true)
+    expect(long.start).toBe(501)
   })
 
-  it('a hard computer out-scores an easy one most of the time', () => {
+  it('a hard computer beats an easy one most of the time', () => {
     let wins = 0
     for (let seed = 1; seed <= 5; seed++) if (result(match(seed, 'hard', 'easy').s) === 0) wins++
-    expect(wins).toBeGreaterThanOrEqual(3)
+    expect(wins).toBeGreaterThanOrEqual(4)
   })
 
   it('the throw starts at the thrower edge', () => {
@@ -222,3 +269,9 @@ describe('darts turns', () => {
     expect(EDGE[1].y).toBeLessThan(BOARD.y)
   })
 })
+
+/** What a single 9 (the computer's pick on 41) leaves. */
+function left41(): number {
+  const sc = scoreAt(aimFor(41, SPREAD.hard))
+  return 41 - sc.pts
+}

@@ -2,15 +2,23 @@ import { other, type Side } from '../../core/game.ts'
 import type { Rng } from '../../core/rng.ts'
 
 /**
- * Pure darts: a board in the middle, three darts a turn, a set number of rounds
- * (five by default). A flick sets where the dart lands: the flick vector,
+ * Pure darts, played to the official x01 rules: each player starts on 501 (or
+ * 301) and every dart is taken off. The leg is won by reaching exactly zero
+ * with a double (the bull counts as a double). Going below zero, to one, or to
+ * zero without a double is a bust: the visit stops and the score goes back to
+ * what it was before it. Three darts a visit; a match is first to N legs, the
+ * player who throws first alternating from leg to leg.
+ *
+ * A flick sets where the dart lands: the flick vector,
  * measured against the ideal flick that would hit the centre from the thrower's
  * edge, moves the landing point. How fast the finger is moving when it lets go
  * matters too: a limp release lobs the dart and it sags short, a crisp one flies
  * true, and a wild one wobbles. No DOM.
  */
 
-export const ROUNDS = 5
+/** The official starting score, and the shorter 301 game. */
+export const START = 501
+export const STARTS = [501, 301] as const
 export const DARTS_PER_TURN = 3
 /** r keeps the number ring clear of the pause button at the left edge. */
 export const BOARD = { x: 500, y: 900, r: 370 }
@@ -85,15 +93,27 @@ export interface Flight {
 
 export interface State {
   turn: Side
-  /** Who threw first: a round ends when the turn comes back to them. */
+  /** Who threw first in this leg: a round ends when the turn comes back to them. */
   first: Side
-  /** Darts thrown by the side on turn in its current turn (0..3). */
+  /** Darts thrown by the side on turn in its current visit (0..3). */
   throws: number
-  /** Completed rounds (a red turn and a blue turn each). */
+  /** Completed rounds of this leg (a red visit and a blue visit each). */
   rounds: number
-  /** Rounds in this match (the match length). */
-  total: number
-  totals: [number, number]
+  /** Every leg starts on this score (501 or 301). */
+  start: number
+  /** Points each side still has to score, down to an exact zero on a double. */
+  left: [number, number]
+  /** The thrower's score before this visit: a bust goes back to it. */
+  visitFrom: number
+  /** This visit went bust. */
+  bust: boolean
+  /** Legs won, and the legs that take the match. */
+  legs: [number, number]
+  goal: number
+  /** Who just checked out (the leg is over, pausing before the next), or null. */
+  checkout: Side | null
+  /** The match winner once decided. */
+  winner: Side | null
   darts: Dart[]
   flight: Flight | null
   phase: 'aim' | 'fly' | 'beat'
@@ -198,14 +218,20 @@ export function scoreAt(p: Pt): Score {
   return { pts: n, label: `${n}`, ring: 'single' }
 }
 
-export function newState(first: Side, total = ROUNDS): State {
+export function newState(first: Side, goal = 1, start = START): State {
   return {
     turn: first,
     first,
     throws: 0,
     rounds: 0,
-    total,
-    totals: [0, 0],
+    start,
+    left: [start, start],
+    visitFrom: start,
+    bust: false,
+    legs: [0, 0],
+    goal,
+    checkout: null,
+    winner: null,
     darts: [],
     flight: null,
     phase: 'aim',
@@ -245,7 +271,27 @@ export function clampOut(p: Pt): Pt {
 }
 
 export type Event =
-  { kind: 'stick'; dart: Dart } | { kind: 'turn'; side: Side } | { kind: 'round'; n: number }
+  | { kind: 'stick'; dart: Dart }
+  | { kind: 'turn'; side: Side }
+  | { kind: 'round'; n: number }
+  | { kind: 'bust'; side: Side }
+  | { kind: 'checkout'; side: Side }
+  | { kind: 'leg'; n: number }
+
+/** A dart that may finish a leg: any double, and the bull (the double of the outer bull). */
+export const isDouble = (ring: Ring): boolean => ring === 'double' || ring === 'bull'
+
+/**
+ * What a dart scoring `pts` on `ring` does to a side with `left` to go: the
+ * new score, a bust (below zero, one, or zero not on a double) or the
+ * checkout (exactly zero on a double).
+ */
+export function scoreDart(left: number, pts: number, ring: Ring): 'bust' | 'checkout' | number {
+  const rem = left - pts
+  if (rem === 0 && isDouble(ring)) return 'checkout'
+  if (rem < 2) return 'bust'
+  return rem
+}
 
 /** Advance the flight and the pause after each dart. */
 export function advance(s: State, dt: number): Event[] {
@@ -264,39 +310,89 @@ export function advance(s: State, dt: number): Event[] {
       force: f.force,
     }
     s.darts.push(dart)
-    s.totals[f.side] += f.pts
     s.throws++
     s.last = dart
     s.flight = null
     s.phase = 'beat'
-    s.beat = s.throws >= DARTS_PER_TURN ? 0.95 : 0.5
     ev.push({ kind: 'stick', dart })
+    const after = scoreDart(s.left[f.side], f.pts, f.ring)
+    if (after === 'checkout') {
+      s.left[f.side] = 0
+      s.checkout = f.side
+      s.beat = 1.8
+      ev.push({ kind: 'checkout', side: f.side })
+    } else if (after === 'bust') {
+      // The visit is over and none of it counts.
+      s.left[f.side] = s.visitFrom
+      s.bust = true
+      s.throws = DARTS_PER_TURN
+      s.beat = 1.2
+      ev.push({ kind: 'bust', side: f.side })
+    } else {
+      s.left[f.side] = after
+      s.beat = s.throws >= DARTS_PER_TURN ? 0.95 : 0.5
+    }
     return ev
   }
   if (s.phase === 'beat') {
     s.beat -= dt
     if (s.beat > 0) return ev
+    if (s.checkout !== null) {
+      const w = s.checkout
+      s.checkout = null
+      s.legs[w]++
+      if (s.legs[w] >= s.goal) {
+        s.winner = w
+        return ev
+      }
+      newLeg(s)
+      ev.push({ kind: 'leg', n: s.legs[0] + s.legs[1] + 1 })
+      ev.push({ kind: 'turn', side: s.turn })
+      return ev
+    }
     if (s.throws >= DARTS_PER_TURN) {
       s.throws = 0
       s.turn = other(s.turn)
+      s.visitFrom = s.left[s.turn]
+      s.bust = false
       // A round is one visit each: it ends when the turn is back with whoever opened.
       if (s.turn === s.first) {
         s.rounds++
-        if (!done(s)) ev.push({ kind: 'round', n: s.rounds })
+        ev.push({ kind: 'round', n: s.rounds })
       }
     }
     s.phase = 'aim'
-    if (!done(s) && s.throws === 0) ev.push({ kind: 'turn', side: s.turn })
+    if (s.throws === 0) ev.push({ kind: 'turn', side: s.turn })
   }
   return ev
 }
 
-export const done = (s: State): boolean => s.rounds >= s.total
+/** The next leg: both back on the starting score, the other player throwing first. */
+function newLeg(s: State): void {
+  s.first = other(s.first)
+  s.turn = s.first
+  s.throws = 0
+  s.rounds = 0
+  s.left = [s.start, s.start]
+  s.visitFrom = s.start
+  s.bust = false
+  s.darts = []
+  s.last = null
+  s.phase = 'aim'
+}
 
-/** Highest total wins; equal totals are a draw. */
+export const done = (s: State): boolean => s.winner !== null
+
+/** Who took the match (a leg always has a winner: there are no draws in darts). */
 export function result(s: State): Side | 'draw' {
-  const [r, b] = s.totals
-  return r > b ? 0 : b > r ? 1 : 'draw'
+  return s.winner ?? 'draw'
+}
+
+/** The double that finishes `left` with one dart (`D16`, `Bull`), or null if none does. */
+export function finishOf(left: number): string | null {
+  if (left === 50) return 'Bull'
+  if (left >= 2 && left <= 40 && left % 2 === 0) return `D${left / 2}`
+  return null
 }
 
 /** The bot's target: treble 20 at the top of the board, or the bull. */

@@ -1,6 +1,6 @@
 import { Spring } from '../../core/fx/ease.ts'
 import { floatFor } from '../../core/fx/fx.ts'
-import type { MatchSpec } from '../../core/game.ts'
+import type { MatchSpec, OptionSpec } from '../../core/game.ts'
 import type { Draw } from '../../core/render/draw.ts'
 import { C, SIDE } from '../../core/render/palette.ts'
 import { TurnGame } from '../../engines/board/index.ts'
@@ -19,14 +19,27 @@ import {
   type Pt,
   release,
   result,
-  ROUNDS,
+  START,
   sagOf,
   type State,
   throwDart,
 } from './rules.ts'
 
-/** Rounds of three darts each: the match length. */
-export const match: MatchSpec = { unit: 'rounds', default: ROUNDS, min: 1, max: 10 }
+/** Legs to win: one leg of 501 by default, as in a pub game; first to N legs otherwise. */
+export const match: MatchSpec = { unit: 'wins', default: 1, min: 1, max: 5 }
+
+/** The official 501, or the shorter 301. Both finish on a double. */
+export const options: OptionSpec[] = [
+  {
+    id: 'start',
+    label: 'Starting score',
+    choices: [
+      ['501', '501'],
+      ['301', '301'],
+    ],
+    default: String(START),
+  },
+]
 
 /** Floats for the thrower sit over the middle of the board. */
 const BOARD_X = 500
@@ -43,7 +56,8 @@ class Darts extends TurnGame<State> {
   protected setup(): State {
     // The player whose turn it is may flick from anywhere.
     if (this.ctx.mode === '2p') this.ctx.input.assign = () => this.s.turn
-    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.target)
+    const start = Number(this.ctx.options?.start) === 301 ? 301 : START
+    return newState(this.ctx.rng.chance(0.5) ? 0 : 1, this.target, start)
   }
 
   protected override busy(): boolean {
@@ -62,11 +76,13 @@ class Darts extends TurnGame<State> {
     if (done(this.s)) {
       const r = result(this.s)
       this.s.endAt = this.time
-      this.finish(r, {
-        score: [this.s.totals[0], this.s.totals[1]],
-        note: `Highest total after ${this.target} rounds`,
+      const s = this.s
+      const o: { note: string; delay: number; score?: [number, number] } = {
+        note: `${s.start}, finished on a double`,
         delay: 2.6,
-      })
+      }
+      if (s.goal > 1) o.score = [s.legs[0], s.legs[1]]
+      this.finish(r, o)
       const fx = this.ctx.fx
       fx.confetti(r === 'draw' ? undefined : r)
       if (r !== 'draw') {
@@ -98,7 +114,8 @@ class Darts extends TurnGame<State> {
 
   protected botPlay(): void {
     const side = this.s.turn
-    this.throwTo(landingOf(side, choose(side, this.ctx.difficulty, this.ctx.rng)), BOT_SPEED)
+    const aim = choose(side, this.ctx.difficulty, this.ctx.rng, this.s.left[side])
+    this.throwTo(landingOf(side, aim), BOT_SPEED)
   }
 
   private throwTo(to: Pt, speed: number): void {
@@ -127,9 +144,27 @@ class Darts extends TurnGame<State> {
       audio.play('tick')
       return
     }
-    if (e.kind === 'round') {
+    if (e.kind === 'round' || e.kind === 'leg') {
       this.s.roundAt = this.time
       audio.play('count', 1.2)
+      return
+    }
+    if (e.kind === 'bust') {
+      audio.play('error', 0.8)
+      audio.buzz(30)
+      fx.shake(0.25)
+      floatFor(fx, e.side, 'Bust!')
+      return
+    }
+    if (e.kind === 'checkout') {
+      const col = SIDE[e.side]
+      audio.play('powerup')
+      audio.play('coin', 1.1)
+      audio.buzz(45)
+      fx.flash(col.light, 0.3)
+      fx.confetti(e.side)
+      fx.ring(BOARD_X, 900, col.light, 480)
+      floatFor(fx, e.side, this.s.legs[e.side] + 1 >= this.s.goal ? 'Game shot!' : 'Leg!')
       return
     }
     const d = e.dart
@@ -191,8 +226,8 @@ class Darts extends TurnGame<State> {
             ? `${d.pts}`
             : `${d.label} · ${d.pts}`
     fx.float(label, d.x, d.y - 80, big ? C.yellow : C.white, big ? 60 : 50, d.side)
-    // End of a turn: name a big visit.
-    if (this.s.throws >= DARTS_PER_TURN) {
+    // End of a visit that counted: name a big one.
+    if (this.s.throws >= DARTS_PER_TURN && !this.s.bust && this.s.checkout === null) {
       const sum = this.turnDarts(d.side).reduce((a, x) => a + x.pts, 0)
       const word = sum === 180 ? 'One hundred and eighty!' : sum >= 100 ? `Ton! ${sum}` : ''
       if (word) {
@@ -202,7 +237,7 @@ class Darts extends TurnGame<State> {
         fx.shake(0.35)
         if (sum === 180) fx.confetti(d.side)
         floatFor(fx, d.side, word)
-      } else floatFor(fx, d.side, `+${sum}`, handOf(d.side).x - 80)
+      } else floatFor(fx, d.side, `${sum}`, handOf(d.side).x - 80)
     }
   }
 
