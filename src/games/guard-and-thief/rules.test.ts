@@ -96,6 +96,21 @@ describe('guard and thief rules', () => {
     expect(again.some((e) => e.k === 'hide')).toBe(false)
   })
 
+  it('a hidden thief who steps out of the shadow is seen again', () => {
+    const lv = hall()
+    const sc = lv.grid
+    lv.shadow[5 * sc.cols + 5] = 1
+    const w = newWorld(lv, 0)
+    place(w, 0, [sc.x0 + 5.5 * sc.cell, sc.y0 + 5.5 * sc.cell], [900, 200])
+    stepWorld(w, lv, [{ jx: 0, jy: 0, press: true }, idle], STEP, [])
+    expect(w.pawns[0].until).toBeGreaterThan(w.t)
+    let steps = 0
+    while (w.pawns[0].until > w.t && steps++ < 120)
+      stepWorld(w, lv, [{ jx: 1, jy: 0, press: false }, idle], STEP, [])
+    expect(steps).toBeLessThan(Math.ceil(HIDE_T * 60))
+    expect(w.pawns[0].x).toBeGreaterThan(sc.x0 + 6 * sc.cell)
+  })
+
   it('a thief on plain floor cannot hide', () => {
     const lv = hall()
     const w = newWorld(lv, 0)
@@ -121,6 +136,8 @@ describe('guard and thief rules', () => {
     const lv = hall()
     const w = newWorld(lv, 0)
     place(w, 0, [500, 900], [500 + CATCH - 10, 900])
+    const c = cellOf(lv.grid, 500, 900)
+    lv.shadow[c.r * lv.grid.cols + c.c] = 1
     w.pawns[0].until = 5
     stepWorld(w, lv, [idle, idle], STEP, [])
     expect(roundWinner(w)).toBeNull()

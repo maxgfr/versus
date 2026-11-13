@@ -265,6 +265,8 @@ export function stepWorld(
     p.x += p.vx * dt
     p.y += p.vy * dt
     collideCircle(level.grid, p, thief ? THIEF_R : GUARD_R)
+    // Cover is the shadow itself: stepping out of it shows the thief again.
+    if (thief && p.until > t && !inShadow(level, p.x, p.y)) p.until = t
     const v = Math.hypot(p.vx, p.vy)
     if (v > 20) p.a += Math.max(-7 * dt, Math.min(7 * dt, angleTo(p.a, Math.atan2(p.vy, p.vx))))
     p.walk += v * dt

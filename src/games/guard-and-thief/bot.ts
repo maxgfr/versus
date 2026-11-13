@@ -158,7 +158,8 @@ export class CatBot {
     const guarded = left.every((l) => (guardF.dist[idxOf(g, l.x, l.y)] ?? 0) <= 3)
     const bold = away && guarded && !sees(level, w) && gd >= 2
 
-    // Hide: stay still on a shadow tile while the guard is close.
+    // Hide: stay still on a shadow tile while the guard is close (leaving it ends the cover).
+    if (hiding && gd <= this.sk.flee + 1) return { jx: 0, jy: 0, press: false }
     if (gd <= this.sk.flee + 1 && !hiding && me.ready <= w.t && inShadow(level, me.x, me.y)) {
       if (this.rng.chance(this.sk.hide)) return { jx: 0, jy: 0, press: true }
     }
