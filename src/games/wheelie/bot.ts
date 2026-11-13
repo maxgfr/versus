@@ -24,7 +24,7 @@ interface Skill {
 const SKILL: Record<Difficulty, Skill> = {
   easy: { aim: 0.42, spread: 0.2, react: 14, look: 0 },
   normal: { aim: 0.5, spread: 0.12, react: 9, look: 20 },
-  hard: { aim: 0.6, spread: 0.02, react: 6, look: 90 },
+  hard: { aim: 0.55, spread: 0.1, react: 9, look: 22 },
 }
 
 const DT = 1 / 60

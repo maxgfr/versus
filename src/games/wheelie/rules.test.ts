@@ -191,6 +191,19 @@ describe('wheelie bot', () => {
     expect(normal).toBeGreaterThan(avg('easy'))
     expect(normal).toBeLessThan(hard)
   })
+
+  it('a hard bot still crashes now and then, so a good run can beat it', () => {
+    let crashed = 0
+    for (let seed = 1; seed <= 30; seed++) {
+      const t = terrainFor(seed * 7919, 0)
+      const b = newBike()
+      const rng = new Rng(seed)
+      const brain = newBrain()
+      while (!b.end) stepBike(b, t, DT, drive(b, t, 'hard', rng, brain))
+      if (b.end !== 'capped') crashed++
+    }
+    expect(crashed).toBeGreaterThanOrEqual(10)
+  })
 })
 
 describe('wheelie game', () => {
