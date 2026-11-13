@@ -49,6 +49,8 @@ class CannonDuel extends TurnGame<State> {
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
   /** Quarter of the pull reached so far, for the rising tension clicks. */
   private notch = 0
+  /** Online guest: what the last snapshot showed, to replay the host's springs and trail. */
+  private seen: { firedAt: number; hp: [number, number] } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -270,6 +272,7 @@ class CannonDuel extends TurnGame<State> {
   render(g: Draw, alpha: number): void {
     const s = this.s
     const dt = 1 / 60
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(s)
     this.recoil[0].update(dt)
     this.recoil[1].update(dt)
     this.pulse[0].update(dt)
@@ -343,10 +346,31 @@ class CannonDuel extends TurnGame<State> {
     }
   }
 
+  /**
+   * The guest only renders snapshots, and springs and the smoke trail are not fx
+   * the host replays: rebuild them here from what changed (a shot, a core hit).
+   */
+  private mirrorJuice(s: State): void {
+    const was = this.seen
+    const sh = s.shell
+    this.seen = { firedAt: s.firedAt, hp: [coreHp(s, 0), coreHp(s, 1)] }
+    if (!was) return
+    if (s.firedAt !== was.firedAt) {
+      this.trail.length = 0
+      if (sh) this.recoil[sh.side].kick(8 + Math.min(1, Math.hypot(sh.vx, sh.vy) / BALL.vmax) * 14)
+    }
+    const last = this.trail[this.trail.length - 1]
+    if (sh && (!last || last.x !== sh.x || last.y !== sh.y)) {
+      this.trail.push({ x: sh.x, y: sh.y, z: sh.z })
+      if (this.trail.length > 12) this.trail.shift()
+    }
+    for (const side of [0, 1] as Side[])
+      if (this.seen.hp[side] < was.hp[side]) this.pulse[side].kick(14)
+  }
+
   override restore(snap: unknown): void {
     super.restore(snap)
     this.prevShell = null
-    this.trail.length = 0
   }
 }
 

@@ -42,6 +42,13 @@ class Tennis extends BaseGame<State> {
   private roll = 0
   /** Seconds until each running blob kicks up its next puff of court dust. */
   private dustIn: [number, number] = [0, 0]
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: {
+    score: [number, number]
+    phase: World['phase']
+    rally: number
+    bounces: number
+  } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -221,6 +228,7 @@ class Tennis extends BaseGame<State> {
       b ? { ...a, x: lerp(b.x, a.x, alpha), y: lerp(b.y, a.y, alpha) } : a
     const ball = ip(w.ball, prev?.ball)
     if (prev) ball.z = lerp(prev.ball.z, w.ball.z, alpha)
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     const dt = 1 / 60
     for (const sp of this.squash) sp.update(dt)
     for (const p of this.pulse) p.update(dt)
@@ -251,6 +259,34 @@ class Tennis extends BaseGame<State> {
       ended: s.endAt >= 0 ? this.time - s.endAt : -1,
       winner: s.winner,
     })
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a point, the serve, a hit, a bounce).
+   */
+  private mirrorJuice(w: World): void {
+    const was = this.seen
+    this.seen = {
+      score: [w.score[0], w.score[1]],
+      phase: w.phase,
+      rally: w.rally,
+      bounces: w.bounces,
+    }
+    if (!was) return
+    for (const side of [0, 1] as Side[])
+      if (w.score[side] > was.score[side]) this.pulse[side].kick(14)
+    if (w.phase !== 'play') return
+    if (was.phase === 'serve') {
+      this.squash[w.server].kick(-3)
+      this.ballSquash.kick(-4)
+      this.trail.length = 0
+    } else if (w.rally > was.rally && w.hitter !== null) {
+      const k = Math.min(1, (Math.hypot(w.ball.vx, w.ball.vy) * w.tempo) / 1600)
+      this.squash[w.hitter].kick(-2.5 - k * 1.5)
+      this.ballSquash.kick(-4)
+      this.trail.length = 0
+    } else if (w.bounces > was.bounces) this.ballSquash.kick(-5)
   }
 
   override restore(snap: unknown): void {

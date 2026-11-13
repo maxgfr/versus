@@ -9,6 +9,7 @@ import { type BotMemory, decide, newMemory, TUNING } from './bot.ts'
 import { render, type Look } from './render.ts'
 import {
   type Ball,
+  BUMP_VY,
   type Event,
   HUMAN_SPEED,
   landingOf,
@@ -44,6 +45,13 @@ class BeachBall extends BaseGame<State> {
   private trail: { x: number; y: number; z: number }[] = []
   /** The net sags and springs back when the ball hits it. */
   private net = new Spring(0, 160, 6)
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: {
+    score: [number, number]
+    phase: World['phase']
+    cool: number[]
+    vx: number
+  } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -181,6 +189,7 @@ class BeachBall extends BaseGame<State> {
   render(g: Draw, alpha: number): void {
     const w = this.s.w
     const prev = this.prev
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     for (const s of this.squash) s.update(1 / 60)
     for (const p of this.pulse) p.update(1 / 60)
     this.ballSquash.update(1 / 60)
@@ -228,6 +237,47 @@ class BeachBall extends BaseGame<State> {
     render(g, look)
   }
 
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a point, a bump, the net, a wall, a landing).
+   */
+  private mirrorJuice(w: World): void {
+    const was = this.seen
+    this.seen = {
+      score: [w.score[0], w.score[1]],
+      phase: w.phase,
+      cool: w.blobs.map((b) => b.cool),
+      vx: w.ball.vx,
+    }
+    if (!was) return
+    for (const side of [0, 1] as Side[])
+      if (w.score[side] > was.score[side]) this.pulse[side].kick(14)
+    if (was.phase === 'rally' && w.phase === 'point') {
+      if (w.why === 'net') this.net.kick(30)
+      else if (w.why === 'land') this.ballSquash.kick(-9)
+    }
+    // A bump resets the blob's cooldown: its clock jumps back up.
+    let bumped = false
+    w.blobs.forEach((b, i) => {
+      if (b.cool <= (was.cool[i] ?? 0) + 0.05) return
+      bumped = true
+      // A spike leaves much quicker than a lob: read its power off the pace.
+      const p = Math.max(0, Math.min(1, (Math.abs(w.ball.vy) / BUMP_VY - 1.2) / 1.4))
+      this.squash[i]?.kick(-4 - p * 4)
+      this.bumpAt[i] = this.time
+      this.ballSquash.kick(-5 - p * 7)
+      this.trail.length = 0
+    })
+    // Off a side wall: the ball's sideways run flips.
+    if (
+      !bumped &&
+      w.phase === 'rally' &&
+      was.vx * w.ball.vx < 0 &&
+      Math.abs(was.vx) * w.tempo > 300
+    )
+      this.ballSquash.kick(-3)
+  }
+
   /** Is the ball coming down on `side`'s sand? Then that side has to play it. */
   private mine(side: Side): boolean {
     const w = this.s.w
@@ -253,6 +303,7 @@ class BeachBall extends BaseGame<State> {
     if (this.squash.length !== this.s.w.blobs.length) {
       this.squash = this.s.w.blobs.map(() => new Spring(1, 360, 12))
       this.bumpAt = this.s.w.blobs.map(() => -10)
+      this.seen = null
     }
   }
 }

@@ -51,6 +51,8 @@ class ReflexRaceGame extends BaseGame<State> {
   private counted = -1
   // Cosmetic only: score pulse per side.
   private pulse: [Spring, Spring] = [new Spring(0, 240, 11), new Spring(0, 240, 11)]
+  /** Online guest: scores at the last render. */
+  private seen: [number, number] | null = null
 
   protected setup(): State {
     const s: State = { ...newRace(this.ctx.rng, 0), botAt: [-1, -1], endAt: -1 }
@@ -187,6 +189,7 @@ class ReflexRaceGame extends BaseGame<State> {
 
   render(g: Draw): void {
     const s = this.s
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice()
     for (const p of this.pulse) p.update(1 / 60)
     drawTable(g)
     for (const side of [0, 1] as Side[]) {
@@ -202,6 +205,18 @@ class ReflexRaceGame extends BaseGame<State> {
       scoreMeter(g, side, Math.max(0, s.score[side]), this.goal, side === 0 ? 810 : 190)
       const pk = this.pulse[side].value / 16
       bigScore(g, side, s.score[side], { x: side === 0 ? 130 : 870, size: 76 * (1 + 0.3 * pk) })
+    }
+  }
+
+  /** The guest never steps: a point swells the score, a penalty pinches it. */
+  private mirrorJuice(): void {
+    const sc = this.s.score
+    const was = this.seen
+    this.seen = [sc[0], sc[1]]
+    if (!was) return
+    for (const side of [0, 1] as Side[]) {
+      if (sc[side] > was[side]) this.pulse[side].kick(16)
+      else if (sc[side] < was[side]) this.pulse[side].kick(-10)
     }
   }
 }

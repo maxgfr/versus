@@ -81,6 +81,8 @@ class SoccerPool extends BaseGame<State> {
   private lastTick = -1
   /** Fading afterimages behind fast discs, per disc (cosmetic). */
   private ghosts: { x: number; y: number }[][] = []
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: { score: [number, number]; phase: World['phase']; v: number[] } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -281,6 +283,7 @@ class SoccerPool extends BaseGame<State> {
     if (sp > 600 && w.phase === 'roll') this.trail.push({ x: ball.x, y: ball.y })
     else this.trail.shift()
     while (this.trail.length > 7) this.trail.shift()
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     if (w.phase === 'roll') this.spin += sp / 60 / BALL_R
     for (const s of this.squash) s.update(1 / 60)
     for (const p of this.pulse) p.update(1 / 60)
@@ -306,6 +309,30 @@ class SoccerPool extends BaseGame<State> {
       status: [this.status(0), this.status(1)],
       turnLabel: this.turnLabel(w.turn),
       end: this.s.end ? { side: this.s.end.side, t: this.time - this.s.end.at } : null,
+    })
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a goal, a flick, a knock).
+   */
+  private mirrorJuice(w: World): void {
+    const was = this.seen
+    this.seen = {
+      score: [w.score[0], w.score[1]],
+      phase: w.phase,
+      v: w.discs.flatMap((d) => [d.vx, d.vy]),
+    }
+    if (!was) return
+    for (const side of [0, 1] as Side[])
+      if (w.score[side] > was.score[side]) this.pulse[side].kick(14)
+    if (w.phase !== 'roll') return
+    w.discs.forEach((d, i) => {
+      const dv = Math.hypot(d.vx - (was.v[i * 2] ?? 0), d.vy - (was.v[i * 2 + 1] ?? 0))
+      if (dv < 150) return
+      // From rest at the end of the aim: the flicked disc. Otherwise a knock.
+      if (was.phase === 'aim') this.squash[i]?.kick(-3 - Math.min(1, dv / SHOT_SPEED) * 3)
+      else this.squash[i]?.kick(-2 - Math.min(1, dv / 1800) * 3)
     })
   }
 

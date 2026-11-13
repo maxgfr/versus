@@ -58,6 +58,8 @@ class Golf extends TurnGame<State> {
   private landAt = -10
   /** Quarter of the pull reached so far, for the rising tension clicks. */
   private notch = 0
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: { air: boolean; sunkAt: number; endAt: number } | null = null
 
   protected setup(): State {
     // The player whose turn it is may pull anywhere on the course.
@@ -279,6 +281,7 @@ class Golf extends TurnGame<State> {
 
   render(g: Draw, frac: number): void {
     const s = this.s
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(s)
     for (const p of this.pulse) p.update(1 / 60)
     let aim: Parameters<typeof render>[2]['aim'] = null
     if (s.phase === 'aim' && !this.over) {
@@ -347,6 +350,23 @@ class Golf extends TurnGame<State> {
     }
     hud(g, s, [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)])
     this.drawTurns(g, undefined, s.phase === 'aim')
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a landing, a holed ball, the end).
+   */
+  private mirrorJuice(s: State): void {
+    const was = this.seen
+    const air = s.phase === 'fly' && s.balls[s.turn].air
+    this.seen = { air, sunkAt: s.sunkAt, endAt: s.endAt }
+    if (!was) return
+    if (was.air && !air && s.phase === 'fly') this.landAt = this.time
+    if (s.sunkAt !== was.sunkAt) this.pulse[s.turn].kick(10)
+    if (s.endAt !== was.endAt && s.endAt >= 0) {
+      const r = result(s)
+      if (r !== 'draw') this.pulse[r].kick(16)
+    }
   }
 
   override restore(snap: unknown): void {

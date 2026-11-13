@@ -59,6 +59,15 @@ class Pool extends BaseGame<State> {
   private pop: Spring[] = Array.from({ length: 16 }, () => new Spring(1, 520, 16))
   private pulse: [Spring, Spring] = [new Spring(0, 240, 11), new Spring(0, 240, 11)]
   private trail: { x: number; y: number }[] = []
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: {
+    v: number[]
+    turn: Side
+    phase: World['phase']
+    wins: [number, number]
+    potted: number
+    strokeAt: number
+  } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -345,6 +354,7 @@ class Pool extends BaseGame<State> {
     if (cue && cue.on && w.phase === 'roll' && cueSp > 700) this.trail.push({ x: cue.x, y: cue.y })
     else this.trail.shift()
     while (this.trail.length > 6) this.trail.shift()
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     for (const s of this.pop) s.update(dt)
     for (const p of this.pulse) p.update(dt)
     const look: Look = {
@@ -364,6 +374,46 @@ class Pool extends BaseGame<State> {
       trail: this.trail,
     }
     render(g, look, [!this.isBot(0), !this.isBot(1)])
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a stroke, a contact, a pot, a turn, a rack).
+   */
+  private mirrorJuice(w: World): void {
+    const was = this.seen
+    const stroke = this.s.stroke
+    this.seen = {
+      v: w.balls.flatMap((b) => [b.vx, b.vy]),
+      turn: w.turn,
+      phase: w.phase,
+      wins: [w.wins[0], w.wins[1]],
+      potted: w.potted.length,
+      strokeAt: stroke?.at ?? -1,
+    }
+    if (!was) return
+    if (stroke && stroke.at !== was.strokeAt) this.pop[0]?.kick(-2 - stroke.power * 5)
+    if (was.phase === 'place' && w.phase === 'aim') this.pop[0]?.kick(-5)
+    // A velocity jump next to another ball is a contact (a cushion has no neighbour).
+    if (w.phase === 'roll')
+      for (const b of w.balls) {
+        if (!b.on) continue
+        const dv = Math.hypot(b.vx - (was.v[b.n * 2] ?? 0), b.vy - (was.v[b.n * 2 + 1] ?? 0))
+        if (dv < 150 || (b.n === 0 && stroke && stroke.at !== was.strokeAt)) continue
+        const near = w.balls.some(
+          (o) => o !== b && o.on && Math.hypot(o.x - b.x, o.y - b.y) < BR * 2 + 14,
+        )
+        if (near) this.pop[b.n]?.kick(-1 - Math.min(1, dv / 1900) * 4)
+      }
+    // The shooter is whoever had the turn before this snapshot (it may pass on settle).
+    const own = w.groups[was.turn]
+    for (const n of w.potted.slice(was.potted)) {
+      const good = n !== 0 && (own === null ? n !== 8 : groupOf(n) === own)
+      if (good) this.pulse[was.turn].kick(12)
+    }
+    if (w.turn !== was.turn && was.phase === 'roll') this.pulse[w.turn].kick(6)
+    for (const side of [0, 1] as Side[])
+      if (w.wins[side] > was.wins[side]) this.pulse[side].kick(16)
   }
 
   private turnOf(side: Side): boolean {

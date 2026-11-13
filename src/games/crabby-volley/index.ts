@@ -11,6 +11,7 @@ import {
   type Crab,
   CRAB_R,
   type Event,
+  HOP_H,
   landingOf,
   MAX_TOUCH,
   newWorld,
@@ -47,6 +48,12 @@ class CrabbyVolley extends BaseGame<State> {
   private trail: { x: number; y: number; z: number }[] = []
   /** The net sags and springs back when the ball hits it. */
   private net = new Spring(0, 160, 6)
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: {
+    score: [number, number]
+    phase: World['phase']
+    crabs: { hop: number; cool: number }[]
+  } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -216,6 +223,7 @@ class CrabbyVolley extends BaseGame<State> {
   render(g: Draw, alpha: number): void {
     const w = this.s.w
     const prev = this.prev
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     for (const s of this.squash) s.update(1 / 60)
     for (const p of this.pulse) p.update(1 / 60)
     this.ballSquash.update(1 / 60)
@@ -270,6 +278,41 @@ class CrabbyVolley extends BaseGame<State> {
     render(g, look)
   }
 
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a point, a hop, a bump, the net, a landing).
+   */
+  private mirrorJuice(w: World): void {
+    const was = this.seen
+    this.seen = {
+      score: [w.score[0], w.score[1]],
+      phase: w.phase,
+      crabs: w.crabs.map((c) => ({ hop: c.hop, cool: c.cool })),
+    }
+    if (!was) return
+    for (const side of [0, 1] as Side[])
+      if (w.score[side] > was.score[side]) this.pulse[side].kick(14)
+    if (was.phase === 'rally' && w.phase === 'point') {
+      if (w.why === 'net') this.net.kick(30)
+      else if (w.why === 'land') this.ballSquash.kick(-8)
+    }
+    w.crabs.forEach((c, i) => {
+      const before = was.crabs[i]
+      if (!before) return
+      // Stretch on take-off, squash on touch-down.
+      if (before.hop < 0 && c.hop >= 0) this.squash[i]?.kick(4)
+      else if (before.hop >= 0 && c.hop < 0) this.squash[i]?.kick(-5)
+      // A bump sets a long cooldown (a landing only a short one).
+      if (c.cool > before.cool + 0.2) {
+        const p = Math.max(0, Math.min(1, (c.z - 40) / (HOP_H - 40)))
+        this.ballSquash.kick(-5 - p * 7)
+        this.trail.length = 0
+        this.squash[i]?.kick(-4 - p * 3)
+        this.bumpAt[i] = this.time
+      }
+    })
+  }
+
   /** Is the ball coming down on `side`'s sand? Then that side has to play it. */
   private mine(side: Side): boolean {
     const w = this.s.w
@@ -298,6 +341,7 @@ class CrabbyVolley extends BaseGame<State> {
       this.squash = this.s.w.crabs.map(() => new Spring(1, 360, 12))
       this.walk = this.s.w.crabs.map(() => 0)
       this.bumpAt = this.s.w.crabs.map(() => -10)
+      this.seen = null
     }
   }
 }

@@ -56,6 +56,8 @@ export interface State {
 class MemoryGame extends TurnGame<State> {
   /** Cosmetic: the pair counts pop when they go up. */
   private pulse: [Spring, Spring] = [new Spring(0, 260, 11), new Spring(0, 260, 11)]
+  /** Online guest: pair counts at the last render. */
+  private seenPairs: [number, number] | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -240,6 +242,7 @@ class MemoryGame extends TurnGame<State> {
     backdropGlow(g)
     const live = !this.over && s.resolveAt < 0 && s.roundAt < 0
     renderCards(g, s, this.time, live ? s.turn : null)
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice()
     this.drawTurns(g, undefined, s.resolveAt < 0 && s.roundAt < 0)
     for (const side of [0, 1] as Side[]) {
       const p = Math.max(0, this.pulse[side].update(1 / 60))
@@ -256,9 +259,16 @@ class MemoryGame extends TurnGame<State> {
     }
   }
 
-  override restore(snap: unknown): void {
-    super.restore(snap)
-    for (const p of this.pulse) p.set(0)
+  /** The guest never steps: pop the count of whoever just found a pair. */
+  private mirrorJuice(): void {
+    const s = this.s
+    const pairs: [number, number] = [pairsOf(s.table, 0), pairsOf(s.table, 1)]
+    const was = this.seenPairs
+    this.seenPairs = pairs
+    if (!was) return
+    const k = Math.min(1, (s.streak - 1) / 4)
+    for (const side of [0, 1] as Side[])
+      if (pairs[side] > was[side]) this.pulse[side].kick(12 + Math.max(0, k) * 8)
   }
 }
 

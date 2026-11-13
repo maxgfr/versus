@@ -45,6 +45,8 @@ class ArcheryMaster extends TurnGame<State> {
   // Cosmetic only (not synced): the archers' kick on release, the tension clicks.
   private kick: [Spring, Spring] = [new Spring(1, 300, 11), new Spring(1, 300, 11)]
   private notch = 0
+  /** Online guest: whether an arrow was in the air at the last render. */
+  private seenFly: boolean | null = null
 
   protected setup(): State {
     // In local 2P the archer on turn may pull anywhere on the table.
@@ -234,6 +236,7 @@ class ArcheryMaster extends TurnGame<State> {
 
   render(g: Draw, frac: number): void {
     const s = this.s
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice()
     for (const k of this.kick) k.update(1 / 60)
     let aim: Look['aim'] = null
     // The lines step back at a new round: slide them there.
@@ -325,6 +328,14 @@ class ArcheryMaster extends TurnGame<State> {
         })
       }
     }
+  }
+
+  /** The guest never steps: kick the archer back when an arrow leaves the bow. */
+  private mirrorJuice(): void {
+    const a = this.s.phase === 'fly' ? this.s.arrow : null
+    const was = this.seenFly
+    this.seenFly = a !== null
+    if (was === false && a) this.kick[a.side].kick(-2 - 5 * a.power)
   }
 
   override restore(snap: unknown): void {

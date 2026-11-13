@@ -53,6 +53,8 @@ class GolfFootball extends TurnGame<State> {
   // Cosmetic only (not synced): the ball's previous step for interpolation, points pulses.
   private prev: Kick | null = null
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: { points: [number, number]; endAt: number } | null = null
 
   protected setup(): State {
     // The player whose turn it is may swipe anywhere on the pitch.
@@ -222,6 +224,7 @@ class GolfFootball extends TurnGame<State> {
 
   render(g: Draw, frac: number): void {
     const s = this.s
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(s)
     for (const p of this.pulse) p.update(1 / 60)
     let aim: Parameters<typeof render>[2]['aim'] = null
     if (s.phase === 'aim' && !this.over) {
@@ -266,6 +269,23 @@ class GolfFootball extends TurnGame<State> {
     }
     hud(g, s, [Math.max(0, this.pulse[0].value / 14), Math.max(0, this.pulse[1].value / 14)])
     this.drawTurns(g, undefined, s.phase === 'aim')
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a kick that's good, the end).
+   */
+  private mirrorJuice(s: State): void {
+    const was = this.seen
+    this.seen = { points: [s.points[0], s.points[1]], endAt: s.endAt }
+    if (!was) return
+    for (const side of [0, 1] as Side[])
+      if (s.points[side] > was.points[side])
+        this.pulse[side].kick(10 + 6 * Math.min(1, spotOf(s, side).d / 1000))
+    if (s.endAt !== was.endAt && s.endAt >= 0) {
+      const won = result(s)
+      if (won !== null) this.pulse[won].kick(16)
+    }
   }
 
   override restore(snap: unknown): void {

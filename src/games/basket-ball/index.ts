@@ -8,6 +8,8 @@ import { type BotMemory, decide, newMemory } from './bot.ts'
 import { type Drag, type Look, render } from './render.ts'
 import {
   type Ball,
+  BALL_R,
+  boardY,
   type Event,
   FLICK_FAST,
   FLICK_SLOW,
@@ -17,6 +19,8 @@ import {
   shoot,
   step,
   swipeOK,
+  T_LOB,
+  T_SNAP,
   winner,
   type World,
 } from './rules.ts'
@@ -48,6 +52,18 @@ class BasketBall extends BaseGame<State> {
   private wasEnded = false
   /** Each side's finger speed (world units/s), smoothed: a flick's speed sets the shot's tempo. */
   private vel: [number, number] = [0, 0]
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: {
+    score: [number, number]
+    balls: {
+      state: Ball['state']
+      t: number
+      rims: number
+      bounces: number
+      vy: number
+      vz: number
+    }[]
+  } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -220,6 +236,7 @@ class BasketBall extends BaseGame<State> {
       if (!p || p.state !== b.state || b.state === 'ready') return b
       return { ...b, x: lerp(p.x, b.x, alpha), y: lerp(p.y, b.y, alpha), z: lerp(p.z, b.z, alpha) }
     })
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     // Trail behind a ball in flight, longer for a quick flat shot.
     for (const side of [0, 1] as Side[]) {
       const b = balls[side]
@@ -248,10 +265,55 @@ class BasketBall extends BaseGame<State> {
     render(g, look)
   }
 
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a shot, the rim, the board, the floor, a basket).
+   */
+  private mirrorJuice(w: World): void {
+    const was = this.seen
+    this.seen = {
+      score: [w.score[0], w.score[1]],
+      balls: w.balls.map((b) => ({
+        state: b.state,
+        t: b.t,
+        rims: b.rims,
+        bounces: b.bounces,
+        vy: b.vy,
+        vz: b.vz,
+      })),
+    }
+    if (!was) return
+    for (const side of [0, 1] as Side[]) {
+      if (w.score[side] > was.score[side]) this.pulse[side].kick(14)
+      const b = w.balls[side]
+      const a = was.balls[side]
+      if (!a) continue
+      if (b.state === 'fly' && (a.state !== 'fly' || b.t < a.t)) {
+        // A fresh shot: a quick flick (short arc) stretches the ball more.
+        const k = prog(b.arc, T_LOB, T_SNAP)
+        this.squash[side].set(1)
+        this.squash[side].kick(3 + k * 4)
+        this.trail[side].length = 0
+        continue
+      }
+      if (a.state !== 'fly') continue
+      if (b.rims > a.rims) this.squash[side].kick(-3.5)
+      // Off the backboard: the ball's run toward it flips, right at its face.
+      else if (a.vy * b.vy < 0 && Math.abs(b.y - boardY(side)) < BALL_R + 30) {
+        const k = Math.min(1, Math.abs(a.vy) / 1200)
+        this.squash[side].kick(-2 - k * 4)
+      }
+      // The floor: a hop, or the last landing that ends the shot.
+      if ((b.bounces > a.bounces || b.state !== 'fly') && -a.vz > 120) {
+        const k = Math.min(1, -a.vz / 900)
+        this.squash[side].kick(-3 - k * 5)
+      }
+    }
+  }
+
   override restore(snap: unknown): void {
     super.restore(snap)
     this.prev = null
-    this.trail = [[], []]
   }
 
   /** Hint chevrons for a human who has not scored twice yet. */

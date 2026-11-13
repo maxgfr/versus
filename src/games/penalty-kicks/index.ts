@@ -15,6 +15,7 @@ import {
   newWorld,
   outcome,
   type Shot,
+  speedOf,
   type World,
   step,
   trace,
@@ -71,6 +72,8 @@ class Penalties extends BaseGame<State> {
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
   /** Recent ball positions while it flies (cosmetic). */
   private trail: { x: number; y: number }[] = []
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: { kickAt: number; outcome: World['outcome']; diveT: [number, number] } | null = null
 
   private get rounds(): number {
     return this.ctx.target || match.default
@@ -266,6 +269,7 @@ class Penalties extends BaseGame<State> {
           y: prev.y + (w.ball.y - prev.y) * alpha,
         }
       : w.ball
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     const dt = 1 / 60
     for (const s of this.squash) s.update(dt)
     for (const p of this.pulse) p.update(dt)
@@ -286,6 +290,31 @@ class Penalties extends BaseGame<State> {
       ended: this.s.endAt >= 0 ? this.time - this.s.endAt : -1,
       winner: this.s.winner,
     })
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a kick, a dive, a goal or a save).
+   */
+  private mirrorJuice(w: World): void {
+    const was = this.seen
+    this.seen = {
+      kickAt: this.s.kickAt,
+      outcome: w.outcome,
+      diveT: [w.keepers[0].diveT, w.keepers[1].diveT],
+    }
+    if (!was) return
+    if (this.s.kickAt >= 0 && this.s.kickAt !== was.kickAt) {
+      const p = Math.min(1, Math.hypot(w.ball.vx, w.ball.vy) / speedOf(1))
+      this.squash[w.shooter].kick(-2 - p * 3)
+      this.trail.length = 0
+    }
+    for (const side of [0, 1] as Side[])
+      if (w.keepers[side].diveT > was.diveT[side]) this.squash[side].kick(5)
+    if (w.outcome !== was.outcome) {
+      if (w.outcome === 'goal') this.pulse[w.shooter].kick(14)
+      else if (w.outcome === 'save') this.pulse[keeperOf(w.shooter)].kick(8)
+    }
   }
 
   override restore(snap: unknown): void {

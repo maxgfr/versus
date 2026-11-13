@@ -11,8 +11,10 @@ import { choose } from './bot.ts'
 import { render } from './render.ts'
 import {
   advance,
+  type BagState,
   type Event,
   HOLE,
+  LAND,
   newState,
   type State,
   THROW,
@@ -43,6 +45,8 @@ class Cornhole extends TurnGame<State> {
   private thump = new Spring(0, 300, 10)
   /** Quarter of the pull reached so far, for the rising tension clicks. */
   private notch = 0
+  /** Online guest: each bag's state in the last snapshot, to replay the board's thump. */
+  private seen: BagState[] | null = null
 
   protected setup(): State {
     // In local 2P the player whose turn it is may pull anywhere on the table.
@@ -233,6 +237,7 @@ class Cornhole extends TurnGame<State> {
 
   render(g: Draw, frac: number): void {
     const s = this.s
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(s)
     this.thump.update(1 / 60)
     const w = winner(s)
     const decided = w !== null && (s.phase === 'over' || this.over)
@@ -290,6 +295,22 @@ class Cornhole extends TurnGame<State> {
       const pop = gained && since >= 0 && since < 0.6 ? Math.sin((since / 0.6) * Math.PI) * 0.45 : 0
       bigScore(g, side, s.score[side], { x: side === 0 ? 130 : W - 130, size: 76 * (1 + pop) })
     }
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * thump the board here when a bag that was in the air is now on it.
+   */
+  private mirrorJuice(s: State): void {
+    const was = this.seen
+    this.seen = s.bags.map((b) => b.st)
+    if (!was) return
+    s.bags.forEach((b, i) => {
+      if (was[i] !== 'air' || (b.st !== 'slide' && b.st !== 'rest')) return
+      // The landing kept LAND of the horizontal speed: undo it for the impact.
+      const k = Math.min(1, Math.hypot(b.vx, b.vy) / LAND / 1100)
+      this.thump.kick(3 + 9 * k)
+    })
   }
 
   override restore(snap: unknown): void {

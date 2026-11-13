@@ -28,7 +28,7 @@ export const COOLDOWN = 0.6
 /** In the closing seconds (and a golden goal) discs recharge quicker: a frantic finish. */
 export const COOLDOWN_RUSH = 0.4
 export const RUSH_AT = 15
-const MAX_FLICK = 2100
+export const MAX_FLICK = 2100
 const MAX_BALL = 3000
 const MAX_PLAYER = 2600
 const DRAG_PLAYER = 2.4

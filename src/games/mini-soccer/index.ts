@@ -9,8 +9,10 @@ import { type Disc } from '../../engines/puck/index.ts'
 import { type BotMemory, decide, newMemory } from './bot.ts'
 import { render } from './render.ts'
 import {
+  BALL_R,
   type Cmd,
   type Event,
+  MAX_FLICK,
   newWorld,
   nearestDisc,
   PLAYER_R,
@@ -51,6 +53,14 @@ class MiniSoccer extends BaseGame<State> {
   private lastTick = -1
   /** Fading afterimages behind fast discs, per disc (cosmetic). */
   private ghosts: { x: number; y: number }[][] = [[], [], [], []]
+  /** Online guest: what the last snapshot showed, to replay the host's springs. */
+  private seen: {
+    score: [number, number]
+    phase: World['phase']
+    cool: number[]
+    vx: number
+    vy: number
+  } | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -249,6 +259,7 @@ class MiniSoccer extends BaseGame<State> {
       this.trail.push({ x: ball.x, y: ball.y })
     else this.trail.shift()
     while (this.trail.length > 6) this.trail.shift()
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice(w)
     const dt = 1 / 60
     for (const s of this.pop) s.update(dt)
     for (const p of this.pulse) p.update(dt)
@@ -274,6 +285,39 @@ class MiniSoccer extends BaseGame<State> {
       ended: this.s.endAt >= 0 ? this.time - this.s.endAt : -1,
       winner: w.winner,
     })
+  }
+
+  /**
+   * The guest only renders snapshots, and springs are not fx the host replays:
+   * kick them here from what changed (a goal, a flick, a disc striking the ball).
+   */
+  private mirrorJuice(w: World): void {
+    const { ball } = w
+    const was = this.seen
+    this.seen = {
+      score: [w.score[0], w.score[1]],
+      phase: w.phase,
+      cool: [...w.cool],
+      vx: ball.vx,
+      vy: ball.vy,
+    }
+    if (!was) return
+    for (const side of [0, 1] as Side[])
+      if (w.score[side] > was.score[side]) this.pulse[side].kick(14)
+    if (w.phase !== 'play' || was.phase !== 'play') return
+    // A flick restarts the disc's cooldown.
+    w.players.forEach((p, i) => {
+      if ((w.cool[i] ?? 0) <= (was.cool[i] ?? 0) + 0.05) return
+      const k = Math.min(1, Math.hypot(p.vx, p.vy) / MAX_FLICK)
+      this.pop[i]?.kick(-2 - k * 3)
+    })
+    // A hit: the ball's velocity jumps next to a disc.
+    const dv = Math.hypot(ball.vx - was.vx, ball.vy - was.vy)
+    if (dv < 300) return
+    const i = nearestDisc(w, ball.x, ball.y, [0, 1, 2, 3])
+    const p = i === null ? undefined : w.players[i]
+    if (i === null || !p || Math.hypot(p.x - ball.x, p.y - ball.y) > PLAYER_R + BALL_R + 30) return
+    this.pop[i]?.kick(-2 - Math.min(1, dv / 2600) * 3)
   }
 
   override restore(snap: unknown): void {

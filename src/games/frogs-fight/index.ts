@@ -58,6 +58,8 @@ class Frogs extends BaseGame<State> {
   private ev: Ev[] = []
   // Cosmetic only (not synced): HUD pip pulse per side.
   private pulse: [Spring, Spring] = [new Spring(0, 220, 10), new Spring(0, 220, 10)]
+  /** Online guest: round wins at the last render. */
+  private seen: [number, number] | null = null
 
   private get target(): number {
     return this.ctx.target || match.default
@@ -305,6 +307,7 @@ class Frogs extends BaseGame<State> {
 
   render(g: Draw, alpha = 1): void {
     const { ctx } = this
+    if (ctx.mode === 'online' && ctx.local === 1) this.mirrorJuice()
     for (const p of this.pulse) p.update(STEP)
     // Outline reachable pads for the humans at this device (none in a bot-only demo).
     const show = ([0, 1] as Side[]).map(
@@ -320,9 +323,13 @@ class Frogs extends BaseGame<State> {
     })
   }
 
-  override restore(snap: unknown): void {
-    super.restore(snap)
-    for (const p of this.pulse) p.set(0)
+  /** The guest never steps: pulse the pips of whoever just took a round. */
+  private mirrorJuice(): void {
+    const wins = this.s.rounds.wins
+    const was = this.seen
+    this.seen = [wins[0], wins[1]]
+    if (!was) return
+    for (const side of [0, 1] as Side[]) if (wins[side] > was[side]) this.pulse[side].kick(14)
   }
 }
 

@@ -52,6 +52,8 @@ class Darts extends TurnGame<State> {
   private flicks: [Flick, Flick] = [new Flick(0), new Flick(1)]
   /** Cosmetic: the totals pop when they go up. */
   private pulse: [Spring, Spring] = [new Spring(0, 260, 11), new Spring(0, 260, 11)]
+  /** Online guest: how many darts were on the board at the last render. */
+  private seen: number | null = null
 
   protected setup(): State {
     // The player whose turn it is may flick from anywhere.
@@ -246,6 +248,7 @@ class Darts extends TurnGame<State> {
     const side = s.turn
     // Online, each phone shows only its own player's reticle and coaching.
     const mine = g.viewer === null || g.viewer === side
+    if (this.ctx.mode === 'online' && this.ctx.local === 1) this.mirrorJuice()
     for (const p of this.pulse) p.update(1 / 60)
     render(
       g,
@@ -262,9 +265,14 @@ class Darts extends TurnGame<State> {
     this.drawTurns(g, undefined, s.phase === 'aim')
   }
 
-  override restore(snap: unknown): void {
-    super.restore(snap)
-    for (const p of this.pulse) p.set(0)
+  /** The guest never steps: pop the totals from the darts that stuck since the last render. */
+  private mirrorJuice(): void {
+    const darts = this.s.darts
+    const was = this.seen
+    this.seen = darts.length
+    // A new leg clears the board: nothing to pop.
+    if (was === null || darts.length < was) return
+    for (const d of darts.slice(was)) if (d.pts > 0) this.pulse[d.side].kick(10 + d.pts / 6)
   }
 }
 
