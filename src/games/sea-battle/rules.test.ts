@@ -6,22 +6,26 @@ import { Input } from '../../core/input.ts'
 import { Rng } from '../../core/rng.ts'
 import type { Stage } from '../../core/stage.ts'
 import { choose } from './bot.ts'
-import makeGame, { SETUP } from './index.ts'
-import { cellPos, peekRect, shuffleRect } from './render.ts'
+import makeGame from './index.ts'
+import { cellPos, peekRect, readyRect, shuffleRect } from './render.ts'
 import {
   allSunk,
   CELLS,
   FLEET,
   fire,
+  fits,
   freshSea,
   HIT,
+  isVertical,
   MISS,
+  moveShip,
   N,
   neighbours,
   pendingHits,
   placeFleet,
   type Sea,
   sunkCount,
+  turnShip,
   UNTRIED,
   viewOf,
 } from './rules.ts'
@@ -136,6 +140,59 @@ describe('sea battle rules', () => {
     expect(c.shot).toMatchObject({ hit: true, sunk: true, win: true })
     expect(c.sea.shots.filter((v) => v !== UNTRIED)).toHaveLength(3)
     expect(freshSea(new Rng(3)).shots.every((v) => v === UNTRIED)).toBe(true)
+  })
+})
+
+describe('sea battle placement', () => {
+  const at = (r: number, c: number) => r * N + c
+
+  it('drags a ship by the cell held, keeping its heading, and only to a free place on the sea', () => {
+    const { ships } = seaOf([
+      [0, 0, 3, 'h'],
+      [5, 5, 2, 'v'],
+    ])
+    // Held by its middle cell, dropped on (3, 3): it now runs (3, 2)..(3, 4).
+    expect(moveShip(ships, 0, 1, at(3, 3))?.[0]).toEqual([at(3, 2), at(3, 3), at(3, 4)])
+    // Off the edge.
+    expect(moveShip(ships, 0, 0, at(0, 6))).toBeNull()
+    // Overlapping, then merely touching the other ship.
+    expect(moveShip(ships, 0, 0, at(5, 4))).toBeNull()
+    expect(moveShip(ships, 0, 0, at(4, 3))).toBeNull()
+    // The fleet it was given is untouched.
+    expect(ships[0]).toEqual([0, 1, 2])
+  })
+
+  it('turns a ship around the touched cell, sliding along when the edge or a neighbour is in the way', () => {
+    const { ships } = seaOf([[2, 2, 3, 'h']])
+    expect(turnShip(ships, 0, at(2, 3))?.[0]).toEqual([at(1, 3), at(2, 3), at(3, 3)])
+    // Back again: a down ship turns across.
+    const down = turnShip(ships, 0, at(2, 3)) ?? []
+    expect(isVertical(down[0] ?? [])).toBe(true)
+    expect(turnShip(down, 0, at(2, 3))?.[0]).toEqual([at(2, 2), at(2, 3), at(2, 4)])
+    // On the top row, turning about its first cell slides it down instead of off the sea.
+    const top = seaOf([[0, 0, 3, 'h']]).ships
+    expect(turnShip(top, 0, at(0, 0))?.[0]).toEqual([at(0, 0), at(1, 0), at(2, 0)])
+    // Boxed in by another ship on every side it could take: it stays as it was.
+    const boxed = seaOf([
+      [0, 0, 2, 'h'],
+      [2, 0, 4, 'h'],
+    ]).ships
+    expect(turnShip(boxed, 0, at(0, 0))).toBeNull()
+  })
+
+  it('a dragged or turned ship never breaks the fleet rules', () => {
+    const rng = new Rng(11)
+    let ships = placeFleet(rng)
+    for (let n = 0; n < 400; n++) {
+      const i = rng.int(0, ships.length - 1)
+      const cur = ships[i] ?? []
+      const next = rng.chance(0.5)
+        ? moveShip(ships, i, rng.int(0, cur.length - 1), rng.int(0, CELLS - 1))
+        : turnShip(ships, i, cur[rng.int(0, cur.length - 1)] ?? 0)
+      if (next) ships = next
+      expect(ships.map((s) => s.length)).toEqual([...FLEET])
+      for (let j = 0; j < ships.length; j++) expect(fits(ships, j, ships[j] ?? [])).toBe(true)
+    }
   })
 })
 
@@ -283,9 +340,15 @@ describe('sea battle game', () => {
       const game = makeGame()
       game.init(c)
       let id = 1
+      const ready = readyRect(0)
       for (let f = 0; f < 60 * 60 * 300 && !game.result; f++) {
         const s = game.s
-        if (s.turn === 0 && game.time > SETUP + 0.2 && s.shell === null && f % 15 === 0) {
+        // No shot lands before the human calls Ready: the guns stay closed until then.
+        if (f === 30) {
+          expect(s.seas[1].shots.every((v) => v === UNTRIED)).toBe(true)
+          tap(c, 0, ready.x + ready.w / 2, ready.y + ready.h / 2, id++)
+        }
+        if (s.turn === 0 && s.setupEnd >= 0 && s.shell === null && f % 15 === 0) {
           const open = s.seas[1].shots.flatMap((v, i) => (v === UNTRIED ? [i] : []))
           const cell = open[(seed * 7 + f) % open.length]
           if (cell !== undefined) {
@@ -302,28 +365,135 @@ describe('sea battle game', () => {
     }
   })
 
-  it('shuffles the fleet during setup only', () => {
+  /** One fixed step, then every finger lifts. */
+  function stepOnce(c: GameContext, game: ReturnType<typeof makeGame>): void {
+    game.update(1 / 60)
+    c.input.endStep()
+    c.input.player(0).releaseAll()
+    c.input.player(1).releaseAll()
+  }
+
+  function press(
+    c: GameContext,
+    game: ReturnType<typeof makeGame>,
+    side: Side,
+    r: { x: number; y: number; w: number; h: number },
+    id: number,
+  ): void {
+    tap(c, side, r.x + r.w / 2, r.y + r.h / 2, id)
+    stepOnce(c, game)
+  }
+
+  it('shuffles the fleet only until its owner calls Ready', () => {
     const c = ctxFor(3, '2p', [false, false])
     const game = makeGame()
     game.init(c)
     const before = JSON.stringify(game.s.seas[0].ships)
-    const r = shuffleRect(0)
-    tap(c, 0, r.x + r.w / 2, r.y + r.h / 2, 1)
-    game.update(1 / 60)
-    c.input.endStep()
-    c.input.player(0).releaseAll()
+    press(c, game, 0, shuffleRect(0), 1)
     expect(JSON.stringify(game.s.seas[0].ships)).not.toBe(before)
 
-    while (game.time < SETUP + 0.1) {
-      game.update(1 / 60)
-      c.input.endStep()
-    }
-    const late = JSON.stringify(game.s.seas[0].ships)
-    tap(c, 0, r.x + r.w / 2, r.y + r.h / 2, 2)
+    press(c, game, 0, readyRect(0), 2)
+    expect(game.s.ready).toEqual([true, false])
+    const locked = JSON.stringify(game.s.seas[0].ships)
+    press(c, game, 0, shuffleRect(0), 3)
+    expect(JSON.stringify(game.s.seas[0].ships)).toBe(locked)
+  })
+
+  it('the guns open only once both players are ready, however long they take', () => {
+    const c = ctxFor(7, '2p', [false, false])
+    const game = makeGame()
+    game.init(c)
+    for (let f = 0; f < 60 * 30; f++) stepOnce(c, game)
+    expect(game.s.setupEnd).toBe(-1)
+    press(c, game, 0, readyRect(0), 1)
+    expect(game.s.setupEnd).toBe(-1)
+    press(c, game, 1, readyRect(1), 2)
+    expect(game.s.setupEnd).toBeGreaterThan(game.time)
+  })
+
+  it('a player drags a ship across their sea, and a still tap turns it', () => {
+    const c = ctxFor(8, '2p', [false, false])
+    const game = makeGame()
+    game.init(c)
+    const sea = game.s.seas[0]
+    const big = sea.ships[0] ?? []
+    // Pick the battleship up by its first cell and slide it, cell by cell, wherever it can go.
+    const from = cellPos(0, big[0] ?? 0)
+    c.input.player(0).press(1, from.x, from.y)
     game.update(1 / 60)
     c.input.endStep()
+    expect(game.s.grab[0]).toMatchObject({ ship: 0, k: 0, moved: false })
+    let moved = false
+    for (let cell = 0; cell < CELLS && !moved; cell++) {
+      const p = cellPos(0, cell)
+      c.input.player(0).move(1, p.x, p.y)
+      game.update(1 / 60)
+      c.input.endStep()
+      moved = JSON.stringify(game.s.seas[0].ships[0]) !== JSON.stringify(big)
+    }
+    expect(moved).toBe(true)
     c.input.player(0).releaseAll()
-    expect(JSON.stringify(game.s.seas[0].ships)).toBe(late)
+    game.update(1 / 60)
+    c.input.endStep()
+    expect(game.s.grab[0]).toBeNull()
+    const placed = game.s.seas[0].ships
+    for (let j = 0; j < placed.length; j++) expect(fits(placed, j, placed[j] ?? [])).toBe(true)
+
+    // A tap that does not move turns a ship if it can, and never breaks the fleet.
+    for (let i = 0; i < placed.length; i++) {
+      const cells = game.s.seas[0].ships[i] ?? []
+      if (cells.length < 2) continue
+      const was = isVertical(cells)
+      const p = cellPos(0, cells[0] ?? 0)
+      tap(c, 0, p.x, p.y, 10 + i)
+      stepOnce(c, game)
+      stepOnce(c, game)
+      const now = game.s.seas[0].ships[i] ?? []
+      if (JSON.stringify(now) !== JSON.stringify(cells)) expect(isVertical(now)).toBe(!was)
+      const all = game.s.seas[0].ships
+      for (let j = 0; j < all.length; j++) expect(fits(all, j, all[j] ?? [])).toBe(true)
+    }
+  })
+
+  it('a flick that presses, moves and lifts within one step still drags the ship', () => {
+    const c = ctxFor(8, '2p', [false, false])
+    const game = makeGame()
+    game.init(c)
+    const ships = game.s.seas[0].ships
+    const big = ships[0] ?? []
+    // The first free spot the battleship could slide to, held by its first cell.
+    let to = -1
+    for (let cell = 0; cell < CELLS && to < 0; cell++)
+      if (cell !== big[0] && moveShip(ships, 0, 0, cell)) to = cell
+    expect(to).toBeGreaterThanOrEqual(0)
+    const a = cellPos(0, big[0] ?? 0)
+    const b = cellPos(0, to)
+    const inp = c.input.player(0)
+    inp.press(1, a.x, a.y)
+    inp.move(1, b.x, b.y)
+    inp.release(1)
+    stepOnce(c, game)
+    expect(game.s.seas[0].ships[0]?.[0]).toBe(to)
+    expect(game.s.grab[0]).toBeNull()
+  })
+
+  it('on a shared phone, a touch on a sea belongs to its owner while placing, to the shooter after', () => {
+    const c = ctxFor(12, '2p', [false, false])
+    const game = makeGame()
+    game.init(c)
+    const assign = c.input.assign
+    if (!assign) throw new Error('sea battle routes touches itself')
+    const top = cellPos(1, 0)
+    const bottom = cellPos(0, 0)
+    // Whoever opens, each player places on their own sea.
+    expect(assign(top.x, top.y)).toBe(1)
+    expect(assign(bottom.x, bottom.y)).toBe(0)
+    press(c, game, 0, readyRect(0), 1)
+    press(c, game, 1, readyRect(1), 2)
+    // Once the guns open, the rival's sea is the shooter's to tap.
+    const shooter = game.s.turn
+    const target = cellPos(other(shooter), 0)
+    expect(assign(target.x, target.y)).toBe(shooter)
   })
 
   it("online, the snapshot keeps this device's unsunk ships off the wire", () => {

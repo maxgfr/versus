@@ -21,6 +21,7 @@ import {
   GX,
   inRect,
   peekRect,
+  readyRect,
   reticle,
   seaRect,
   seaTop,
@@ -33,16 +34,21 @@ import {
   freshSea,
   HIT,
   isSunk,
+  moveShip,
   placeFleet,
   type Sea,
+  shipAt,
   shipName,
   sunkCount,
+  turnShip,
   UNTRIED,
   viewOf,
 } from './rules.ts'
 
-/** Seconds to hide your fleet before the guns open. Shuffle works only inside it. Every round starts with one. */
-export const SETUP = 8
+/** Seconds between both players calling Ready and the guns opening. */
+export const BATTLE_DELAY = 1
+/** In local 2P, seconds a placing player's fleet stays on show after their finger leaves their sea. */
+const LINGER = 1.4
 /** Seconds a shell is in the air. */
 const FLIGHT = 0.62
 /** Seconds the fleets stay on show after a round is decided, before the next round. */
@@ -64,6 +70,17 @@ export interface Shell {
   landAt: number
 }
 
+/** A ship held by a finger while its owner places the fleet. */
+export interface Grab {
+  ship: number
+  /** The finger holding it. */
+  id: number
+  /** Which of the ship's cells sits under the finger. */
+  k: number
+  /** It has moved since it was picked up (a still tap turns it instead). */
+  moved: boolean
+}
+
 export interface State {
   turn: Side
   seas: [Sea, Sea]
@@ -82,8 +99,17 @@ export interface State {
   shuffledAt: [number, number]
   /** Game time the last ship went down, or -1. */
   endAt: number
-  /** Game time the setup (hiding your fleet, shuffling it) ends. Every round starts with one. */
+  /**
+   * Game time the guns open, or -1 while the fleets are being placed. Every
+   * round starts with a placing phase that lasts until both sides call Ready.
+   */
   setupEnd: number
+  /** Each side has called Ready (the computer always has): its fleet is locked. */
+  ready: [boolean, boolean]
+  /** The ship each side is dragging, if any. */
+  grab: [Grab | null, Grab | null]
+  /** Game time each side last had a finger on its own sea while placing, or -10 (not yet this round). */
+  touchAt: [number, number]
   /** Round wins, red first. */
   wins: [number, number]
   /** The side that opened the current round. Alternates every round. */
@@ -94,10 +120,13 @@ export interface State {
   resetAt: number
 }
 
-/** What a round starts with: both fleets placed at random, the guns closed until `setupEnd`. */
+/**
+ * What a round starts with: both fleets dealt at random for the players to
+ * rearrange, the guns closed until both call Ready. The computer is ready at once.
+ */
 type Round = Omit<State, 'turn' | 'starter' | 'wins' | 'roundText' | 'resetAt'>
 
-function freshRound(rng: Rng, setupEnd: number): Round {
+function freshRound(rng: Rng, bots: readonly [boolean, boolean]): Round {
   const seas: [Sea, Sea] = [freshSea(rng), freshSea(rng)]
   const blank = () => Array<number>(CELLS).fill(-10)
   const none = () => Array<number>(FLEET.length).fill(-1)
@@ -111,7 +140,10 @@ function freshRound(rng: Rng, setupEnd: number): Round {
     sank: null,
     shuffledAt: [-10, -10],
     endAt: -1,
-    setupEnd,
+    setupEnd: -1,
+    ready: [bots[0], bots[1]],
+    grab: [null, null],
+    touchAt: [-10, -10],
   }
 }
 
@@ -124,11 +156,13 @@ class SeaBattle extends TurnGame<State> {
     const rng = this.ctx.rng
     // On a shared phone a touch on a sea belongs to whoever is firing, not to the half it sits in.
     this.ctx.input.assign = (x, y) => {
+      // While placing, each player works on their own sea, in their own half.
+      if (this.placing) return y >= MID ? 0 : 1
       const turn = this.s.turn
       if (inRect(x, y, seaRect(other(turn)))) return turn
       return y >= MID ? 0 : 1
     }
-    const round = freshRound(rng, SETUP)
+    const round = freshRound(rng, this.ctx.bots)
     const starter: Side = rng.chance(0.5) ? 0 : 1
     return { ...round, turn: starter, starter, wins: [0, 0], roundText: '', resetAt: -1 }
   }
@@ -139,16 +173,28 @@ class SeaBattle extends TurnGame<State> {
     return (d === 'easy' ? 0.5 : d === 'normal' ? 0.4 : 0.3) + this.ctx.rng.range(0, 0.3)
   }
 
+  /** The fleets are still being placed: no shots until both sides call Ready. */
+  private get placing(): boolean {
+    return this.s.setupEnd < 0
+  }
+
   protected override step(dt: number): void {
     this.handleButtons()
+    this.handlePlacement()
+    const s = this.s
+    if (this.placing && s.ready[0] && s.ready[1]) {
+      s.setupEnd = this.time + BATTLE_DELAY
+      s.grab = [null, null]
+      this.ctx.audio.play('go')
+    }
     super.step(dt)
   }
 
-  /** The next round: fresh fleets, a new setup, and the other side opens. */
+  /** The next round: fresh fleets to place, and the other side opens. */
   private nextRound(): void {
     const s = this.s
     const starter = other(s.starter)
-    Object.assign(s, freshRound(this.ctx.rng, this.time + SETUP), {
+    Object.assign(s, freshRound(this.ctx.rng, this.ctx.bots), {
       turn: starter,
       starter,
       roundText: '',
@@ -172,7 +218,7 @@ class SeaBattle extends TurnGame<State> {
     return { ...snap, s: { ...snap.s, seas } }
   }
 
-  /** Peek is held (local 2P only), Shuffle is tapped during setup. Both work for either side. */
+  /** Peek is held (local 2P only); Ready and Shuffle are tapped while placing. All work for either side. */
   private handleButtons(): void {
     const s = this.s
     for (const side of [0, 1] as Side[]) {
@@ -182,9 +228,18 @@ class SeaBattle extends TurnGame<State> {
         this.ctx.mode === '2p' &&
         [...inp.held.values()].some((p) => inRect(p.x, p.y, peekRect(side)))
       if (peek !== s.peek[side]) s.peek[side] = peek
-      if (this.time < s.setupEnd && inp.downs.some((p) => inRect(p.x, p.y, shuffleRect(side)))) {
+      if (!this.placingSide(side)) continue
+      if (inp.downs.some((p) => inRect(p.x, p.y, readyRect(side)))) {
+        s.ready[side] = true
+        s.grab[side] = null
+        this.ctx.fx.ring(W / 2, seaTop(side) + GRID / 2, SIDE[side].main, 420)
+        this.ctx.audio.play('click', side === 0 ? 1 : 1.1)
+        continue
+      }
+      if (inp.downs.some((p) => inRect(p.x, p.y, shuffleRect(side)))) {
         s.seas[side].ships = placeFleet(this.ctx.rng)
         s.shuffledAt[side] = this.time
+        s.grab[side] = null
         const c = { x: W / 2, y: seaTop(side) + GRID / 2 }
         this.ctx.fx.ring(c.x, c.y, '#bfe4ff', 380)
         this.ctx.fx.burst(c.x, c.y, '#8fd3ff', {
@@ -199,9 +254,72 @@ class SeaBattle extends TurnGame<State> {
     }
   }
 
+  /**
+   * While placing, a player drags their ships around their own sea; a ship
+   * tapped without moving turns a quarter. A ship only ever lands where it
+   * stays on the sea without touching another, so the fleet is legal at every step.
+   */
+  private handlePlacement(): void {
+    const s = this.s
+    for (const side of [0, 1] as Side[]) {
+      if (!this.placingSide(side)) continue
+      const inp = this.ctx.input.player(side)
+      const sea = s.seas[side]
+      for (const p of [...inp.downs, ...inp.held.values()])
+        if (inRect(p.x0, p.y0, seaRect(side)) || inRect(p.x, p.y, seaRect(side)))
+          s.touchAt[side] = this.time
+      let grab = s.grab[side]
+      if (!grab) {
+        // Picked up where the finger went down, even if it has already moved on this step.
+        for (const p of inp.downs) {
+          const cell = cellAtWorld(side, p.x0, p.y0)
+          const ship = cell === null ? -1 : shipAt(sea, cell)
+          if (cell === null || ship < 0) continue
+          grab = { ship, id: p.id, k: sea.ships[ship]?.indexOf(cell) ?? 0, moved: false }
+          s.grab[side] = grab
+          this.ctx.audio.play('tap', side === 0 ? 1 : 1.1)
+          break
+        }
+      }
+      if (!grab) continue
+      const id = grab.id
+      const held = inp.held.has(id)
+      const p = inp.held.get(id) ?? inp.ups.find((u) => u.id === id)
+      if (p) {
+        // The ship follows the finger wherever it may legally lie.
+        const cell = cellAtWorld(side, p.x, p.y)
+        if (cell !== null && sea.ships[grab.ship]?.[grab.k] !== cell) {
+          const next = moveShip(sea.ships, grab.ship, grab.k, cell)
+          if (next) {
+            sea.ships = next
+            grab.moved = true
+            this.ctx.audio.play('tick', 1.2)
+          }
+        }
+      }
+      if (held) continue
+      // Let go. A still tap turns the ship around the cell that was touched;
+      // a finger that vanished without lifting (input reset) just drops it.
+      s.grab[side] = null
+      if (!p) continue
+      if (grab.moved) {
+        this.ctx.audio.play('slide', side === 0 ? 1 : 1.1)
+        continue
+      }
+      const pivot = sea.ships[grab.ship]?.[grab.k]
+      const next = pivot === undefined ? null : turnShip(sea.ships, grab.ship, pivot)
+      if (next) {
+        sea.ships = next
+        this.ctx.audio.play('flip', side === 0 ? 1 : 1.1)
+      } else {
+        this.ctx.audio.play('error')
+      }
+    }
+  }
+
   protected override busy(): boolean {
     const s = this.s
-    if (s.resetAt >= 0 || this.time < s.setupEnd) return true
+    if (s.resetAt >= 0 || this.placing || this.time < s.setupEnd) return true
     if (s.shell) {
       if (this.time >= s.shell.landAt) this.land()
       return true
@@ -374,15 +492,26 @@ class SeaBattle extends TurnGame<State> {
     this.ctx.fx.shake(0.15)
   }
 
-  /** Whose fleet this screen may show without Peek: the local player's, outside local 2P. */
+  /**
+   * Whose fleet this screen may show: the local player's, outside local 2P.
+   * On a shared phone a fleet shows while Peek is held, or while its owner is
+   * placing it with a finger on their sea (and for a moment after).
+   */
   private shown(side: Side): boolean {
-    if (this.ctx.mode === '2p') return this.s.peek[side]
-    return side === this.ctx.local || this.s.peek[side]
+    const s = this.s
+    if (this.ctx.mode === '2p')
+      return s.peek[side] || (this.placingSide(side) && this.time - s.touchAt[side] < LINGER)
+    return side === this.ctx.local || s.peek[side]
+  }
+
+  /** This human side is still arranging its fleet. */
+  private placingSide(side: Side): boolean {
+    return this.placing && !this.s.ready[side] && !this.isBot(side)
   }
 
   render(g: Draw): void {
     const s = this.s
-    const setup = this.time < s.setupEnd
+    const setup = this.placing || this.time < s.setupEnd
     const live = !this.over && !setup && s.shell === null && s.pauseUntil < 0 && s.resetAt < 0
     backdrop(g)
     for (const owner of [0, 1] as Side[]) {
@@ -390,6 +519,7 @@ class SeaBattle extends TurnGame<State> {
         target: live && owner === other(s.turn),
         show: this.shown(owner),
         reveal: this.over || s.resetAt >= 0,
+        lift: s.grab[owner]?.ship ?? -1,
       })
       drawFleetTracker(g, owner, s, this.time)
     }
@@ -406,32 +536,45 @@ class SeaBattle extends TurnGame<State> {
       reticle(g, x, y, 1, t * 3, 0.75)
     }
     drawShell(g, s, this.time, (o) => this.origin(o))
-    const left = Math.max(1, Math.ceil(s.setupEnd - this.time))
-    this.drawTurns(g, setup ? [`Battle in ${left}`, `Battle in ${left}`] : undefined, live || setup)
+    const label = (side: Side): string => {
+      if (!this.placing) return 'Battle!'
+      if (s.ready[side]) return 'Ready!'
+      return g.viewer !== null && side !== g.viewer ? 'Placing ships…' : 'Place your ships'
+    }
+    this.drawTurns(g, setup ? [label(0), label(1)] : undefined, live || setup)
     if (!this.over) {
       for (const side of [0, 1] as Side[]) {
         if (this.isBot(side)) continue
         // Online, each phone shows only its own player's buttons.
         if (g.viewer !== null && side !== g.viewer) continue
-        if (this.ctx.mode === '2p')
-          button(g, side, peekRect(side), 'Peek', '👀', { on: s.peek[side], pressed: s.peek[side] })
-        if (setup)
+        if (this.placingSide(side)) {
+          // Ready holds Peek's corner until the fleet is locked.
+          button(g, side, readyRect(side), 'Ready', '⚓', { on: true })
           button(g, side, shuffleRect(side), 'Shuffle', '🎲', {
             on: true,
             pressed: this.time - (s.shuffledAt[side] ?? -10) < 0.12,
-            progress: Math.max(0, (s.setupEnd - this.time) / SETUP),
           })
+        } else if (this.ctx.mode === '2p')
+          button(g, side, peekRect(side), 'Peek', '👀', { on: s.peek[side], pressed: s.peek[side] })
       }
     }
-    // In local 2P, a reminder in each empty sea during setup: your ships are there, hidden.
-    if (setup && this.ctx.mode === '2p') {
+    // A hint over each sea being placed: how to arrange it, or (local 2P) that it hides until touched.
+    if (setup) {
       for (const side of [0, 1] as Side[]) {
-        if (s.peek[side] || this.isBot(side)) continue
+        if (this.isBot(side) || s.peek[side]) continue
+        if (g.viewer !== null && side !== g.viewer) continue
+        const y = seaTop(side) + GRID / 2
         const a = Math.min(1, this.time * 3) * (0.85 + 0.15 * Math.sin(g.t * 4))
-        banner(g, side, 'Hold Peek to see your ships', seaTop(side) + GRID / 2, {
-          size: 40,
-          alpha: a,
-        })
+        if (this.placingSide(side)) {
+          // Once the player has started arranging, the hint gets out of the way.
+          if (s.touchAt[side] >= 0 && this.shown(side)) continue
+          const text = this.shown(side)
+            ? 'Drag to move · tap to turn'
+            : 'Touch your sea to place your ships'
+          banner(g, side, text, y, { size: 40, alpha: a })
+        } else if (this.ctx.mode === '2p' && this.placing) {
+          banner(g, side, `Waiting for ${this.ctx.names[other(side)]}…`, y, { size: 40, alpha: a })
+        }
       }
     }
     // The sinking is announced over the sea it happened on, upright for the player who fired.

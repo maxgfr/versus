@@ -89,7 +89,7 @@ const TABLE: Record<Family, Row[]> = {
       'sea-battle',
       'Sea Battle',
       '🚢',
-      "Hide your fleet, then take turns firing at your rival's waters. Sink every ship first.",
+      "Place your fleet in secret, then take turns firing at your rival's waters. Sink every ship first.",
     ],
     [
       'color-wars',

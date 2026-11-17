@@ -58,6 +58,9 @@ export function peekRect(side: Side): Rect {
   return sideRect(side, 175, 1730, 230, 88)
 }
 
+/** Ready sits in Peek's corner while the fleet is being placed. */
+export const readyRect = peekRect
+
 export function shuffleRect(side: Side): Rect {
   return sideRect(side, 825, 1730, 250, 88)
 }
@@ -271,7 +274,7 @@ export function drawSea(
   owner: Side,
   s: State,
   now: number,
-  o: { target: boolean; show: boolean; reveal: boolean },
+  o: { target: boolean; show: boolean; reveal: boolean; lift?: number },
 ): void {
   drawSlab(g, owner, now, o.target)
   const sea: Sea = s.seas[owner]
@@ -283,6 +286,15 @@ export function drawSea(
       const k = outBack(prog(now, sunkAt, sunkAt + 0.45))
       drawShip(g, cells, owner, { sunk: true, scale: 1.25 - 0.25 * k, alpha: Math.min(1, k * 1.5) })
     } else if (o.show) {
+      if (i === o.lift) {
+        // The ship under the player's finger: its cells glow and it rides a little larger.
+        for (const c of cells) {
+          const { x, y } = cellPos(owner, c)
+          g.rrect(x - CELL / 2 + 4, y - CELL / 2 + 4, CELL - 8, CELL - 8, 17, alpha(C.yellow, 0.28))
+        }
+        drawShip(g, cells, owner, { scale: 1.1, bob })
+        return
+      }
       // A re-rolled fleet pops in, ship by ship.
       const k = outBack(prog(now, shuffled + i * 0.06, shuffled + i * 0.06 + 0.35))
       drawShip(g, cells, owner, { scale: 0.4 + 0.6 * k, alpha: Math.min(1, k * 2), bob })

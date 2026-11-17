@@ -104,6 +104,75 @@ export function placeFleet(rng: Rng, sizes: readonly number[] = FLEET): number[]
   }
 }
 
+/** Whether a ship runs down the sea (a one-cell ship counts as across). */
+export const isVertical = (cells: readonly number[]): boolean =>
+  cells.length > 1 && (cells[1] ?? 0) - (cells[0] ?? 0) === N
+
+/**
+ * A straight ship of `len` cells, across or down, whose `k`-th cell sits on
+ * `cell`. Null if it would run off the sea.
+ */
+export function lineThrough(
+  cell: number,
+  len: number,
+  vertical: boolean,
+  k: number,
+): number[] | null {
+  const r0 = rowOf(cell) - (vertical ? k : 0)
+  const c0 = colOf(cell) - (vertical ? 0 : k)
+  const r1 = r0 + (vertical ? len - 1 : 0)
+  const c1 = c0 + (vertical ? 0 : len - 1)
+  if (r0 < 0 || c0 < 0 || r1 >= N || c1 >= N) return null
+  return Array.from({ length: len }, (_, i) => (vertical ? (r0 + i) * N + c0 : r0 * N + c0 + i))
+}
+
+/** Whether ship `i` may lie on `cells`: it neither overlaps nor touches any other ship. */
+export function fits(
+  ships: readonly (readonly number[])[],
+  i: number,
+  cells: readonly number[],
+): boolean {
+  const near = Array<boolean>(CELLS).fill(false)
+  ships.forEach((other, j) => {
+    if (j !== i) reserve(near, other)
+  })
+  return cells.every((c) => !near[c])
+}
+
+/**
+ * Drag ship `i` so that its `k`-th cell sits on `cell`, keeping its heading.
+ * Returns the new fleet, or null if the ship would leave the sea or touch another.
+ */
+export function moveShip(ships: number[][], i: number, k: number, cell: number): number[][] | null {
+  const cur = ships[i]
+  if (!cur) return null
+  const cells = lineThrough(cell, cur.length, isVertical(cur), k)
+  if (!cells || !fits(ships, i, cells)) return null
+  return ships.map((s, j) => (j === i ? cells : s))
+}
+
+/**
+ * Turn ship `i` a quarter around its cell `pivot`. If the pivot cannot stay
+ * put at that spot, the ship slides along its new heading to the nearest place
+ * that still covers the pivot. Null if no such place is free.
+ */
+export function turnShip(ships: number[][], i: number, pivot: number): number[][] | null {
+  const cur = ships[i]
+  if (!cur || cur.length < 2) return null
+  const k = Math.max(0, cur.indexOf(pivot))
+  const at = cur[k] ?? pivot
+  const vertical = !isVertical(cur)
+  // The pivot's own slot first, then ever further from it.
+  const order = Array.from({ length: cur.length }, (_, j) => j).sort(
+    (a, b) => Math.abs(a - k) - Math.abs(b - k) || a - b,
+  )
+  for (const j of order) {
+    const cells = lineThrough(at, cur.length, vertical, j)
+    if (cells && fits(ships, i, cells)) return ships.map((s, n) => (n === i ? cells : s))
+  }
+  return null
+}
+
 export function freshSea(rng: Rng): Sea {
   return { ships: placeFleet(rng), shots: Array<number>(CELLS).fill(UNTRIED) }
 }
